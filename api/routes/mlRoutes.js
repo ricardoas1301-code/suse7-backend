@@ -1,54 +1,86 @@
-// ======================================================================
-// ROTAS DO MERCADO LIVRE — SUSE7
-// Responsável por trocar o "code" pelo token de acesso via OAuth 2.0
-// ======================================================================
-
 import express from "express";
 import axios from "axios";
-import dotenv from "dotenv";
+import { supabase } from "../supabaseClient.js";
 
-dotenv.config();
 const router = express.Router();
 
-// ------------------------------------------------------------
-// ROTA: POST /ml/token
-// Recebe o "code" do frontend e troca pelo access_token
-// ------------------------------------------------------------
-router.post("/ml/token", async (req, res) => {
+// ----------------------------------------------
+// ROTA: CALLBACK DO MERCADO LIVRE
+// ----------------------------------------------
+router.get("/ml/callback", async (req, res) => {
   try {
-    const { code } = req.body;
+    const { code } = req.query;
 
     if (!code) {
-      return res.status(400).json({ error: "Code não enviado" });
+      return res.status(400).json({ error: "Code não recebido." });
     }
 
-    // Dados necessários
-    const client_id = process.env.ML_CLIENT_ID;
-    const client_secret = process.env.ML_CLIENT_SECRET;
-    const redirect_uri = process.env.ML_REDIRECT_URI;
+    // Payload da troca
+    const payload = {
+      grant_type: "authorization_code",
+      client_id: process.env.ML_APP_ID,
+      client_secret: process.env.ML_SECRET_KEY,
+      code,
+      redirect_uri: process.env.ML_REDIRECT_URL,
+    };
 
-    // --------------------------------------------------------
-    // Fazer a requisição oficial ao Mercado Livre
-    // --------------------------------------------------------
-    const response = await axios.post(
+    // Solicita tokens ao Mercado Livre
+    const tokenResponse = await axios.post(
       "https://api.mercadolibre.com/oauth/token",
-      {
-        grant_type: "authorization_code",
-        client_id,
-        client_secret,
-        code,
-        redirect_uri,
-      },
+      payload,
       { headers: { "Content-Type": "application/json" } }
     );
 
-    console.log("TOKEN DO MERCADO LIVRE RECEBIDO:", response.data);
+    const data = tokenResponse.data;
 
-    return res.json(response.data);
+    // Salva tokens no Supabase
+    const { error } = await supabase
+      .from("ml_tokens")
+      .upsert({
+        user_id: req.user.id,
+        ml_user_id: data.user_id,
+        access_token: data.access_token,
+        refresh_token: data.refresh_token,
+        expires_in: data.expires_in,
+        created_at: new Date(),
+      });
 
-  } catch (error) {
-    console.error("Erro ao trocar code:", error.response?.data || error);
-    res.status(500).json({ error: "Erro ao trocar o code por token" });
+    if (error) throw error;
+
+    // Redireciona de volta ao painel
+    return res.redirect(`${process.env.FRONTEND_URL}/dashboard?ml=connected`);
+
+  } catch (err) {
+    console.error("Erro no ML Callback:", err.response?.data || err);
+    return res.status(500).json({ error: "Erro ao conectar Mercado Livre." });
+  }
+});
+
+// ------------------------------------------------------
+// ROTA: STATUS DA CONEXÃO DO MERCADO LIVRE
+// ------------------------------------------------------
+router.get("/ml/status", async (req, res) => {
+  try {
+    const userId = req.user.id;
+
+    const { data, error } = await supabase
+      .from("ml_tokens")
+      .select("access_token, ml_user_id")
+      .eq("user_id", userId)
+      .single();
+
+    if (error || !data) {
+      return res.json({ connected: false });
+    }
+
+    return res.json({
+      connected: true,
+      ml_user_id: data.ml_user_id,
+    });
+
+  } catch (err) {
+    console.error("Erro ao buscar status ML:", err);
+    return res.status(500).json({ connected: false });
   }
 });
 

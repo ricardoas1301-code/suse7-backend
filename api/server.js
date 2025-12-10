@@ -1,20 +1,41 @@
 // ======================================================================
-// BACKEND DO SUSE7 — Serverless (Vercel)
+//  BACKEND SUSE7 — SERVER.JS (Vercel Serverless)
 // ======================================================================
 
 import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
-
 dotenv.config();
 
+// Criar app Express
 const app = express();
-app.use(cors());
+
+// ======================================================================
+//  MIDDLEWARES
+// ======================================================================
 app.use(express.json());
 
-// Rotas
-import mlRoutes from "./routes/mlRoutes.js";
-app.use(mlRoutes);
+// 🔥 CORS PERMITINDO FRONTEND (LOCAL + PRODUÇÃO)
+app.use(
+  cors({
+    origin: [
+      "http://localhost:5173",
+      "https://app.suse7.com.br",
+      "https://suse7-frontend.vercel.app"
+    ],
+    credentials: true,
+  })
+);
 
-// Exportar para Vercel (IMPORTANTE!)
+// ======================================================================
+//  ROTAS MERCADO LIVRE
+// ======================================================================
+import mlRoutes from "./routes/mlRoutes.js";
+
+// Todas rotas da API começam com /api
+app.use("/api", mlRoutes);
+
+// ======================================================================
+//  EXPORTAR PARA VERCEL
+// ======================================================================
 export default app;
