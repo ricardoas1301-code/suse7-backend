@@ -1,21 +1,23 @@
-import { createClient } from '@supabase/supabase-js';
-import fetch from "node-fetch";
+import { createClient } from "@supabase/supabase-js";
 
-
-export default async function handler(req, res) {
+export async function GET(req) {
   try {
-    const code = req.query.code;
+    const { searchParams } = new URL(req.url);
+    const code = searchParams.get("code");
 
     if (!code) {
-      return res.status(400).json({ error: "Code não encontrado" });
+      return new Response(
+        JSON.stringify({ error: "Code não encontrado" }),
+        { status: 400 }
+      );
     }
 
-    // Variáveis de ambiente
+    // Variáveis
     const clientId = process.env.ML_CLIENT_ID;
     const clientSecret = process.env.ML_CLIENT_SECRET;
     const redirectUri = process.env.ML_REDIRECT_URI;
 
-    // Trocar code por tokens
+    // Trocar code por token
     const tokenResponse = await fetch("https://api.mercadolibre.com/oauth/token", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -31,19 +33,19 @@ export default async function handler(req, res) {
     const data = await tokenResponse.json();
 
     if (!data.access_token) {
-      return res.status(500).json({
-        error: "Erro ao obter tokens",
-        ml_response: data
-      });
+      return new Response(
+        JSON.stringify({ error: "Erro ao obter tokens", ml_response: data }),
+        { status: 500 }
+      );
     }
 
-    // Conectar Supabase
+    // Supabase
     const supabase = createClient(
       process.env.SUPABASE_URL,
       process.env.SUPABASE_SERVICE_ROLE
     );
 
-    // Salvar tokens no Supabase
+    // Salvar
     const { error } = await supabase
       .from("ml_tokens")
       .upsert({
@@ -55,15 +57,17 @@ export default async function handler(req, res) {
       });
 
     if (error) {
-      console.log("Supabase erro:", error);
-      return res.status(500).json({ error: "Falha ao salvar tokens" });
+      return new Response(
+        JSON.stringify({ error: "Falha ao salvar tokens" }),
+        { status: 500 }
+      );
     }
 
-    // Redirecionar o usuário de volta ao frontend
-    res.redirect("https://app.suse7.com.br/dashboard");
+    // REDIRECIONAR PARA O FRONTEND
+    return Response.redirect("https://app.suse7.com.br/dashboard", 302);
 
   } catch (err) {
-    console.log(err);
-    return res.status(500).json({ error: "Erro interno do servidor" });
+    console.error("Erro:", err);
+    return new Response(JSON.stringify({ error: "Erro interno" }), { status: 500 });
   }
 }
