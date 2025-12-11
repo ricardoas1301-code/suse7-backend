@@ -1,23 +1,28 @@
-// ======================================================================
-// SUPABASE CLIENT — BACKEND
-// Usado para inserir tokens, buscar dados, atualizar registros, etc.
-// ======================================================================
+// =======================================================
+// SUPABASE CLIENT — BACKEND (SERVICE ROLE)
+// Versão compatível com Vercel Serverless + Supabase
+// =======================================================
 
 import { createClient } from "@supabase/supabase-js";
 import dotenv from "dotenv";
-
 dotenv.config();
 
-// ------------------------------------------------------
-// Variáveis do ambiente (colocadas no .env do backend)
-// ------------------------------------------------------
+// Carrega variáveis do ambiente
 const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-// ------------------------------------------------------
-// Client com permissões do backend (SERVICE ROLE)
-// ⚠️ Nunca usar a PUBLIC KEY aqui!
-// ------------------------------------------------------
-export const supabase = createClient(supabaseUrl, supabaseServiceKey, {
-  auth: { autoRefreshToken: false, persistSession: false }
-});
+if (!supabaseUrl || !supabaseServiceKey) {
+  console.error("❌ ERRO: Variáveis do Supabase ausentes!");
+}
+
+// Criar client com SERVICE ROLE (backend)
+export const supabase = createClient(
+  supabaseUrl,
+  supabaseServiceKey,
+  {
+    auth: {
+      autoRefreshToken: false,
+      persistSession: false
+    }
+  }
+);

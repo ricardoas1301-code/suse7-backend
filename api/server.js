@@ -5,7 +5,6 @@
 import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
-import serverless from "serverless-http";
 
 dotenv.config();
 
@@ -29,19 +28,20 @@ app.use(
 );
 
 // ======================================================================
-//  ROTAS
+//  ROTAS MERCADO LIVRE
 // ======================================================================
 import mlRoutes from "./routes/mlRoutes.js";
 
-// Todas as rotas começam com /api
 app.use("/api", mlRoutes);
 
-// Rota de teste
+// ======================================================================
+//  ROTA DE TESTE
+// ======================================================================
 app.get("/api/hello", (req, res) => {
-  res.json({ message: "Backend SUSE7 OK!" });
+  res.json({ message: "Suse7 Backend ativo!" });
 });
 
 // ======================================================================
-//  EXPORTAR COMO FUNÇÃO SERVERLESS (OBRIGATÓRIO NO VERCEL)
+//  EXPORTAÇÃO CORRETA PARA O VERCEL
 // ======================================================================
-export const handler = serverless(app);
+export default app;
