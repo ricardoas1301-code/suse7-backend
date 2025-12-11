@@ -2,19 +2,8 @@
   "name": "suse7-backend",
   "version": "1.0.0",
   "type": "module",
-  "main": "api/server.js",
-  "scripts": {
-    "dev": "nodemon api/server.js",
-    "start": "node api/server.js"
-  },
   "dependencies": {
     "@supabase/supabase-js": "^2.87.1",
-    "axios": "^1.13.2",
-    "cors": "^2.8.5",
-    "dotenv": "^17.2.3",
-    "express": "^5.2.1"
-  },
-  "devDependencies": {
-    "nodemon": "^3.1.11"
+    "node-fetch": "^3.3.2"
   }
 }
