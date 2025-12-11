@@ -34,7 +34,10 @@ export async function GET(req) {
 
     if (!data.access_token) {
       return new Response(
-        JSON.stringify({ error: "Erro ao obter tokens", ml_response: data }),
+        JSON.stringify({
+          error: "Erro ao obter tokens",
+          ml_response: data
+        }),
         { status: 500 }
       );
     }
@@ -45,11 +48,13 @@ export async function GET(req) {
       process.env.SUPABASE_SERVICE_ROLE
     );
 
-    // Salvar
+    // ================================
+    // 🔥 ADICIONEI LOG DO ERRO REAL
+    // ================================
     const { error } = await supabase
       .from("ml_tokens")
       .upsert({
-        user_id: data.user_id,
+        user_id: data.user_id,   // ⚠️ provavelmente está errado, mas vamos confirmar via erro
         access_token: data.access_token,
         refresh_token: data.refresh_token,
         expires_in: data.expires_in,
@@ -57,8 +62,12 @@ export async function GET(req) {
       });
 
     if (error) {
+      console.error("Supabase ERROR →", error); // ← log real no Vercel
       return new Response(
-        JSON.stringify({ error: "Falha ao salvar tokens" }),
+        JSON.stringify({
+          error: "Falha ao salvar tokens",
+          details: error   // ← agora aparece na tela!
+        }),
         { status: 500 }
       );
     }
@@ -67,7 +76,10 @@ export async function GET(req) {
     return Response.redirect("https://app.suse7.com.br/dashboard", 302);
 
   } catch (err) {
-    console.error("Erro:", err);
-    return new Response(JSON.stringify({ error: "Erro interno" }), { status: 500 });
+    console.error("Erro callback →", err);
+    return new Response(
+      JSON.stringify({ error: "Erro interno", details: err.message }),
+      { status: 500 }
+    );
   }
 }
