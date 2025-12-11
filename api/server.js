@@ -1,11 +1,12 @@
 // ======================================================================
-//  BACKEND SUSE7 — SERVERLESS VERCEL (FORMATO CORRETO)
+//  BACKEND SUSE7 — SERVER.JS (Vercel Serverless)
 // ======================================================================
 
 import express from "express";
-import serverless from "serverless-http";
 import cors from "cors";
 import dotenv from "dotenv";
+import serverless from "serverless-http";
+
 dotenv.config();
 
 // Criar app Express
@@ -21,27 +22,26 @@ app.use(
     origin: [
       "http://localhost:5173",
       "https://app.suse7.com.br",
-      "https://suse7-frontend.vercel.app",
+      "https://suse7-frontend.vercel.app"
     ],
     credentials: true,
   })
 );
 
 // ======================================================================
-// TESTE — ROTA BÁSICA
+//  ROTAS
 // ======================================================================
+import mlRoutes from "./routes/mlRoutes.js";
+
+// Todas as rotas começam com /api
+app.use("/api", mlRoutes);
+
+// Rota de teste
 app.get("/api/hello", (req, res) => {
-  return res.json({ message: "Backend SUSE7 OK!" });
+  res.json({ message: "Backend SUSE7 OK!" });
 });
 
 // ======================================================================
-// ROTAS MERCADO LIVRE
-// ======================================================================
-import mlRoutes from "./routes/mlRoutes.js";
-app.use("/api", mlRoutes);
-
-// ======================================================================
-// EXPORTAR PARA O VERCEL (AQUI É O SEGREDO)
+//  EXPORTAR COMO FUNÇÃO SERVERLESS (OBRIGATÓRIO NO VERCEL)
 // ======================================================================
 export const handler = serverless(app);
-export default app;
