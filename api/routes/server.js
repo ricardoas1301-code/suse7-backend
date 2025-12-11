@@ -31,7 +31,7 @@ app.use(
 // ======================================================================
 //  ROTAS
 // ======================================================================
-import mlRoutes from "./routes/mlRoutes.js";
+import mlRoutes from "./mlRoutes.js";
 
 // Todas as rotas começam com /api
 app.use("/api", mlRoutes);
