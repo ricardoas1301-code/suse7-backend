@@ -93,9 +93,9 @@ if (error) {
     // REDIRECIONA PARA O FRONTEND
     // --------------------------------------------------
     return Response.redirect(
-      "https://app.suse7.com.br/dashboard",
-      302
-    );
+  `${process.env.FRONTEND_URL}/dashboard?ml=connected`
+);
+
   } catch (err) {
     console.error("Erro callback →", err);
     return new Response(
