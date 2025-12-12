@@ -1,16 +1,17 @@
-// =======================================================
-// STATUS DA CONEXÃO MERCADO LIVRE — SUSE7 (Vercel)
-// =======================================================
+// ==================================================
+// STATUS DA CONEXÃO MERCADO LIVRE — SERVERLESS
+// Rota: /api/ml/status?user_id=UUID
+// ==================================================
 
 import { createClient } from "@supabase/supabase-js";
 
 export default async function handler(req, res) {
-  // Aceita apenas GET
-  if (req.method !== "GET") {
-    return res.status(405).json({ error: "Método não permitido" });
-  }
-
   try {
+    // Aceita apenas GET
+    if (req.method !== "GET") {
+      return res.status(405).json({ error: "Método não permitido" });
+    }
+
     const { user_id } = req.query;
 
     if (!user_id) {
@@ -26,7 +27,7 @@ export default async function handler(req, res) {
       .from("ml_tokens")
       .select("access_token, expires_at")
       .eq("user_id", user_id)
-      .single();
+      .maybeSingle();
 
     if (error || !data?.access_token) {
       return res.json({ connected: false });
