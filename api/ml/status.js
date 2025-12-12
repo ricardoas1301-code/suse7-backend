@@ -1,18 +1,20 @@
+// =======================================================
+// STATUS DA CONEXÃO MERCADO LIVRE — SUSE7 (Vercel)
+// =======================================================
+
 import { createClient } from "@supabase/supabase-js";
 
-// ======================================================
-// /api/ml/status — VERIFICA SE USUÁRIO TEM TOKEN ML
-// ======================================================
-export async function GET(req) {
-  try {
-    const { searchParams } = new URL(req.url);
-    const userId = searchParams.get("user_id");
+export default async function handler(req, res) {
+  // Aceita apenas GET
+  if (req.method !== "GET") {
+    return res.status(405).json({ error: "Método não permitido" });
+  }
 
-    if (!userId) {
-      return new Response(
-        JSON.stringify({ error: "user_id não informado" }),
-        { status: 400 }
-      );
+  try {
+    const { user_id } = req.query;
+
+    if (!user_id) {
+      return res.status(400).json({ error: "user_id não informado" });
     }
 
     const supabase = createClient(
@@ -23,29 +25,20 @@ export async function GET(req) {
     const { data, error } = await supabase
       .from("ml_tokens")
       .select("access_token, expires_at")
-      .eq("user_id", userId)
+      .eq("user_id", user_id)
       .single();
 
     if (error || !data?.access_token) {
-      return new Response(
-        JSON.stringify({ connected: false }),
-        { status: 200 }
-      );
+      return res.json({ connected: false });
     }
 
-    return new Response(
-      JSON.stringify({
-        connected: true,
-        expires_at: data.expires_at
-      }),
-      { status: 200 }
-    );
+    return res.json({
+      connected: true,
+      expires_at: data.expires_at,
+    });
 
   } catch (err) {
-    console.error("Erro status ML →", err);
-    return new Response(
-      JSON.stringify({ error: "Erro interno" }),
-      { status: 500 }
-    );
+    console.error("Erro status ML:", err);
+    return res.status(500).json({ error: "Erro interno" });
   }
 }
