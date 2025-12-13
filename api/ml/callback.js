@@ -1,35 +1,44 @@
 // ======================================================
-// /api/ml/callback — RECEBE CODE + STATE (UUID)
+// /api/ml/callback — CALLBACK OAUTH MERCADO LIVRE
+// Objetivo:
+// 1. Receber code + state (UUID do Supabase)
+// 2. Trocar code por access_token / refresh_token
+// 3. Salvar tokens na tabela ml_tokens
+// 4. Redirecionar para o dashboard do Suse7
 // ======================================================
 
 import { createClient } from "@supabase/supabase-js";
-import { supabase } from "../../supabaseClient.js";
 
+// ======================================================
+// CLIENTE SUPABASE (SERVICE ROLE — BACKEND)
+// ======================================================
+const supabase = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_ROLE
+);
+
+// ======================================================
+// HANDLER GET
+// ======================================================
 export async function GET(req) {
   try {
     // --------------------------------------------------
-    // CAPTURA DOS PARÂMETROS
+    // 1. CAPTURAR PARÂMETROS DO CALLBACK
     // --------------------------------------------------
     const { searchParams } = new URL(req.url);
 
-    const code = searchParams.get("code");
-    const supabaseUserId = searchParams.get("state"); // ✅ UUID DO SUPABASE
+    const code = searchParams.get("code");        // código OAuth
+    const userId = searchParams.get("state");     // UUID do Supabase
 
-    if (!code) {
-      return new Response(JSON.stringify({ error: "Code não encontrado" }), {
-        status: 400,
-      });
-    }
-
-    if (!supabaseUserId) {
+    if (!code || !userId) {
       return new Response(
-        JSON.stringify({ error: "State (UUID) não encontrado" }),
+        JSON.stringify({ error: "Parâmetros inválidos no callback" }),
         { status: 400 }
       );
     }
 
     // --------------------------------------------------
-    // TROCA CODE → TOKEN (Mercado Livre)
+    // 2. TROCAR CODE → TOKEN NO MERCADO LIVRE
     // --------------------------------------------------
     const tokenResponse = await fetch(
       "https://api.mercadolibre.com/oauth/token",
@@ -46,59 +55,58 @@ export async function GET(req) {
       }
     );
 
-    const data = await tokenResponse.json();
+    const tokenData = await tokenResponse.json();
 
-    if (!data.access_token) {
+    if (!tokenData.access_token) {
+      console.error("Erro ML token:", tokenData);
       return new Response(
-        JSON.stringify({
-          error: "Erro ao obter tokens",
-          ml_response: data,
-        }),
+        JSON.stringify({ error: "Falha ao obter token do ML" }),
         { status: 500 }
       );
     }
 
-    // ================================
-// SALVAR TOKENS CORRETAMENTE
-// ================================
-const expiresAt = new Date(
-  Date.now() + data.expires_in * 1000
-).toISOString();
-
-const { error } = await supabase
-  .from("ml_tokens")
-  .upsert({
-    user_id: supabaseUserId,        // ✅ UUID DO SUPABASE (state)
-    ml_user_id: String(data.user_id), // ✅ ID DO ML (texto)
-    access_token: data.access_token,
-    refresh_token: data.refresh_token,
-    expires_in: data.expires_in,
-    expires_at: expiresAt,
-    scope: data.scope || null,
-    token_type: data.token_type || null,
-    updated_at: new Date().toISOString()
-  });
-
-if (error) {
-  console.error("Supabase ERROR →", error);
-  return new Response(
-    JSON.stringify({
-      error: "Falha ao salvar tokens",
-      details: error
-    }),
-    { status: 500 }
-  );
-}
+    // --------------------------------------------------
+    // 3. CALCULAR DATA DE EXPIRAÇÃO
+    // --------------------------------------------------
+    const expiresAt = new Date(
+      Date.now() + tokenData.expires_in * 1000
+    ).toISOString();
 
     // --------------------------------------------------
-    // REDIRECIONA PARA O FRONTEND
+    // 4. SALVAR TOKENS NO SUPABASE
+    // --------------------------------------------------
+    const { error } = await supabase
+      .from("ml_tokens")
+      .upsert({
+        user_id: userId,                         // UUID do usuário
+        ml_user_id: String(tokenData.user_id),   // ID do ML
+        access_token: tokenData.access_token,
+        refresh_token: tokenData.refresh_token,
+        expires_in: tokenData.expires_in,
+        expires_at: expiresAt,
+        scope: tokenData.scope || null,
+        token_type: tokenData.token_type || null,
+        updated_at: new Date().toISOString(),
+      });
+
+    if (error) {
+      console.error("Erro Supabase:", error);
+      return new Response(
+        JSON.stringify({ error: "Erro ao salvar token no Supabase" }),
+        { status: 500 }
+      );
+    }
+
+    // --------------------------------------------------
+    // 5. REDIRECIONAR PARA O DASHBOARD
     // --------------------------------------------------
     return Response.redirect(
-  `${process.env.FRONTEND_URL}/dashboard?ml=connected`
-);
+      `${process.env.FRONTEND_URL}/?ml=connected`,
+      302
+    );
 
   } catch (err) {
-    console.error("Erro callback →", err);
+    console.error("Erro geral callback ML:", err);
     return new Response(
       JSON.stringify({ error: "Erro interno", details: err.message }),
       { status: 500 }
