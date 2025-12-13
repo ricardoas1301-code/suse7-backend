@@ -107,8 +107,9 @@ export async function GET(req) {
     // 6. REDIRECIONAR DE VOLTA AO FRONTEND
     // --------------------------------------------------
     return Response.redirect(
-  `${process.env.FRONTEND_URL}/?ml=connected`
-);
+      `${process.env.FRONTEND_URL}/dashboard?ml=connected`,
+      302
+    );
 
   } catch (err) {
     console.error("🔥 Erro no callback ML:", err);
