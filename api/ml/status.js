@@ -7,21 +7,18 @@ import { createClient } from "@supabase/supabase-js";
 
 export default async function handler(req, res) {
 
-
   // --------------------------------------------------
-  // CORS (OBRIGATÓRIO EM PRODUÇÃO)
+  // CORS
   // --------------------------------------------------
   res.setHeader("Access-Control-Allow-Origin", "https://app.suse7.com.br");
   res.setHeader("Access-Control-Allow-Methods", "GET,OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 
-  // Preflight
   if (req.method === "OPTIONS") {
     return res.status(200).end();
   }
 
   try {
-    // Aceita apenas GET
     if (req.method !== "GET") {
       return res.status(405).json({ error: "Método não permitido" });
     }
@@ -32,9 +29,12 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: "user_id não informado" });
     }
 
+    // --------------------------------------------------
+    // CRIA CLIENT SUPABASE (SERVICE ROLE)
+    // --------------------------------------------------
     const supabase = createClient(
       process.env.SUPABASE_URL,
-      process.env.SUPABASE_SERVICE_ROLE
+      process.env.SUPABASE_SERVICE_ROLE_KEY
     );
 
     const { data, error } = await supabase
@@ -57,4 +57,3 @@ export default async function handler(req, res) {
     return res.status(500).json({ error: "Erro interno" });
   }
 }
-
