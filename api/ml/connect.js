@@ -13,7 +13,7 @@ export async function GET(req) {
     );
   }
 
-  const redirectUri = encodeURIComponent(process.env.ML_REDIRECT_URI);
+  const redirectUri = process.env.ML_REDIRECT_URI;
   const state = encodeURIComponent(supabaseUserId);
 
 const authUrl =

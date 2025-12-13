@@ -3,6 +3,7 @@
 // ======================================================
 
 import { createClient } from "@supabase/supabase-js";
+import { supabase } from "../../supabaseClient.js";
 
 export async function GET(req) {
   try {
