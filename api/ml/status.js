@@ -6,6 +6,19 @@
 import { createClient } from "@supabase/supabase-js";
 
 export default async function handler(req, res) {
+
+  // --------------------------------------------------
+  // CORS (OBRIGATÓRIO EM PRODUÇÃO)
+  // --------------------------------------------------
+  res.setHeader("Access-Control-Allow-Origin", "https://app.suse7.com.br");
+  res.setHeader("Access-Control-Allow-Methods", "GET,OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+
+  // Preflight
+  if (req.method === "OPTIONS") {
+    return res.status(200).end();
+  }
+
   try {
     // Aceita apenas GET
     if (req.method !== "GET") {
