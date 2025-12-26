@@ -28,6 +28,24 @@ export async function GET(req) {
       );
     }
 
+    // ===================================================
+    // 🔐 VALIDAÇÃO REAL DO STATE (UUID EXISTE NO SUPABASE)
+    // ===================================================
+      const { data: profile, error: profileError } = await supabase
+        .from("profiles")
+        .select("id")
+        .eq("id", supabaseUserId)
+        .maybeSingle();
+
+      if (profileError || !profile) {
+          console.error("❌ UUID inválido no callback ML:", supabaseUserId);
+          return new Response(
+          JSON.stringify({ error: "Usuário inválido para este state" }),
+          { status: 401 }
+        );
+      }
+
+
     // --------------------------------------------------
     // TROCA CODE → TOKEN (Mercado Livre)
     // --------------------------------------------------
@@ -94,7 +112,7 @@ if (error) {
     // REDIRECIONA PARA O FRONTEND
     // --------------------------------------------------
     return Response.redirect(
-  `${process.env.FRONTEND_URL}/dashboard?ml=connected`
+  `${process.env.FRONTEND_URL}/?ml=connected`
 );
 
   } catch (err) {
