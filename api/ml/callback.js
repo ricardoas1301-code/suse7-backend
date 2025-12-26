@@ -3,7 +3,11 @@
 // ======================================================
 
 import { createClient } from "@supabase/supabase-js";
-import { supabase } from "../../supabaseClient.js";
+
+const supabase = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_ROLE_KEY
+);
 
 export async function GET(req) {
   try {
