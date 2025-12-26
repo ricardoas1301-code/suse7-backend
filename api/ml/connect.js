@@ -1,23 +1,24 @@
 // ======================================================
 // /api/ml/connect — OAuth Mercado Livre (Vercel)
+// Inicia o OAuth (NÃO exige usuário logado)
 // ======================================================
 
 export default function handler(req, res) {
   try {
-    const supabaseUserId = req.query.user_id;
-
-    if (!supabaseUserId) {
-      return res.status(400).json({
-        error: "UUID do Supabase não informado",
-      });
-    }
+    // --------------------------------------------------
+    // UUID do Supabase (opcional)
+    // --------------------------------------------------
+    const supabaseUserId = req.query.user_id || null;
 
     const clientId = process.env.ML_CLIENT_ID;
     const redirectUri = process.env.ML_REDIRECT_URI;
 
-    // 🔎 Logs de debug (ver no Vercel Logs)
+    // --------------------------------------------------
+    // Logs de debug (Vercel)
+    // --------------------------------------------------
     console.log("ML_CLIENT_ID:", clientId ? "OK" : "UNDEFINED");
     console.log("ML_REDIRECT_URI:", redirectUri ? "OK" : "UNDEFINED");
+    console.log("Supabase User ID:", supabaseUserId || "NÃO INFORMADO");
 
     if (!clientId || !redirectUri) {
       return res.status(500).json({
@@ -25,18 +26,32 @@ export default function handler(req, res) {
       });
     }
 
-    const state = encodeURIComponent(supabaseUserId);
+    // --------------------------------------------------
+    // State (opcional, mas recomendado)
+    // --------------------------------------------------
+    const state = supabaseUserId
+      ? encodeURIComponent(supabaseUserId)
+      : undefined;
 
-    const authUrl =
+    // --------------------------------------------------
+    // Montagem da URL de autorização
+    // --------------------------------------------------
+    let authUrl =
       "https://auth.mercadolivre.com.br/authorization" +
       "?response_type=code" +
       `&client_id=${clientId}` +
-      `&redirect_uri=${encodeURIComponent(redirectUri)}` +
-      `&state=${state}`;
+      `&redirect_uri=${encodeURIComponent(redirectUri)}`;
+
+    if (state) {
+      authUrl += `&state=${state}`;
+    }
 
     return res.redirect(authUrl);
+
   } catch (err) {
     console.error("Erro /api/ml/connect:", err);
-    return res.status(500).json({ error: "Erro interno ML connect" });
+    return res.status(500).json({
+      error: "Erro interno ML connect",
+    });
   }
 }
