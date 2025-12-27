@@ -89,17 +89,23 @@ const expiresAt = new Date(
 
 const { error } = await supabase
   .from("ml_tokens")
-  .upsert({
-    user_id: supabaseUserId,        // ✅ UUID DO SUPABASE (state)
-    ml_user_id: String(data.user_id), // ✅ ID DO ML (texto)
-    access_token: data.access_token,
-    refresh_token: data.refresh_token,
-    expires_in: data.expires_in,
-    expires_at: expiresAt,
-    scope: data.scope || null,
-    token_type: data.token_type || null,
-    updated_at: new Date().toISOString()
-  });
+  .upsert(
+    {
+      user_id: supabaseUserId,           // UUID Supabase
+      ml_user_id: String(data.user_id),  // ID do ML
+      access_token: data.access_token,
+      refresh_token: data.refresh_token,
+      expires_in: data.expires_in,
+      expires_at: expiresAt,
+      scope: data.scope || null,
+      token_type: data.token_type || null,
+      updated_at: new Date().toISOString()
+    },
+    {
+      onConflict: "user_id" // 🔥 AQUI ESTÁ A CHAVE
+    }
+  );
+
 
 if (error) {
   console.error("Supabase ERROR →", error);
