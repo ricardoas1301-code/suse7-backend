@@ -123,7 +123,7 @@ if (error) {
 }
 
     // --------------------------------------------------
-    // REDIRECIONA PARA O FRONTEND ok
+    // REDIRECIONA PARA O FRONTEND ok ok
     // --------------------------------------------------
     return Response.redirect(
       `${process.env.FRONTEND_URL}/ml/connected`
