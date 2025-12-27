@@ -126,7 +126,8 @@ if (error) {
     // REDIRECIONA PARA O FRONTEND
     // --------------------------------------------------
     return Response.redirect(
-  `${process.env.FRONTEND_URL}/?ml=connected`
+      `${process.env.FRONTEND_URL}/ml/connected`
+    );
 );
 
   } catch (err) {
