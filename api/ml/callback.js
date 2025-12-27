@@ -14,9 +14,9 @@ export async function GET(req) {
   try {
 
     console.log("🔥 ML CALLBACK EXECUTADO", new Date().toISOString());
-    
+
     // --------------------------------------------------
-    // CAPTURA DOS PARÂMETROS
+    // CAPTURA DOS PARÂMETROS ok ok
     // --------------------------------------------------
     const { searchParams } = new URL(req.url);
 
