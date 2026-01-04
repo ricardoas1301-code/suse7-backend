@@ -1,140 +1,139 @@
 // ======================================================
-// /api/ml/callback — RECEBE CODE + STATE (UUID)
+// /api/ml/callback — RECEBE code + state (UUID)
+// Objetivo:
+// - Validar state (user_id Supabase)
+// - Trocar code por token no Mercado Livre
+// - Salvar tokens no Supabase (ml_tokens)
+// - Redirecionar para /perfil/integracoes/mercado-livre
 // ======================================================
 
 import { createClient } from "@supabase/supabase-js";
 
-
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY
-);
-
-export async function GET(req) {
+export default async function handler(req, res) {
   try {
+    // --------------------------------------------------
+    // Permitir apenas GET (callback do Mercado Livre)
+    // --------------------------------------------------
+    if (req.method !== "GET") {
+      return res.status(405).json({ error: "Método não permitido" });
+    }
 
     console.log("🔥 ML CALLBACK EXECUTADO", new Date().toISOString());
 
     // --------------------------------------------------
-    // CAPTURA DOS PARÂMETROS ok ok
+    // Captura parâmetros
     // --------------------------------------------------
-    const { searchParams } = new URL(req.url);
-
-    const code = searchParams.get("code");
-    const supabaseUserId = searchParams.get("state"); // ✅ UUID DO SUPABASE
+    const code = req.query.code;
+    const supabaseUserId = req.query.state; // UUID do Supabase
 
     if (!code) {
-      return new Response(JSON.stringify({ error: "Code não encontrado" }), {
-        status: 400,
-      });
+      return res.status(400).json({ error: "Code não encontrado" });
     }
 
     if (!supabaseUserId) {
-      return new Response(
-        JSON.stringify({ error: "State (UUID) não encontrado" }),
-        { status: 400 }
-      );
+      return res.status(400).json({ error: "State (UUID) não encontrado" });
     }
 
-    // ===================================================
-    // 🔐 VALIDAÇÃO REAL DO STATE (UUID EXISTE NO SUPABASE)
-    // ===================================================
-      const { data: profile, error: profileError } = await supabase
-        .from("profiles")
-        .select("id")
-        .eq("id", supabaseUserId)
-        .maybeSingle();
-
-      if (profileError || !profile) {
-          console.error("❌ UUID inválido no callback ML:", supabaseUserId);
-          return new Response(
-          JSON.stringify({ error: "Usuário inválido para este state" }),
-          { status: 401 }
-        );
-      }
-
-
     // --------------------------------------------------
-    // TROCA CODE → TOKEN (Mercado Livre)
+    // Supabase (Service Role)
     // --------------------------------------------------
-    const tokenResponse = await fetch(
-      "https://api.mercadolibre.com/oauth/token",
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          grant_type: "authorization_code",
-          client_id: process.env.ML_CLIENT_ID,
-          client_secret: process.env.ML_CLIENT_SECRET,
-          code,
-          redirect_uri: process.env.ML_REDIRECT_URI,
-        }),
-      }
+    const supabase = createClient(
+      process.env.SUPABASE_URL,
+      process.env.SUPABASE_SERVICE_ROLE_KEY
     );
 
-    const data = await tokenResponse.json();
+    // --------------------------------------------------
+    // Validação real do state (UUID existe no Supabase)
+    // --------------------------------------------------
+    const { data: profile, error: profileError } = await supabase
+      .from("profiles")
+      .select("id")
+      .eq("id", supabaseUserId)
+      .maybeSingle();
 
-    if (!data.access_token) {
-      return new Response(
-        JSON.stringify({
-          error: "Erro ao obter tokens",
-          ml_response: data,
-        }),
-        { status: 500 }
+    if (profileError || !profile) {
+      console.error("❌ UUID inválido no callback ML:", supabaseUserId);
+      return res.status(401).json({ error: "Usuário inválido para este state" });
+    }
+
+    // --------------------------------------------------
+    // Troca CODE → TOKEN (Mercado Livre)
+    // --------------------------------------------------
+    const tokenResponse = await fetch("https://api.mercadolibre.com/oauth/token", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        grant_type: "authorization_code",
+        client_id: process.env.ML_CLIENT_ID,
+        client_secret: process.env.ML_CLIENT_SECRET,
+        code,
+        redirect_uri: process.env.ML_REDIRECT_URI,
+      }),
+    });
+
+    const mlData = await tokenResponse.json();
+
+    // --------------------------------------------------
+    // Se o code já foi usado (recarregou a página, etc)
+    // --------------------------------------------------
+    if (!mlData.access_token) {
+      console.error("❌ Erro ao obter tokens ML:", mlData);
+
+      // Redireciona mesmo assim para a tela do ML com erro (opcional)
+      const frontendUrl = process.env.FRONTEND_URL;
+      return res.redirect(
+        `${frontendUrl}/perfil/integracoes/mercado-livre?ml_error=token`
       );
     }
 
-    // ================================
-// SALVAR TOKENS CORRETAMENTE
-// ================================
-const expiresAt = new Date(
-  Date.now() + data.expires_in * 1000
-).toISOString();
+    // --------------------------------------------------
+    // Calcula expires_at
+    // --------------------------------------------------
+    const expiresAt = new Date(Date.now() + mlData.expires_in * 1000).toISOString();
 
-const { error } = await supabase
-  .from("ml_tokens")
-  .upsert(
-    {
-      user_id: supabaseUserId,           // UUID Supabase
-      ml_user_id: String(data.user_id),  // ID do ML
-      access_token: data.access_token,
-      refresh_token: data.refresh_token,
-      expires_in: data.expires_in,
-      expires_at: expiresAt,
-      scope: data.scope || null,
-      token_type: data.token_type || null,
-      updated_at: new Date().toISOString()
-    },
-    {
-      onConflict: "user_id" // 🔥 AQUI ESTÁ A CHAVE
+    // --------------------------------------------------
+    // Salvar tokens (upsert por user_id)
+    // --------------------------------------------------
+    const { error: upsertError } = await supabase
+      .from("ml_tokens")
+      .upsert(
+        {
+          user_id: supabaseUserId,             // UUID Supabase
+          ml_user_id: String(mlData.user_id),  // ID do ML
+          access_token: mlData.access_token,
+          refresh_token: mlData.refresh_token,
+          expires_in: mlData.expires_in,
+          expires_at: expiresAt,
+          scope: mlData.scope || null,
+          token_type: mlData.token_type || null,
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: "user_id" }
+      );
+
+    if (upsertError) {
+      console.error("❌ Falha ao salvar tokens:", upsertError);
+
+      // Redireciona para tela do ML com erro (opcional)
+      const frontendUrl = process.env.FRONTEND_URL;
+      return res.redirect(
+        `${frontendUrl}/perfil/integracoes/mercado-livre?ml_error=save`
+      );
     }
-  );
-
-
-if (error) {
-  console.error("Supabase ERROR →", error);
-  return new Response(
-    JSON.stringify({
-      error: "Falha ao salvar tokens",
-      details: error
-    }),
-    { status: 500 }
-  );
-}
 
     // --------------------------------------------------
-    // REDIRECIONA PARA O FRONTEND ok ok
+    // ✅ Redireciona para a tela Mercado Livre (final correto)
     // --------------------------------------------------
-    return Response.redirect(
-      ``${process.env.FRONTEND_URL}/perfil/integracoes/mercado-livre`
-    
-);
+    const frontendUrl = process.env.FRONTEND_URL;
+    return res.redirect(`${frontendUrl}/perfil/integracoes/mercado-livre`);
 
   } catch (err) {
-    console.error("Erro callback →", err);
-    return new Response(
-      JSON.stringify({ error: "Erro interno", details: err.message }),
-      { status: 500 }
-    );
+    console.error("❌ Erro callback ML:", err);
+
+    // Evita crash "FUNCTION_INVOCATION_FAILED"
+    return res.status(500).json({
+      error: "Erro interno no callback ML",
+      details: err.message,
+    });
   }
 }
