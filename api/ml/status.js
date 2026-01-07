@@ -7,7 +7,7 @@ import { createClient } from "@supabase/supabase-js";
 
 export default async function handler(req, res) {
   // --------------------------------------------------
-  // CORS (Whitelist de origens permitidas)
+  // CORS — ORIGENS PERMITIDAS
   // --------------------------------------------------
   const allowedOrigins = [
     "https://suse7.com.br",
@@ -29,11 +29,17 @@ export default async function handler(req, res) {
     return res.status(200).end();
   }
 
-  try {
-    if (req.method !== "GET") {
-      return res.status(405).json({ error: "Método não permitido" });
-    }
+  // --------------------------------------------------
+  // APENAS GET É PERMITIDO
+  // --------------------------------------------------
+  if (req.method !== "GET") {
+    return res.status(405).json({ error: "Método não permitido" });
+  }
 
+  try {
+    // --------------------------------------------------
+    // VALIDAÇÃO DE PARÂMETRO
+    // --------------------------------------------------
     const { user_id } = req.query;
 
     if (!user_id) {
@@ -41,7 +47,7 @@ export default async function handler(req, res) {
     }
 
     // --------------------------------------------------
-    // CRIA CLIENT SUPABASE (SERVICE ROLE)
+    // CLIENT SUPABASE (SERVICE ROLE)
     // --------------------------------------------------
     const supabase = createClient(
       process.env.SUPABASE_URL,
@@ -49,40 +55,73 @@ export default async function handler(req, res) {
     );
 
     // --------------------------------------------------
-    // BUSCA TOKEN PELO UUID DO USUÁRIO
-    // ATENÇÃO: aqui pode ser 'user_id' OU 'id' (depende da sua tabela)
+    // BUSCA TOKEN DO MERCADO LIVRE
+    // (primeiro por user_id, depois fallback por id)
     // --------------------------------------------------
+    let tokenData = null;
 
-    // ✅ TENTATIVA 1: coluna user_id
-    let { data, error } = await supabase
+    const firstTry = await supabase
       .from("ml_tokens")
       .select("access_token, expires_at")
       .eq("user_id", user_id)
       .maybeSingle();
 
-    // ✅ FALLBACK: se não achou nada, tenta pela coluna id (muito comum)
-    if (!data?.access_token) {
+    if (firstTry?.data?.access_token) {
+      tokenData = firstTry.data;
+    } else {
       const secondTry = await supabase
         .from("ml_tokens")
         .select("access_token, expires_at")
         .eq("id", user_id)
         .maybeSingle();
 
-      data = secondTry.data;
-      error = secondTry.error;
+      if (secondTry?.data?.access_token) {
+        tokenData = secondTry.data;
+      }
     }
 
-    if (error || !data?.access_token) {
+    // --------------------------------------------------
+    // SE NÃO EXISTIR TOKEN → NÃO CONECTADO
+    // --------------------------------------------------
+    if (!tokenData?.access_token) {
       return res.json({ connected: false });
     }
 
+    // --------------------------------------------------
+    // BUSCAR DADOS DO USUÁRIO NO MERCADO LIVRE
+    // Endpoint oficial: GET /users/me
+    // --------------------------------------------------
+    let username = null;
+
+    try {
+      const mlResponse = await fetch(
+        "https://api.mercadolibre.com/users/me",
+        {
+          headers: {
+            Authorization: `Bearer ${tokenData.access_token}`,
+          },
+        }
+      );
+
+      if (mlResponse.ok) {
+        const mlUser = await mlResponse.json();
+        username = mlUser?.nickname || null;
+      }
+    } catch (mlError) {
+      console.error("Erro ao buscar usuário no Mercado Livre:", mlError);
+    }
+
+    // --------------------------------------------------
+    // RESPOSTA FINAL
+    // --------------------------------------------------
     return res.json({
       connected: true,
-      expires_at: data.expires_at,
+      expires_at: tokenData.expires_at,
+      username, // ex: SUPER METALRIO
     });
 
   } catch (err) {
-    console.error("Erro status ML:", err);
+    console.error("Erro geral status ML:", err);
     return res.status(500).json({ error: "Erro interno" });
   }
 }
