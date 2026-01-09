@@ -1,14 +1,19 @@
 // ==================================================
 // STATUS DA CONEXÃO MERCADO LIVRE — SERVERLESS
 // Rota: /api/ml/status?user_id=UUID
+// Objetivo:
+// - Retornar status de conexão SEM depender de chamada ao ML em tempo real
+// - Exibir ml_nickname salvo no banco (UX estável)
+// - Renovar token automaticamente se estiver expirado/perto de expirar (backend only)
 // ==================================================
 
 import { createClient } from "@supabase/supabase-js";
+import { getValidMLToken } from "./refresh";
 
-export default async function handler(req, res) {
-  // --------------------------------------------------
-  // CORS — ORIGENS PERMITIDAS
-  // --------------------------------------------------
+// --------------------------------------------------
+// Helper: CORS — origens permitidas
+// --------------------------------------------------
+function applyCors(req, res) {
   const allowedOrigins = [
     "https://suse7.com.br",
     "https://app.suse7.com.br",
@@ -24,6 +29,13 @@ export default async function handler(req, res) {
 
   res.setHeader("Access-Control-Allow-Methods", "GET,OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+}
+
+export default async function handler(req, res) {
+  // --------------------------------------------------
+  // CORS
+  // --------------------------------------------------
+  applyCors(req, res);
 
   if (req.method === "OPTIONS") {
     return res.status(200).end();
@@ -38,7 +50,7 @@ export default async function handler(req, res) {
 
   try {
     // --------------------------------------------------
-    // VALIDAÇÃO DE PARÂMETRO
+    // Validação de parâmetro
     // --------------------------------------------------
     const { user_id } = req.query;
 
@@ -47,7 +59,7 @@ export default async function handler(req, res) {
     }
 
     // --------------------------------------------------
-    // CLIENT SUPABASE (SERVICE ROLE)
+    // Supabase (Service Role)
     // --------------------------------------------------
     const supabase = createClient(
       process.env.SUPABASE_URL,
@@ -55,71 +67,47 @@ export default async function handler(req, res) {
     );
 
     // --------------------------------------------------
-    // BUSCA TOKEN DO MERCADO LIVRE
-    // (primeiro por user_id, depois fallback por id)
+    // Buscar dados da integração no banco
+    // (SEM chamar ML em tempo real)
     // --------------------------------------------------
-    let tokenData = null;
-
-    const firstTry = await supabase
+    const { data: tokenRow, error: tokenErr } = await supabase
       .from("ml_tokens")
-      .select("access_token, expires_at")
+      .select("access_token, refresh_token, expires_at, ml_nickname")
       .eq("user_id", user_id)
       .maybeSingle();
 
-    if (firstTry?.data?.access_token) {
-      tokenData = firstTry.data;
-    } else {
-      const secondTry = await supabase
-        .from("ml_tokens")
-        .select("access_token, expires_at")
-        .eq("id", user_id)
-        .maybeSingle();
-
-      if (secondTry?.data?.access_token) {
-        tokenData = secondTry.data;
-      }
+    // --------------------------------------------------
+    // Se não existir registro de token → NÃO conectado
+    // --------------------------------------------------
+    if (tokenErr || !tokenRow?.access_token) {
+      return res.json({
+        connected: false,
+        expires_at: null,
+        username: null,
+      });
     }
 
     // --------------------------------------------------
-    // SE NÃO EXISTIR TOKEN → NÃO CONECTADO
+    // Renovação automática (se necessário)
+    // - Isso garante que o backend mantenha o token vivo
+    // - Mesmo que o status do frontend não use o token
     // --------------------------------------------------
-    if (!tokenData?.access_token) {
-      return res.json({ connected: false });
-    }
-
-    // --------------------------------------------------
-    // BUSCAR DADOS DO USUÁRIO NO MERCADO LIVRE
-    // Endpoint oficial: GET /users/me
-    // --------------------------------------------------
-    let username = null;
-
     try {
-      const mlResponse = await fetch(
-        "https://api.mercadolibre.com/users/me",
-        {
-          headers: {
-            Authorization: `Bearer ${tokenData.access_token}`,
-          },
-        }
-      );
-
-      if (mlResponse.ok) {
-        const mlUser = await mlResponse.json();
-        username = mlUser?.nickname || null;
-      }
-    } catch (mlError) {
-      console.error("Erro ao buscar usuário no Mercado Livre:", mlError);
+      await getValidMLToken(user_id);
+    } catch (refreshErr) {
+      // Importante: NÃO derrubar o status por falha de refresh.
+      // Apenas logar para debug e manter a UI estável.
+      console.warn("⚠️ Falha ao renovar token automaticamente:", refreshErr?.message);
     }
 
     // --------------------------------------------------
-    // RESPOSTA FINAL
+    // Resposta final (UX estável)
     // --------------------------------------------------
     return res.json({
       connected: true,
-      expires_at: tokenData.expires_at,
-      username, // ex: SUPER METALRIO
+      expires_at: tokenRow.expires_at,
+      username: tokenRow.ml_nickname || null,
     });
-
   } catch (err) {
     console.error("Erro geral status ML:", err);
     return res.status(500).json({ error: "Erro interno" });
