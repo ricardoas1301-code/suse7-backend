@@ -3,7 +3,8 @@
 // Objetivo:
 // - Validar state (user_id Supabase)
 // - Trocar code por token no Mercado Livre
-// - Salvar tokens no Supabase (ml_tokens)
+// - Buscar dados do seller (GET /users/me) para capturar nickname
+// - Salvar tokens + ml_nickname no Supabase (ml_tokens)
 // - Redirecionar para /perfil/integracoes/mercado-livre
 // ======================================================
 
@@ -79,7 +80,6 @@ export default async function handler(req, res) {
     if (!mlData.access_token) {
       console.error("❌ Erro ao obter tokens ML:", mlData);
 
-      // Redireciona mesmo assim para a tela do ML com erro (opcional)
       const frontendUrl = process.env.FRONTEND_URL;
       return res.redirect(
         `${frontendUrl}/perfil/integracoes/mercado-livre?ml_error=token`
@@ -92,7 +92,34 @@ export default async function handler(req, res) {
     const expiresAt = new Date(Date.now() + mlData.expires_in * 1000).toISOString();
 
     // --------------------------------------------------
-    // Salvar tokens (upsert por user_id)
+    // Buscar NICKNAME do seller (GET /users/me)
+    // Observação:
+    // - Isso é para UX (exibir nome) e não deve quebrar o fluxo.
+    // - Se falhar, seguimos sem nickname e o usuário continua conectado.
+    // --------------------------------------------------
+    let mlNickname = null;
+
+    try {
+      const meResponse = await fetch("https://api.mercadolibre.com/users/me", {
+        headers: {
+          Authorization: `Bearer ${mlData.access_token}`,
+        },
+      });
+
+      if (meResponse.ok) {
+        const meData = await meResponse.json();
+        mlNickname = meData?.nickname || null;
+        console.log("✅ ML nickname capturado:", mlNickname);
+      } else {
+        // Loga status para debug, mas não quebra
+        console.warn("⚠️ Falha ao buscar /users/me:", meResponse.status);
+      }
+    } catch (meErr) {
+      console.warn("⚠️ Erro ao buscar /users/me (ignorado):", meErr?.message);
+    }
+
+    // --------------------------------------------------
+    // Salvar tokens + ml_nickname (upsert por user_id)
     // --------------------------------------------------
     const { error: upsertError } = await supabase
       .from("ml_tokens")
@@ -100,6 +127,7 @@ export default async function handler(req, res) {
         {
           user_id: supabaseUserId,             // UUID Supabase
           ml_user_id: String(mlData.user_id),  // ID do ML
+          ml_nickname: mlNickname,             // ✅ NICKNAME SALVO (UX)
           access_token: mlData.access_token,
           refresh_token: mlData.refresh_token,
           expires_in: mlData.expires_in,
@@ -114,7 +142,6 @@ export default async function handler(req, res) {
     if (upsertError) {
       console.error("❌ Falha ao salvar tokens:", upsertError);
 
-      // Redireciona para tela do ML com erro (opcional)
       const frontendUrl = process.env.FRONTEND_URL;
       return res.redirect(
         `${frontendUrl}/perfil/integracoes/mercado-livre?ml_error=save`
@@ -130,7 +157,6 @@ export default async function handler(req, res) {
   } catch (err) {
     console.error("❌ Erro callback ML:", err);
 
-    // Evita crash "FUNCTION_INVOCATION_FAILED"
     return res.status(500).json({
       error: "Erro interno no callback ML",
       details: err.message,
