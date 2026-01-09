@@ -10,7 +10,7 @@
 // ==================================================
 
 import { createClient } from "@supabase/supabase-js";
-import { getValidMLToken } from "./_helpers/mlToken";
+import { getValidMLToken } from "./_helpers/mlToken.js";
 
 export default async function handler(req, res) {
   // --------------------------------------------------
@@ -98,7 +98,11 @@ export default async function handler(req, res) {
       expires_at: mlData.expires_at,
     });
   } catch (err) {
-    console.error("❌ Erro geral em /api/ml/status:", err);
-    return res.status(500).json({ error: "Erro interno" });
+  console.error("❌ Erro geral em /api/ml/status:", err);
+
+  return res.status(500).json({
+    connected: false,
+    error: "Erro interno ao verificar status do Mercado Livre"
+  });
   }
 }
