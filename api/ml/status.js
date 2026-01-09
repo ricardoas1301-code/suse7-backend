@@ -1,115 +1,127 @@
-// ==================================================
-// STATUS DA CONEXÃO MERCADO LIVRE — SERVERLESS
-// Rota: /api/ml/status?user_id=UUID
-// Objetivo:
-// - Retornar status de conexão SEM depender de chamada ao ML em tempo real
-// - Exibir ml_nickname salvo no banco (UX estável)
-// - Renovar token automaticamente se estiver expirado/perto de expirar (backend only)
-// ==================================================
+// ======================================================
+// HELPER — TOKEN MERCADO LIVRE (SUPE7)
+// Uso interno (NÃO é rota)
+//
+// Responsabilidade:
+// - Garantir SEMPRE um access_token válido
+// - Renovar automaticamente via refresh_token
+// - Atualizar Supabase de forma segura
+// - Ser usado por TODAS as rotas ML
+// ======================================================
 
 import { createClient } from "@supabase/supabase-js";
-import { getValidMLToken } from "./refresh";
 
-// --------------------------------------------------
-// Helper: CORS — origens permitidas
-// --------------------------------------------------
-function applyCors(req, res) {
-  const allowedOrigins = [
-    "https://suse7.com.br",
-    "https://app.suse7.com.br",
-    "http://localhost:5173",
-    "http://localhost:3000",
-  ];
-
-  const origin = req.headers.origin;
-
-  if (allowedOrigins.includes(origin)) {
-    res.setHeader("Access-Control-Allow-Origin", origin);
+// ------------------------------------------------------
+// Função principal
+// ------------------------------------------------------
+export async function getValidMLToken(userId) {
+  // ----------------------------------------------------
+  // Validação básica
+  // ----------------------------------------------------
+  if (!userId) {
+    throw new Error("getValidMLToken: userId não informado");
   }
 
-  res.setHeader("Access-Control-Allow-Methods", "GET,OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
-}
+  // ----------------------------------------------------
+  // Supabase — Service Role (backend only)
+  // ----------------------------------------------------
+  const supabase = createClient(
+    process.env.SUPABASE_URL,
+    process.env.SUPABASE_SERVICE_ROLE_KEY
+  );
 
-export default async function handler(req, res) {
-  // --------------------------------------------------
-  // CORS
-  // --------------------------------------------------
-  applyCors(req, res);
+  // ----------------------------------------------------
+  // Buscar tokens no banco
+  // ----------------------------------------------------
+  const { data, error } = await supabase
+    .from("ml_tokens")
+    .select("access_token, refresh_token, expires_at")
+    .eq("user_id", userId)
+    .single();
 
-  if (req.method === "OPTIONS") {
-    return res.status(200).end();
+  if (error || !data) {
+    throw new Error("getValidMLToken: tokens do ML não encontrados");
   }
 
-  // --------------------------------------------------
-  // APENAS GET É PERMITIDO
-  // --------------------------------------------------
-  if (req.method !== "GET") {
-    return res.status(405).json({ error: "Método não permitido" });
+  const { access_token, refresh_token, expires_at } = data;
+
+  // ----------------------------------------------------
+  // Verificar expiração (com margem de segurança)
+  // ----------------------------------------------------
+  const now = Date.now();
+  const expiresAt = new Date(expires_at).getTime();
+
+  // margem de 60s para evitar token morrer no meio da request
+  const isExpired = now >= expiresAt - 60 * 1000;
+
+  // ----------------------------------------------------
+  // Token ainda válido → retorna direto
+  // ----------------------------------------------------
+  if (!isExpired) {
+    return access_token;
   }
 
-  try {
-    // --------------------------------------------------
-    // Validação de parâmetro
-    // --------------------------------------------------
-    const { user_id } = req.query;
+  console.log("🔄 [ML] access_token expirado. Renovando automaticamente...");
 
-    if (!user_id) {
-      return res.status(400).json({ error: "user_id não informado" });
+  // ----------------------------------------------------
+  // Refresh do token no Mercado Livre
+  // ----------------------------------------------------
+  const refreshResponse = await fetch(
+    "https://api.mercadolibre.com/oauth/token",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        grant_type: "refresh_token",
+        client_id: process.env.ML_CLIENT_ID,
+        client_secret: process.env.ML_CLIENT_SECRET,
+        refresh_token: refresh_token,
+      }),
     }
+  );
 
-    // --------------------------------------------------
-    // Supabase (Service Role)
-    // --------------------------------------------------
-    const supabase = createClient(
-      process.env.SUPABASE_URL,
-      process.env.SUPABASE_SERVICE_ROLE_KEY
-    );
+  const refreshData = await refreshResponse.json();
 
-    // --------------------------------------------------
-    // Buscar dados da integração no banco
-    // (SEM chamar ML em tempo real)
-    // --------------------------------------------------
-    const { data: tokenRow, error: tokenErr } = await supabase
-      .from("ml_tokens")
-      .select("access_token, refresh_token, expires_at, ml_nickname")
-      .eq("user_id", user_id)
-      .maybeSingle();
-
-    // --------------------------------------------------
-    // Se não existir registro de token → NÃO conectado
-    // --------------------------------------------------
-    if (tokenErr || !tokenRow?.access_token) {
-      return res.json({
-        connected: false,
-        expires_at: null,
-        username: null,
-      });
-    }
-
-    // --------------------------------------------------
-    // Renovação automática (se necessário)
-    // - Isso garante que o backend mantenha o token vivo
-    // - Mesmo que o status do frontend não use o token
-    // --------------------------------------------------
-    try {
-      await getValidMLToken(user_id);
-    } catch (refreshErr) {
-      // Importante: NÃO derrubar o status por falha de refresh.
-      // Apenas logar para debug e manter a UI estável.
-      console.warn("⚠️ Falha ao renovar token automaticamente:", refreshErr?.message);
-    }
-
-    // --------------------------------------------------
-    // Resposta final (UX estável)
-    // --------------------------------------------------
-    return res.json({
-      connected: true,
-      expires_at: tokenRow.expires_at,
-      username: tokenRow.ml_nickname || null,
-    });
-  } catch (err) {
-    console.error("Erro geral status ML:", err);
-    return res.status(500).json({ error: "Erro interno" });
+  // ----------------------------------------------------
+  // Validação do retorno do refresh
+  // ----------------------------------------------------
+  if (!refreshData?.access_token) {
+    console.error("❌ [ML] Falha no refresh do token:", refreshData);
+    throw new Error("getValidMLToken: falha ao renovar access_token");
   }
+
+  // ----------------------------------------------------
+  // expires_in pode não vir → fallback seguro (6h)
+  // ----------------------------------------------------
+  const expiresIn = refreshData.expires_in || 21600; // 6 horas
+
+  const newExpiresAt = new Date(
+    Date.now() + expiresIn * 1000
+  ).toISOString();
+
+  // ----------------------------------------------------
+  // Atualizar tokens no Supabase
+  // ----------------------------------------------------
+  const { error: updateError } = await supabase
+    .from("ml_tokens")
+    .update({
+      access_token: refreshData.access_token,
+      refresh_token: refreshData.refresh_token || refresh_token,
+      expires_at: newExpiresAt,
+      expires_in: expiresIn,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("user_id", userId);
+
+  if (updateError) {
+    console.error("❌ [ML] Erro ao salvar token renovado:", updateError);
+    throw new Error("getValidMLToken: erro ao atualizar token no banco");
+  }
+
+  console.log("✅ [ML] Token renovado com sucesso");
+
+  // ----------------------------------------------------
+  // Retorna o NOVO token válido
+  // ----------------------------------------------------
+  return refreshData.access_token;
 }
