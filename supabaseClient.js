@@ -4,25 +4,16 @@
 // =======================================================
 
 import { createClient } from "@supabase/supabase-js";
-import dotenv from "dotenv";
-dotenv.config();
+import { config } from "./src/infra/config.js";
 
-// Carrega variáveis do ambiente
-const supabaseUrl = process.env.SUPABASE_URL;
-const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-
-if (!supabaseUrl || !supabaseServiceKey) {
+if (!config.supabaseUrl || !config.supabaseServiceRoleKey) {
   console.error("❌ ERRO: Variáveis do Supabase ausentes!");
 }
 
 // Criar client com SERVICE ROLE (backend)
-export const supabase = createClient(
-  supabaseUrl,
-  supabaseServiceKey,
-  {
-    auth: {
-      autoRefreshToken: false,
-      persistSession: false
-    }
-  }
-);
+export const supabase = createClient(config.supabaseUrl, config.supabaseServiceRoleKey, {
+  auth: {
+    autoRefreshToken: false,
+    persistSession: false,
+  },
+});
