@@ -14,6 +14,12 @@ const BUCKET = "product-images";
 const LOG_PREFIX = "[SEO_RENAME]";
 const ALL_SCOPES = "__ALL__";
 
+const ALLOWED_ORIGINS = [
+  "https://suse7.com.br",
+  "http://localhost:5173",
+  ...(config.corsAllowedOrigins || []),
+].filter(Boolean);
+
 function slugify(str) {
   if (!str || typeof str !== "string") return "";
   return str
@@ -33,14 +39,18 @@ function buildNewFileName(productSlug, keywordsSlug, index, ext, uniq) {
   return `${productSlug || "img"}-${keywordsSlug || "seo"}-${index}-${uniq}.${ext}`;
 }
 
-export default async function handler(req, res) {
+function setCorsHeaders(req, res) {
   const origin = req.headers.origin;
-  if (origin && config.corsAllowedOrigins.includes(origin)) {
+  if (origin && ALLOWED_ORIGINS.includes(origin)) {
     res.setHeader("Access-Control-Allow-Origin", origin);
   }
   res.setHeader("Vary", "Origin");
-  res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS");
+  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+}
+
+export default async function handler(req, res) {
+  setCorsHeaders(req, res);
 
   if (req.method === "OPTIONS") {
     return res.status(200).end();
