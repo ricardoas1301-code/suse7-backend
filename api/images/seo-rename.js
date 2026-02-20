@@ -35,8 +35,21 @@ function getExt(path) {
   return m ? m[1].toLowerCase() : "jpg";
 }
 
-function buildNewFileName(productSlug, keywordsSlug, index, ext, uniq) {
-  return `${productSlug || "img"}-${keywordsSlug || "seo"}-${index}-${uniq}.${ext}`;
+/**
+ * Gera nome limpo: {keywordsSlug}-{index}.{ext}
+ * Fallback incremental em caso de colisão: {keywordsSlug}-{index}-2.{ext}, etc.
+ */
+function findNextAvailableFileName(keywordsSlug, index, ext, takenNames) {
+  const kw = keywordsSlug || "seo";
+  const base = `${kw}-${index}.${ext}`;
+  if (!takenNames.has(base)) return base;
+  let suffix = 2;
+  let candidate;
+  do {
+    candidate = `${kw}-${index}-${suffix}.${ext}`;
+    suffix++;
+  } while (takenNames.has(candidate));
+  return candidate;
 }
 
 function setCorsHeaders(req, res) {
@@ -178,9 +191,17 @@ export default async function handler(req, res) {
       return res.status(200).json({ ok: true, renamed: 0, renamed_count: 0, failed: 0, details: [], message: "Nenhuma imagem no escopo" });
     }
 
-    const productSlug = slugify(productName) || "produto";
     const firstKeyword = keywordsTrimmed.split(",")[0]?.trim() || "seo";
     const keywordsSlug = slugify(firstKeyword);
+
+    const takenNames = new Set();
+    const { data: existingFiles } = await supabase.storage.from(BUCKET).list(basePath);
+    if (existingFiles?.length) {
+      for (const f of existingFiles) {
+        if (f?.name) takenNames.add(f.name);
+      }
+    }
+
     const copied = [];
     const details = [];
 
@@ -190,8 +211,8 @@ export default async function handler(req, res) {
       const link = links[i];
       const oldPath = link.storage_path;
       const ext = getExt(link.file_name || oldPath);
-      const uniq = Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
-      const newFileName = buildNewFileName(productSlug, keywordsSlug, i + 1, ext, uniq);
+      const newFileName = findNextAvailableFileName(keywordsSlug, i + 1, ext, takenNames);
+      takenNames.add(newFileName);
       const newPath = `${basePath}/${newFileName}`;
 
       const { error: copyError } = await supabase.storage.from(BUCKET).copy(oldPath, newPath);
@@ -240,11 +261,14 @@ export default async function handler(req, res) {
 
     console.log(`${LOG_PREFIX} ok`, { renamed: details.length });
 
+    const newFileNames = details.map((d) => d.newFileName);
+
     return res.status(200).json({
       ok: true,
       renamed: details.length,
       renamed_count: details.length,
       failed: 0,
+      new_file_names: newFileNames,
       details: details.map((d) => ({ id: d.id, newPath: d.newPath, newFileName: d.newFileName })),
     });
   } catch (err) {
