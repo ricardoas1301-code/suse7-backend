@@ -155,7 +155,10 @@ export default async function handler(req, res) {
       }
       links = productLinks || [];
     } else {
-      const kw = (seo_keywords ?? "").trim();
+      const kwRaw = seo_keywords;
+      const kw = Array.isArray(kwRaw)
+        ? kwRaw.map((s) => String(s || "").trim().toLowerCase()).filter(Boolean).join(", ")
+        : String(kwRaw ?? "").trim();
       const pn = (product_name ?? "").trim();
       if (!kw) {
         return res.status(400).json({ error: "Palavras-chave SEO são obrigatórias (draft)", code: "SEO_KEYWORDS_REQUIRED" });
@@ -191,8 +194,9 @@ export default async function handler(req, res) {
       return res.status(200).json({ ok: true, renamed: 0, renamed_count: 0, failed: 0, details: [], message: "Nenhuma imagem no escopo" });
     }
 
-    const firstKeyword = keywordsTrimmed.split(",")[0]?.trim() || "seo";
-    const keywordsSlug = slugify(firstKeyword);
+    const tags = keywordsTrimmed.split(",").map((s) => s.trim()).filter(Boolean);
+    const keywordsJoined = tags.length ? tags.join("-") : "seo";
+    const keywordsSlug = slugify(keywordsJoined);
 
     const takenNames = new Set();
     const { data: existingFiles } = await supabase.storage.from(BUCKET).list(basePath);
