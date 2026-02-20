@@ -66,12 +66,21 @@ export default async function handler(req, res) {
     }
 
     const body = typeof req.body === "string" ? JSON.parse(req.body || "{}") : req.body || {};
-    const { productId, variantKey } = body;
+    const { productId, variantKey, scope, variant_key } = body;
 
-    const productIdStr = productId && String(productId).trim();
-    if (!productIdStr) {
-      return res.status(400).json({ error: "productId é obrigatório", code: "INVALID_INPUT" });
+    const productIdStr = (scope?.product_id ?? productId) && String(scope?.product_id ?? productId).trim();
+    const draftKeyStr = scope?.draft_key && String(scope.draft_key).trim();
+
+    if (draftKeyStr) {
+      return res.status(400).json({ error: "Renomear imagens (SEO) requer produto salvo", code: "DRAFT_NOT_SUPPORTED" });
     }
+    if (!productIdStr) {
+      return res.status(400).json({ error: "productId/scope.product_id é obrigatório", code: "INVALID_INPUT" });
+    }
+
+    const variantKeyVal = (variant_key ?? variantKey) === null || (variant_key ?? variantKey) === undefined
+      ? null
+      : (String(variant_key ?? variantKey).trim() || null);
 
     const { data: product, error: productError } = await supabase
       .from("products")
@@ -93,8 +102,6 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: "Palavras-chave SEO são obrigatórias", code: "SEO_KEYWORDS_REQUIRED" });
     }
 
-    const rawVariant = variantKey === null || variantKey === undefined ? null : String(variantKey);
-    const variantKeyVal = rawVariant === "" ? null : rawVariant;
     const isAllScopes = variantKeyVal === ALL_SCOPES;
 
     let query = supabase
