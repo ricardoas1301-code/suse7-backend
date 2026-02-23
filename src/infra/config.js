@@ -12,6 +12,11 @@ export const config = {
   supabaseUrl: getEnv("SUPABASE_URL", { required: true }),
   supabaseServiceRoleKey: getEnv("SUPABASE_SERVICE_ROLE_KEY", { required: true }),
   frontendUrl: getEnv("FRONTEND_URL"),
+  // CORS: CORS_ORIGINS (preferido) ou CORS_ALLOWED_ORIGINS
+  corsOrigins: getEnv("CORS_ORIGINS", { defaultValue: "" })
+    .split(",")
+    .map((o) => o.trim())
+    .filter(Boolean),
   corsAllowedOrigins: getEnv("CORS_ALLOWED_ORIGINS", {
     defaultValue: "",
   })
@@ -21,5 +26,6 @@ export const config = {
   mlClientId: getEnv("ML_CLIENT_ID"),
   mlClientSecret: getEnv("ML_CLIENT_SECRET"),
   mlRedirectUri: getEnv("ML_REDIRECT_URI"),
+  jobSecret: getEnv("JOB_SECRET"),
 };
 

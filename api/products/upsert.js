@@ -1,42 +1,38 @@
 // ======================================================================
 // POST /api/products/upsert — Cria ou atualiza produto
-// Regra de negócio: produto salvo como "variants" NÃO pode voltar para "simple"
+// Base Enterprise: http helpers, domain service, auditoria, traceId
 // ======================================================================
 
 import { createClient } from "@supabase/supabase-js";
 import { config } from "../../src/infra/config.js";
-
-const ALLOWED_ORIGINS = [
-  "https://suse7.com.br",
-  "http://localhost:5173",
-  ...(config.corsAllowedOrigins || []),
-].filter(Boolean);
-
-function setCorsHeaders(req, res) {
-  const origin = req.headers.origin;
-  if (origin && ALLOWED_ORIGINS.includes(origin)) {
-    res.setHeader("Access-Control-Allow-Origin", origin);
-  }
-  res.setHeader("Vary", "Origin");
-  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
-}
+import { ok, fail, getTraceId } from "../../src/infra/http.js";
+import { setCorsHeaders, handlePreflight } from "../../src/lib/cors.js";
+import {
+  normalizeProductPayload,
+  validateFormatTransition,
+  validateSkuUniqueness,
+} from "../../src/domain/ProductDomainService.js";
+import {
+  validateStatusTransition,
+  validateReadyRequirements,
+} from "../../src/domain/ProductStatusDomainService.js";
+import { recordAuditEvent } from "../../src/infra/auditService.js";
 
 export default async function handler(req, res) {
   setCorsHeaders(req, res);
-
-  if (req.method === "OPTIONS") {
-    return res.status(200).end();
-  }
+  if (handlePreflight(req, res)) return;
 
   if (req.method !== "POST") {
-    return res.status(405).json({ error: "Método não permitido", code: "METHOD_NOT_ALLOWED" });
+    const traceId = getTraceId(req);
+    return fail(res, { code: "METHOD_NOT_ALLOWED", message: "Método não permitido" }, 405, traceId);
   }
+
+  const traceId = getTraceId(req);
 
   try {
     const authHeader = req.headers.authorization;
     if (!authHeader?.startsWith("Bearer ")) {
-      return res.status(401).json({ error: "Token não informado", code: "UNAUTHORIZED" });
+      return fail(res, { code: "UNAUTHORIZED", message: "Token não informado" }, 401, traceId);
     }
     const token = authHeader.slice(7);
 
@@ -46,51 +42,173 @@ export default async function handler(req, res) {
 
     const { data: { user }, error: authError } = await supabase.auth.getUser(token);
     if (authError || !user?.id) {
-      return res.status(401).json({ error: "Token inválido", code: "UNAUTHORIZED" });
+      return fail(res, { code: "UNAUTHORIZED", message: "Token inválido" }, 401, traceId);
     }
 
     const body = typeof req.body === "string" ? JSON.parse(req.body || "{}") : req.body || {};
-    const { product, mode = "create" } = body;
+    const { product, mode = "create", variants = [] } = body;
     const productId = product?.id;
 
     if (!product) {
-      return res.status(400).json({ error: "product é obrigatório", code: "INVALID_INPUT" });
+      return fail(res, { code: "INVALID_INPUT", message: "product é obrigatório" }, 400, traceId);
     }
 
-    const newFormat = (product.format || "simple").toLowerCase();
+    const normalized = normalizeProductPayload(product);
     const isUpdate = mode === "edit" && productId;
 
-    // Regra: produto salvo como "variants" NÃO pode voltar para "simple"
-    if (isUpdate && newFormat === "simple") {
+    if (!isUpdate) {
+      normalized.status = "draft";
+    }
+
+    // ------------------------------------------------------------------
+    // Domain: validar unicidade de SKU (payload + banco)
+    // ------------------------------------------------------------------
+    const skuCheck = await validateSkuUniqueness(normalized, variants, {
+      supabase,
+      userId: user.id,
+      productId: isUpdate ? productId : undefined,
+    });
+    if (!skuCheck.valid) {
+      return fail(
+        res,
+        {
+          code: skuCheck.code,
+          message: skuCheck.message,
+          details: skuCheck.details,
+        },
+        409,
+        traceId
+      );
+    }
+
+    // ------------------------------------------------------------------
+    // Domain: validar transição de formato (variants → simple bloqueado)
+    // Domain: validar transição de status (se payload.status presente)
+    // ------------------------------------------------------------------
+    if (isUpdate) {
       const { data: existing, error: fetchError } = await supabase
         .from("products")
-        .select("id, format, user_id")
+        .select("id, format, user_id, status")
         .eq("id", productId)
         .eq("user_id", user.id)
         .single();
 
       if (fetchError || !existing) {
-        return res.status(404).json({ error: "Produto não encontrado", code: "PRODUCT_NOT_FOUND" });
+        return fail(res, { code: "PRODUCT_NOT_FOUND", message: "Produto não encontrado" }, 404, traceId);
       }
 
-      const currentFormat = (existing.format || "simple").toLowerCase();
-      if (currentFormat === "variants") {
-        return res.status(409).json({
-          error: "Não é permitido converter um produto com variações para simples.",
-          code: "FORMAT_LOCK_VARIATIONS",
+      const formatCheck = validateFormatTransition(existing, normalized);
+      if (!formatCheck.valid) {
+        return fail(
+          res,
+          { code: formatCheck.code, message: formatCheck.message },
+          409,
+          traceId
+        );
+      }
+
+      const nextStatus = normalized.status;
+      if (nextStatus != null && String(nextStatus).trim() !== "") {
+        const currentStatus = (existing.status || "draft").toLowerCase();
+        const nextStatusNorm = String(nextStatus).trim().toLowerCase();
+
+        const statusCheck = validateStatusTransition(currentStatus, nextStatusNorm);
+        if (!statusCheck.valid) {
+          return fail(
+            res,
+            {
+              code: statusCheck.code,
+              message: statusCheck.message,
+              details: statusCheck.details,
+            },
+            409,
+            traceId
+          );
+        }
+
+        if (nextStatusNorm === "ready") {
+          const readyCheck = validateReadyRequirements(normalized, variants);
+          if (!readyCheck.valid) {
+            return fail(
+              res,
+              {
+                code: readyCheck.code,
+                message: readyCheck.message,
+                details: readyCheck.details,
+              },
+              409,
+              traceId
+            );
+          }
+        }
+
+        try {
+          await recordAuditEvent({
+            userId: user.id,
+            entityType: "product_status",
+            entityId: productId,
+            action: "update",
+            diff: { before: currentStatus, after: nextStatusNorm },
+            traceId,
+          });
+        } catch (auditErr) {
+          console.error("[products/upsert] audit status fail", auditErr);
+        }
+      }
+
+      // ------------------------------------------------------------------
+      // Auditoria: update (before/after)
+      // ------------------------------------------------------------------
+      try {
+        const diff = { before: existing, after: normalized };
+        await recordAuditEvent({
+          userId: user.id,
+          entityType: "product",
+          entityId: productId,
+          action: "update",
+          diff,
+          traceId,
         });
+      } catch (auditErr) {
+        console.error("[products/upsert] audit update fail", auditErr);
+      }
+    } else {
+      // ------------------------------------------------------------------
+      // Auditoria: create
+      // ------------------------------------------------------------------
+      try {
+        const entityId = productId ?? crypto.randomUUID();
+        const diff = { before: null, after: normalized };
+        await recordAuditEvent({
+          userId: user.id,
+          entityType: "product",
+          entityId,
+          action: "create",
+          diff,
+          traceId,
+        });
+      } catch (auditErr) {
+        console.error("[products/upsert] audit create fail", auditErr);
       }
     }
 
-    // Placeholder: a persistência real (insert/update) será implementada
-    // quando o frontend integrar. Por ora, retornamos ok para não quebrar.
-    return res.status(200).json({
+    // Placeholder: persistência real será implementada quando frontend integrar
+    return ok(res, {
       ok: true,
       productId: productId || null,
-      message: "Validação de formato concluída",
+      message: "Validação concluída",
     });
   } catch (err) {
     console.error("[products/upsert] fail", err);
-    return res.status(500).json({ error: "Erro interno", code: "INTERNAL_ERROR" });
+    return fail(
+      res,
+      {
+        code: "INTERNAL_ERROR",
+        message: "Erro interno",
+        details: process.env.NODE_ENV === "development" ? String(err?.message) : undefined,
+      },
+      500,
+      traceId
+    );
   }
 }

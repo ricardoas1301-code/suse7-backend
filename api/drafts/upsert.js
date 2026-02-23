@@ -5,19 +5,11 @@
 
 import { createClient } from "@supabase/supabase-js";
 import { config } from "../../src/infra/config.js";
+import { setCorsHeaders, handlePreflight } from "../../src/lib/cors.js";
 
 export default async function handler(req, res) {
-  const origin = req.headers.origin;
-  if (origin && config.corsAllowedOrigins.includes(origin)) {
-    res.setHeader("Access-Control-Allow-Origin", origin);
-  }
-  res.setHeader("Vary", "Origin");
-  res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
-
-  if (req.method === "OPTIONS") {
-    return res.status(200).end();
-  }
+  setCorsHeaders(req, res);
+  if (handlePreflight(req, res)) return;
 
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Método não permitido", code: "METHOD_NOT_ALLOWED" });
