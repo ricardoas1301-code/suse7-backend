@@ -7,87 +7,96 @@
 // - Roteamento interno por URL (1 única função /api)
 // - CORS centralizado
 // - OPTIONS: hard stop no topo, nunca executa parse/roteamento
+// - Lazy import: handlers carregados só quando a rota é chamada
 // ==================================================
 
 import { applyCors } from "../src/middlewares/cors.js";
-
-// ------------------------------
-// Importa handlers internos
-// ------------------------------
-import { handleUserPreferences } from "../src/handlers/user/preferences.js";
-import { handleUserPreferencesReset } from "../src/handlers/user/preferencesReset.js";
-import { handleNotifications } from "../src/handlers/notifications/index.js";
-import { handleNotificationsMarkRead } from "../src/handlers/notifications/markRead.js";
-import { handleDraftsUpsert } from "../src/handlers/drafts/upsert.js";
-
-// ML
-import { handleMlConnect } from "../src/handlers/ml/connect.js";
-import { handleMlCallback } from "../src/handlers/ml/callback.js";
-import { handleMlStatus } from "../src/handlers/ml/status.js";
-
-// Products
-import { handleProductsHealth } from "../src/handlers/products/health.js";
-import { handleProductsUpsert } from "../src/handlers/products/upsert.js";
-import { handleProductsChangeStatus } from "../src/handlers/products/changeStatus.js";
-import { handleProductsAdTitles } from "../src/handlers/products/adTitles.js";
-
-// Jobs / Images
-import { handleJobsStockMinCheck } from "../src/handlers/jobs/stockMinCheck.js";
-import { handleImagesSeoRename } from "../src/handlers/images/seoRename.js";
 
 // ==================================================
 // Router
 // ==================================================
 export default async function handler(req, res) {
   // ------------------------------
-  // FASE 1: CORS + preflight — PRIMEIRA LINHA, nada antes
+  // FASE 3: OPTIONS retorna 204 antes de qualquer parse
   // ------------------------------
   const finished = applyCors(req, res);
   if (finished) return;
 
-  // ------------------------------
-  // FASE 2: Safeguard OPTIONS (duplicado à prova de regressão)
-  // ------------------------------
   if (req.method === "OPTIONS") {
     res.status(204).end();
     return;
   }
 
+  // ------------------------------
+  // Agora pode parsear URL e rotear
+  // ------------------------------
   try {
-    // ------------------------------
-    // Normaliza path e query
-    // req.url: /api?__path=products/health&product_id=123 (após rewrite)
-    // ou req.url: /api/products/health?product_id=123 (sem rewrite)
-    // ------------------------------
     const baseUrl = `http://${req.headers?.host || "localhost"}`;
     const url = new URL(req.url || "/api", baseUrl);
     const pathParam = url.searchParams.get("__path");
     const path = pathParam ? `/api/${pathParam}` : url.pathname;
 
-    // Popula req.query para handlers que usam query params
     req.query = Object.fromEntries(url.searchParams);
 
     // ------------------------------
-    // Rotas (match exato)
+    // Rotas (lazy import — FASE 2)
     // ------------------------------
-    if (path === "/api/user/preferences") return handleUserPreferences(req, res);
-    if (path === "/api/user/preferences/reset") return handleUserPreferencesReset(req, res);
-    if (path === "/api/notifications") return handleNotifications(req, res);
-    if (path === "/api/notifications/mark-read") return handleNotificationsMarkRead(req, res);
-
-    if (path === "/api/drafts/upsert") return handleDraftsUpsert(req, res);
-
-    if (path === "/api/ml/connect") return handleMlConnect(req, res);
-    if (path === "/api/ml/callback") return handleMlCallback(req, res);
-    if (path === "/api/ml/status") return handleMlStatus(req, res);
-
-    if (path === "/api/products/health") return handleProductsHealth(req, res);
-    if (path === "/api/products/upsert") return handleProductsUpsert(req, res);
-    if (path === "/api/products/change-status") return handleProductsChangeStatus(req, res);
-    if (path === "/api/products/ad-titles") return handleProductsAdTitles(req, res);
-
-    if (path === "/api/jobs/stock-min-check") return handleJobsStockMinCheck(req, res);
-    if (path === "/api/images/seo-rename") return handleImagesSeoRename(req, res);
+    if (path === "/api/user/preferences") {
+      const mod = await import("../src/handlers/user/preferences.js");
+      return mod.handleUserPreferences(req, res);
+    }
+    if (path === "/api/user/preferences/reset") {
+      const mod = await import("../src/handlers/user/preferencesReset.js");
+      return mod.handleUserPreferencesReset(req, res);
+    }
+    if (path === "/api/notifications") {
+      const mod = await import("../src/handlers/notifications/index.js");
+      return mod.handleNotifications(req, res);
+    }
+    if (path === "/api/notifications/mark-read") {
+      const mod = await import("../src/handlers/notifications/markRead.js");
+      return mod.handleNotificationsMarkRead(req, res);
+    }
+    if (path === "/api/drafts/upsert") {
+      const mod = await import("../src/handlers/drafts/upsert.js");
+      return mod.handleDraftsUpsert(req, res);
+    }
+    if (path === "/api/ml/connect") {
+      const mod = await import("../src/handlers/ml/connect.js");
+      return mod.handleMlConnect(req, res);
+    }
+    if (path === "/api/ml/callback") {
+      const mod = await import("../src/handlers/ml/callback.js");
+      return mod.handleMlCallback(req, res);
+    }
+    if (path === "/api/ml/status") {
+      const mod = await import("../src/handlers/ml/status.js");
+      return mod.handleMlStatus(req, res);
+    }
+    if (path === "/api/products/health") {
+      const mod = await import("../src/handlers/products/health.js");
+      return mod.handleProductsHealth(req, res);
+    }
+    if (path === "/api/products/upsert") {
+      const mod = await import("../src/handlers/products/upsert.js");
+      return mod.handleProductsUpsert(req, res);
+    }
+    if (path === "/api/products/change-status") {
+      const mod = await import("../src/handlers/products/changeStatus.js");
+      return mod.handleProductsChangeStatus(req, res);
+    }
+    if (path === "/api/products/ad-titles") {
+      const mod = await import("../src/handlers/products/adTitles.js");
+      return mod.handleProductsAdTitles(req, res);
+    }
+    if (path === "/api/jobs/stock-min-check") {
+      const mod = await import("../src/handlers/jobs/stockMinCheck.js");
+      return mod.handleJobsStockMinCheck(req, res);
+    }
+    if (path === "/api/images/seo-rename") {
+      const mod = await import("../src/handlers/images/seoRename.js");
+      return mod.handleImagesSeoRename(req, res);
+    }
 
     // ------------------------------
     // 404 padrão
@@ -99,20 +108,13 @@ export default async function handler(req, res) {
     });
   } catch (err) {
     // ------------------------------
-    // FASE 3: Log defensivo + 500 com errorId
+    // FASE 4: JSON com errorId (não texto da Vercel)
     // ------------------------------
     const errorId = Date.now();
-    console.error("[S7 API Router] error:", err);
-    console.error("[S7 API Router] req:", {
-      method: req?.method,
-      url: req?.url,
-      origin: req?.headers?.origin,
-      host: req?.headers?.host,
-      errorId,
-    });
+    console.error("[S7 API Router] errorId:", errorId, err);
     return res.status(500).json({
       ok: false,
-      error: "Internal server error",
+      error: "Internal error",
       errorId,
     });
   }
