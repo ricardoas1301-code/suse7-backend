@@ -9,7 +9,7 @@
 
 import { createClient } from "@supabase/supabase-js";
 import { config } from "../../src/infra/config.js";
-import { setCorsHeaders, handlePreflight } from "../../src/lib/cors.js";
+import { applyCors } from "../../src/middlewares/cors.js";
 
 const BUCKET = "product-images";
 const LOG_PREFIX = "[SEO_RENAME]";
@@ -48,8 +48,8 @@ function findNextAvailableFileName(keywordsSlug, index, ext, takenNames) {
 }
 
 export default async function handler(req, res) {
-  setCorsHeaders(req, res);
-  if (handlePreflight(req, res)) return;
+  const finished = applyCors(req, res);
+  if (finished) return;
 
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Método não permitido", code: "METHOD_NOT_ALLOWED" });

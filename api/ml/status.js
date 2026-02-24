@@ -11,11 +11,11 @@
 
 import { createClient } from "@supabase/supabase-js";
 import { getValidMLToken } from "./_helpers/mlToken.js";
-import { setCorsHeaders, handlePreflight } from "../../src/lib/cors.js";
+import { applyCors } from "../../src/middlewares/cors.js";
 
 export default async function handler(req, res) {
-  setCorsHeaders(req, res);
-  if (handlePreflight(req, res)) return;
+  const finished = applyCors(req, res);
+  if (finished) return;
 
   if (req.method !== "GET") {
     return res.status(405).json({ error: "Método não permitido" });

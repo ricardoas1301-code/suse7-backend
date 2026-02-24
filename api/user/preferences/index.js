@@ -6,7 +6,7 @@
 import { createClient } from "@supabase/supabase-js";
 import { config } from "../../../src/infra/config.js";
 import { ok, fail, getTraceId } from "../../../src/infra/http.js";
-import { setCorsHeaders, handlePreflight } from "../../../src/lib/cors.js";
+import { applyCors } from "../../../src/middlewares/cors.js";
 import {
   normalizeKey,
   validateKey,
@@ -16,8 +16,8 @@ import {
 import { recordAuditEvent } from "../../../src/infra/auditService.js";
 
 export default async function handler(req, res) {
-  setCorsHeaders(req, res);
-  if (handlePreflight(req, res)) return;
+  const finished = applyCors(req, res);
+  if (finished) return;
 
   if (!["GET", "PUT", "DELETE"].includes(req.method)) {
     const traceId = getTraceId(req);
