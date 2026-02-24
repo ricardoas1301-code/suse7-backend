@@ -6,6 +6,7 @@
 // - Evitar limite de 12 Serverless Functions no plano Hobby
 // - Roteamento interno por URL (1 única função /api)
 // - CORS centralizado
+// - OPTIONS: hard stop no topo, nunca executa parse/roteamento
 // ==================================================
 
 import { applyCors } from "../src/middlewares/cors.js";
@@ -39,25 +40,33 @@ import { handleImagesSeoRename } from "../src/handlers/images/seoRename.js";
 // ==================================================
 export default async function handler(req, res) {
   // ------------------------------
-  // CORS + preflight
+  // FASE 1: CORS + preflight — PRIMEIRA LINHA, nada antes
   // ------------------------------
   const finished = applyCors(req, res);
   if (finished) return;
 
   // ------------------------------
-  // Normaliza path e query
-  // req.url: /api?__path=products/health&product_id=123 (após rewrite)
-  // ou req.url: /api/products/health?product_id=123 (sem rewrite)
+  // FASE 2: Safeguard OPTIONS (duplicado à prova de regressão)
   // ------------------------------
-  const baseUrl = `http://${req.headers?.host || "localhost"}`;
-  const url = new URL(req.url || "/api", baseUrl);
-  const pathParam = url.searchParams.get("__path");
-  const path = pathParam ? `/api/${pathParam}` : url.pathname;
-
-  // Popula req.query para handlers que usam query params
-  req.query = Object.fromEntries(url.searchParams);
+  if (req.method === "OPTIONS") {
+    res.status(204).end();
+    return;
+  }
 
   try {
+    // ------------------------------
+    // Normaliza path e query
+    // req.url: /api?__path=products/health&product_id=123 (após rewrite)
+    // ou req.url: /api/products/health?product_id=123 (sem rewrite)
+    // ------------------------------
+    const baseUrl = `http://${req.headers?.host || "localhost"}`;
+    const url = new URL(req.url || "/api", baseUrl);
+    const pathParam = url.searchParams.get("__path");
+    const path = pathParam ? `/api/${pathParam}` : url.pathname;
+
+    // Popula req.query para handlers que usam query params
+    req.query = Object.fromEntries(url.searchParams);
+
     // ------------------------------
     // Rotas (match exato)
     // ------------------------------
@@ -89,10 +98,22 @@ export default async function handler(req, res) {
       path,
     });
   } catch (err) {
+    // ------------------------------
+    // FASE 3: Log defensivo + 500 com errorId
+    // ------------------------------
+    const errorId = Date.now();
     console.error("[S7 API Router] error:", err);
+    console.error("[S7 API Router] req:", {
+      method: req?.method,
+      url: req?.url,
+      origin: req?.headers?.origin,
+      host: req?.headers?.host,
+      errorId,
+    });
     return res.status(500).json({
       ok: false,
       error: "Internal server error",
+      errorId,
     });
   }
 }
