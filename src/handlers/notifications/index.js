@@ -17,7 +17,7 @@ export async function handleNotifications(req, res) {
   try {
     // Valida config Supabase (evita 500 por env vars ausentes)
     if (!config.supabaseUrl?.trim() || !config.supabaseServiceRoleKey?.trim()) {
-      console.error("[notifications] SUPABASE_URL ou SUPABASE_SERVICE_ROLE_KEY ausente");
+      console.error("[notifications] traceId:", traceId, "SUPABASE_URL ou SUPABASE_SERVICE_ROLE_KEY ausente");
       return fail(res, { code: "CONFIG_ERROR", message: "Configuração do banco indisponível" }, 503, traceId);
     }
 
@@ -36,35 +36,50 @@ export async function handleNotifications(req, res) {
       return fail(res, { code: "UNAUTHORIZED", message: "Token inválido" }, 401, traceId);
     }
 
-    const q = req.query || {};
-    const unread = q.unread === "1";
-    const active = q.active === "1";
-    const limit = Math.min(parseInt(q.limit || "50", 10) || 50, 100);
+    // Parse query da URL (não depende de req.query)
+    const url = new URL(req.url || "", `http://${req.headers?.host || "localhost"}`);
+    const active = url.searchParams.get("active");
+    const unread = url.searchParams.get("unread");
+    const limit = Math.min(Math.max(Number(url.searchParams.get("limit") || 50) || 50, 1), 200);
 
-    let query = supabase
+    let q = supabase
       .from("notifications")
       .select("id, type, product_id, variant_id, variant_key, payload, dedupe_key, created_at, read_at, resolved_at")
       .eq("user_id", user.id)
       .order("created_at", { ascending: false })
       .limit(limit);
 
-    if (unread) {
-      query = query.is("read_at", null);
-    }
-    if (active) {
-      query = query.is("resolved_at", null);
+    // active => resolved_at (active=true = não resolvida = resolved_at IS NULL)
+    if (active === "true") {
+      q = q.is("resolved_at", null);
+    } else if (active === "false") {
+      q = q.not("resolved_at", "is", null);
     }
 
-    const { data, error } = await query;
+    // unread => read_at (unread=true = read_at IS NULL)
+    if (unread === "true") {
+      q = q.is("read_at", null);
+    } else if (unread === "false") {
+      q = q.not("read_at", "is", null);
+    }
+
+    const { data, error } = await q;
 
     if (error) {
-      console.error("[notifications] GET error:", error?.message || error, "code:", error?.code);
-      return fail(res, { code: "DB_ERROR", message: "Erro ao listar notificações" }, 500, traceId);
+      console.error("[notifications] traceId:", traceId, "Supabase error:", error?.code, error?.message, error?.details, error?.hint);
+      return res.status(400).json({
+        ok: false,
+        code: error?.code || "DB_ERROR",
+        message: error?.message || "Erro ao listar notificações",
+        details: error?.details,
+        hint: error?.hint,
+        traceId,
+      });
     }
 
     return ok(res, { notifications: data || [] });
   } catch (err) {
-    console.error("[notifications] fail", err?.message, err?.stack);
+    console.error("[notifications] traceId:", traceId, "fail:", err?.message, err?.stack);
     return fail(
       res,
       {
