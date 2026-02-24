@@ -3,12 +3,9 @@
 // Inicia o OAuth (NÃO exige usuário logado)
 // ======================================================
 
-import { applyCors } from "../../src/middlewares/cors.js";
+import { withCors } from "../../src/utils/withCors.js";
 
-export default function handler(req, res) {
-  const finished = applyCors(req, res);
-  if (finished) return;
-
+function handler(req, res) {
   try {
     // --------------------------------------------------
     // UUID do Supabase (opcional)
@@ -60,3 +57,5 @@ export default function handler(req, res) {
     });
   }
 }
+
+export default withCors(handler);

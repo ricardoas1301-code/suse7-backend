@@ -6,7 +6,7 @@
 import { createClient } from "@supabase/supabase-js";
 import { config } from "../../src/infra/config.js";
 import { ok, fail, getTraceId } from "../../src/infra/http.js";
-import { applyCors } from "../../src/middlewares/cors.js";
+import { withCors } from "../../src/utils/withCors.js";
 import {
   normalizeTitle,
   normalizeTitleKey,
@@ -45,10 +45,7 @@ async function ensureAdTitleOwnership(supabase, userId, adTitleId) {
   return data;
 }
 
-export default async function handler(req, res) {
-  const finished = applyCors(req, res);
-  if (finished) return;
-
+async function handler(req, res) {
   const traceId = getTraceId(req);
 
   if (!["GET", "POST", "PATCH", "DELETE"].includes(req.method)) {
@@ -397,3 +394,5 @@ export default async function handler(req, res) {
     );
   }
 }
+
+export default withCors(handler);

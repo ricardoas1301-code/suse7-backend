@@ -6,17 +6,14 @@
 import { createClient } from "@supabase/supabase-js";
 import { config } from "../../src/infra/config.js";
 import { ok, fail, getTraceId } from "../../src/infra/http.js";
-import { applyCors } from "../../src/middlewares/cors.js";
+import { withCors } from "../../src/utils/withCors.js";
 import {
   validateStatusTransition,
   validateReadyRequirements,
 } from "../../src/domain/ProductStatusDomainService.js";
 import { recordAuditEvent } from "../../src/infra/auditService.js";
 
-export default async function handler(req, res) {
-  const finished = applyCors(req, res);
-  if (finished) return;
-
+async function handler(req, res) {
   if (req.method !== "POST") {
     const traceId = getTraceId(req);
     return fail(res, { code: "METHOD_NOT_ALLOWED", message: "Método não permitido" }, 405, traceId);
@@ -145,3 +142,5 @@ export default async function handler(req, res) {
     );
   }
 }
+
+export default withCors(handler);

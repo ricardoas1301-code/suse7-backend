@@ -9,12 +9,9 @@
 // ======================================================
 
 import { createClient } from "@supabase/supabase-js";
-import { applyCors } from "../../src/middlewares/cors.js";
+import { withCors } from "../../src/utils/withCors.js";
 
-export default async function handler(req, res) {
-  const finished = applyCors(req, res);
-  if (finished) return;
-
+async function handler(req, res) {
   try {
     // --------------------------------------------------
     // Permitir apenas GET (callback do Mercado Livre)
@@ -167,3 +164,5 @@ export default async function handler(req, res) {
     });
   }
 }
+
+export default withCors(handler);
