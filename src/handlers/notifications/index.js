@@ -8,14 +8,19 @@ import { config } from "../../infra/config.js";
 import { ok, fail, getTraceId } from "../../infra/http.js";
 
 export async function handleNotifications(req, res) {
+  const traceId = getTraceId(req);
+
   if (req.method !== "GET") {
-    const traceId = getTraceId(req);
     return fail(res, { code: "METHOD_NOT_ALLOWED", message: "Método não permitido" }, 405, traceId);
   }
 
-  const traceId = getTraceId(req);
-
   try {
+    // Valida config Supabase (evita 500 por env vars ausentes)
+    if (!config.supabaseUrl?.trim() || !config.supabaseServiceRoleKey?.trim()) {
+      console.error("[notifications] SUPABASE_URL ou SUPABASE_SERVICE_ROLE_KEY ausente");
+      return fail(res, { code: "CONFIG_ERROR", message: "Configuração do banco indisponível" }, 503, traceId);
+    }
+
     const authHeader = req.headers.authorization;
     if (!authHeader?.startsWith("Bearer ")) {
       return fail(res, { code: "UNAUTHORIZED", message: "Token não informado" }, 401, traceId);
@@ -53,13 +58,13 @@ export async function handleNotifications(req, res) {
     const { data, error } = await query;
 
     if (error) {
-      console.error("[notifications] GET error:", error);
+      console.error("[notifications] GET error:", error?.message || error, "code:", error?.code);
       return fail(res, { code: "DB_ERROR", message: "Erro ao listar notificações" }, 500, traceId);
     }
 
     return ok(res, { notifications: data || [] });
   } catch (err) {
-    console.error("[notifications] fail", err);
+    console.error("[notifications] fail", err?.message, err?.stack);
     return fail(
       res,
       {
