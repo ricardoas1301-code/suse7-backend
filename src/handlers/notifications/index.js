@@ -38,30 +38,35 @@ export async function handleNotifications(req, res) {
 
     // Parse query da URL (não depende de req.query)
     const url = new URL(req.url || "", `http://${req.headers?.host || "localhost"}`);
-    const active = url.searchParams.get("active");
-    const unread = url.searchParams.get("unread");
+    const filterResolved = url.searchParams.get("active");   // active=true => resolved_at IS NULL
+    const filterRead = url.searchParams.get("unread");      // unread=true => read_at IS NULL
     const limit = Math.min(Math.max(Number(url.searchParams.get("limit") || 50) || 50, 1), 200);
 
+    // Colunas permitidas: id, user_id, title, message, type, read_at, resolved_at, created_at, updated_at
     let q = supabase
       .from("notifications")
-      .select("id, type, product_id, variant_id, variant_key, payload, dedupe_key, created_at, read_at, resolved_at")
+      .select("id, user_id, title, message, type, read_at, resolved_at, created_at, updated_at")
       .eq("user_id", user.id)
       .order("created_at", { ascending: false })
       .limit(limit);
 
-    // active => resolved_at (active=true = não resolvida = resolved_at IS NULL)
-    if (active === "true") {
+    if (filterResolved === "true") {
       q = q.is("resolved_at", null);
-    } else if (active === "false") {
+    } else if (filterResolved === "false") {
       q = q.not("resolved_at", "is", null);
     }
-
-    // unread => read_at (unread=true = read_at IS NULL)
-    if (unread === "true") {
+    if (filterRead === "true") {
       q = q.is("read_at", null);
-    } else if (unread === "false") {
+    } else if (filterRead === "false") {
       q = q.not("read_at", "is", null);
     }
+
+    console.log("[notifications] traceId:", traceId, "query params:", {
+      userId: user.id,
+      filterResolved,
+      filterRead,
+      limit,
+    });
 
     const { data, error } = await q;
 
