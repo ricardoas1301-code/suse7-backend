@@ -1,14 +1,13 @@
-// ======================================================================
-// API /api/notifications — Listar notificações do seller
-// GET ?unread=1&active=1&limit=50
-// ======================================================================
+// ==================================================
+// SUSE7 — Handler: Notifications List
+// Arquivo: src/handlers/notifications/index.js
+// ==================================================
 
 import { createClient } from "@supabase/supabase-js";
-import { config } from "../../src/infra/config.js";
-import { ok, fail, getTraceId } from "../../src/infra/http.js";
-import { withCors } from "../../src/utils/withCors.js";
+import { config } from "../../infra/config.js";
+import { ok, fail, getTraceId } from "../../infra/http.js";
 
-async function handler(req, res) {
+export async function handleNotifications(req, res) {
   if (req.method !== "GET") {
     const traceId = getTraceId(req);
     return fail(res, { code: "METHOD_NOT_ALLOWED", message: "Método não permitido" }, 405, traceId);
@@ -32,10 +31,10 @@ async function handler(req, res) {
       return fail(res, { code: "UNAUTHORIZED", message: "Token inválido" }, 401, traceId);
     }
 
-    const params = req.url?.split("?")[1] ? new URLSearchParams(req.url.split("?")[1]) : null;
-    const unread = params?.get("unread") === "1";
-    const active = params?.get("active") === "1";
-    const limit = Math.min(parseInt(params?.get("limit") || "50", 10) || 50, 100);
+    const q = req.query || {};
+    const unread = q.unread === "1";
+    const active = q.active === "1";
+    const limit = Math.min(parseInt(q.limit || "50", 10) || 50, 100);
 
     let query = supabase
       .from("notifications")
@@ -73,5 +72,3 @@ async function handler(req, res) {
     );
   }
 }
-
-export default withCors(handler);

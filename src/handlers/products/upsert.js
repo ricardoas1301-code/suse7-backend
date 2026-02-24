@@ -4,21 +4,20 @@
 // ======================================================================
 
 import { createClient } from "@supabase/supabase-js";
-import { config } from "../../src/infra/config.js";
-import { ok, fail, getTraceId } from "../../src/infra/http.js";
-import { withCors } from "../../src/utils/withCors.js";
+import { config } from "../../infra/config.js";
+import { ok, fail, getTraceId } from "../../infra/http.js";
 import {
   normalizeProductPayload,
   validateFormatTransition,
   validateSkuUniqueness,
-} from "../../src/domain/ProductDomainService.js";
+} from "../../domain/ProductDomainService.js";
 import {
   validateStatusTransition,
   validateReadyRequirements,
-} from "../../src/domain/ProductStatusDomainService.js";
-import { recordAuditEvent } from "../../src/infra/auditService.js";
+} from "../../domain/ProductStatusDomainService.js";
+import { recordAuditEvent } from "../../infra/auditService.js";
 
-async function handler(req, res) {
+export async function handleProductsUpsert(req, res) {
   if (req.method !== "POST") {
     const traceId = getTraceId(req);
     return fail(res, { code: "METHOD_NOT_ALLOWED", message: "Método não permitido" }, 405, traceId);
@@ -57,9 +56,6 @@ async function handler(req, res) {
       normalized.status = "draft";
     }
 
-    // ------------------------------------------------------------------
-    // Domain: validar unicidade de SKU (payload + banco)
-    // ------------------------------------------------------------------
     const skuCheck = await validateSkuUniqueness(normalized, variants, {
       supabase,
       userId: user.id,
@@ -78,10 +74,6 @@ async function handler(req, res) {
       );
     }
 
-    // ------------------------------------------------------------------
-    // Domain: validar transição de formato (variants → simple bloqueado)
-    // Domain: validar transição de status (se payload.status presente)
-    // ------------------------------------------------------------------
     if (isUpdate) {
       const { data: existing, error: fetchError } = await supabase
         .from("products")
@@ -153,9 +145,6 @@ async function handler(req, res) {
         }
       }
 
-      // ------------------------------------------------------------------
-      // Auditoria: update (before/after)
-      // ------------------------------------------------------------------
       try {
         const diff = { before: existing, after: normalized };
         await recordAuditEvent({
@@ -170,9 +159,6 @@ async function handler(req, res) {
         console.error("[products/upsert] audit update fail", auditErr);
       }
     } else {
-      // ------------------------------------------------------------------
-      // Auditoria: create
-      // ------------------------------------------------------------------
       try {
         const entityId = productId ?? crypto.randomUUID();
         const diff = { before: null, after: normalized };
@@ -189,7 +175,6 @@ async function handler(req, res) {
       }
     }
 
-    // Placeholder: persistência real será implementada quando frontend integrar
     return ok(res, {
       ok: true,
       productId: productId || null,
@@ -209,5 +194,3 @@ async function handler(req, res) {
     );
   }
 }
-
-export default withCors(handler);

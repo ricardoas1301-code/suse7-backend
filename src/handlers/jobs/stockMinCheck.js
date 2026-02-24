@@ -9,22 +9,17 @@
 // ======================================================================
 
 import { createClient } from "@supabase/supabase-js";
-import { config } from "../../src/infra/config.js";
-import { ok, fail, getTraceId } from "../../src/infra/http.js";
-import { withCors } from "../../src/utils/withCors.js";
+import { config } from "../../infra/config.js";
+import { ok, fail, getTraceId } from "../../infra/http.js";
 import {
   buildDedupeKey,
   shouldOpenIncident,
   shouldResolveIncident,
-} from "../../src/domain/StockMinDomainService.js";
-import { recordAuditEvent } from "../../src/infra/auditService.js";
+} from "../../domain/StockMinDomainService.js";
+import { recordAuditEvent } from "../../infra/auditService.js";
 
 const BATCH_SIZE = 100;
-const PAGE_SIZE = 50;
 
-/**
- * Obtém min_stock de um row (prioriza min_stock_quantity, fallback stock_minimum)
- */
 function getMinStock(row) {
   const v = row.min_stock_quantity ?? row.stock_minimum;
   if (v == null || v === "") return null;
@@ -32,9 +27,6 @@ function getMinStock(row) {
   return Number.isNaN(n) || n < 0 ? null : n;
 }
 
-/**
- * Obtém estoque atual de um row
- */
 function getCurrentStock(row) {
   const v = row.stock_quantity ?? row.stock_real;
   if (v == null || v === "") return 0;
@@ -42,7 +34,7 @@ function getCurrentStock(row) {
   return Number.isNaN(n) || n < 0 ? 0 : n;
 }
 
-async function handler(req, res) {
+export async function handleJobsStockMinCheck(req, res) {
   if (req.method !== "POST" && req.method !== "GET") {
     const traceId = getTraceId(req);
     return fail(res, { code: "METHOD_NOT_ALLOWED", message: "Método não permitido" }, 405, traceId);
@@ -63,9 +55,6 @@ async function handler(req, res) {
     let created = 0;
     let resolved = 0;
 
-    // ------------------------------------------------------------------
-    // 1) Produtos simples (format=simple) com min_stock definido
-    // ------------------------------------------------------------------
     const { data: simpleProducts } = await supabase
       .from("products")
       .select("id, user_id, stock_quantity, min_stock_quantity, stock_minimum")
@@ -161,9 +150,6 @@ async function handler(req, res) {
       }
     }
 
-    // ------------------------------------------------------------------
-    // 2) Variações (product_variants) com min_stock definido
-    // ------------------------------------------------------------------
     const { data: userProducts } = await supabase
       .from("products")
       .select("id, user_id")
@@ -297,5 +283,3 @@ async function handler(req, res) {
     );
   }
 }
-
-export default withCors(handler);

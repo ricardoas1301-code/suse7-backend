@@ -4,21 +4,17 @@
 // ======================================================================
 
 import { createClient } from "@supabase/supabase-js";
-import { config } from "../../src/infra/config.js";
-import { ok, fail, getTraceId } from "../../src/infra/http.js";
-import { withCors } from "../../src/utils/withCors.js";
+import { config } from "../../infra/config.js";
+import { ok, fail, getTraceId } from "../../infra/http.js";
 import {
   normalizeTitle,
   normalizeTitleKey,
   validateTitleNotEmpty,
   validateNewTitleLimit,
   validateTitleNotDuplicate,
-} from "../../src/domain/AdTitlesDomainService.js";
-import { recordAuditEvent } from "../../src/infra/auditService.js";
+} from "../../domain/AdTitlesDomainService.js";
+import { recordAuditEvent } from "../../infra/auditService.js";
 
-/**
- * Verifica se o produto pertence ao usuário.
- */
 async function ensureProductOwnership(supabase, userId, productId) {
   const { data, error } = await supabase
     .from("products")
@@ -30,10 +26,6 @@ async function ensureProductOwnership(supabase, userId, productId) {
   return true;
 }
 
-/**
- * Verifica se o título de anúncio pertence ao usuário.
- * Retorna o row completo para auditoria.
- */
 async function ensureAdTitleOwnership(supabase, userId, adTitleId) {
   const { data, error } = await supabase
     .from("product_ad_titles")
@@ -45,7 +37,7 @@ async function ensureAdTitleOwnership(supabase, userId, adTitleId) {
   return data;
 }
 
-async function handler(req, res) {
+export async function handleProductsAdTitles(req, res) {
   const traceId = getTraceId(req);
 
   if (!["GET", "POST", "PATCH", "DELETE"].includes(req.method)) {
@@ -73,13 +65,8 @@ async function handler(req, res) {
       return fail(res, { code: "UNAUTHORIZED", message: "Token inválido" }, 401, traceId);
     }
 
-    // ------------------------------------------------------------------
-    // GET — listar títulos por product_id
-    // ------------------------------------------------------------------
     if (req.method === "GET") {
-      const productId = req.url?.split("?")[1]
-        ? new URLSearchParams(req.url.split("?")[1]).get("product_id")
-        : null;
+      const productId = req.query?.product_id || null;
 
       if (!productId) {
         return fail(
@@ -120,9 +107,6 @@ async function handler(req, res) {
       return ok(res, { titles: data || [] });
     }
 
-    // ------------------------------------------------------------------
-    // POST — criar título
-    // ------------------------------------------------------------------
     if (req.method === "POST") {
       const body = typeof req.body === "string" ? JSON.parse(req.body || "{}") : req.body || {};
       const { product_id, title } = body;
@@ -215,9 +199,6 @@ async function handler(req, res) {
       return ok(res, { title: inserted }, 201);
     }
 
-    // ------------------------------------------------------------------
-    // PATCH — atualizar título (title ou is_active)
-    // ------------------------------------------------------------------
     if (req.method === "PATCH") {
       const body = typeof req.body === "string" ? JSON.parse(req.body || "{}") : req.body || {};
       const { id, title, is_active } = body;
@@ -262,7 +243,6 @@ async function handler(req, res) {
         }
 
         updates.title = normalizeTitle(title);
-        // title_normalized é mantido pelo trigger; passamos para consistência
         updates.title_normalized = titleNorm;
       }
 
@@ -321,14 +301,8 @@ async function handler(req, res) {
       return ok(res, { title: updated });
     }
 
-    // ------------------------------------------------------------------
-    // DELETE — remover título
-    // ------------------------------------------------------------------
     if (req.method === "DELETE") {
-      const urlParams = req.url?.split("?")[1]
-        ? new URLSearchParams(req.url.split("?")[1])
-        : null;
-      const id = urlParams?.get("id");
+      const id = req.query?.id;
 
       if (!id) {
         return fail(
@@ -394,5 +368,3 @@ async function handler(req, res) {
     );
   }
 }
-
-export default withCors(handler);

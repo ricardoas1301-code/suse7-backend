@@ -6,28 +6,27 @@
 // - Informar se a conta ML está conectada
 // - Retornar ml_nickname salvo no Supabase
 // - Manter token vivo via refresh automático (backend only)
-// - CORS seguro via allowlist (Vercel-safe)
 // ==================================================
 
 import { createClient } from "@supabase/supabase-js";
+import { config } from "../../infra/config.js";
 import { getValidMLToken } from "./_helpers/mlToken.js";
-import { withCors } from "../../src/utils/withCors.js";
 
-async function handler(req, res) {
+export async function handleMLStatus(req, res) {
   if (req.method !== "GET") {
     return res.status(405).json({ error: "Método não permitido" });
   }
 
   try {
-    const { user_id } = req.query;
+    const { user_id } = req.query || {};
 
     if (!user_id) {
       return res.status(400).json({ error: "user_id não informado" });
     }
 
     const supabase = createClient(
-      process.env.SUPABASE_URL,
-      process.env.SUPABASE_SERVICE_ROLE_KEY
+      config.supabaseUrl,
+      config.supabaseServiceRoleKey
     );
 
     const { data: mlData, error } = await supabase
@@ -67,5 +66,3 @@ async function handler(req, res) {
     });
   }
 }
-
-export default withCors(handler);

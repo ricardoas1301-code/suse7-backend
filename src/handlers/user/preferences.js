@@ -1,21 +1,20 @@
-// ======================================================================
-// API /api/user/preferences — Preferências do usuário (modais, avisos)
-// GET, PUT, DELETE
-// ======================================================================
+// ==================================================
+// SUSE7 — Handler: User Preferences
+// Arquivo: src/handlers/user/preferences.js
+// ==================================================
 
 import { createClient } from "@supabase/supabase-js";
-import { config } from "../../../src/infra/config.js";
-import { ok, fail, getTraceId } from "../../../src/infra/http.js";
-import { withCors } from "../../../src/utils/withCors.js";
+import { config } from "../../infra/config.js";
+import { ok, fail, getTraceId } from "../../infra/http.js";
 import {
   normalizeKey,
   validateKey,
   upsertPreference,
   getPreferences,
-} from "../../../src/domain/UserPreferencesDomainService.js";
-import { recordAuditEvent } from "../../../src/infra/auditService.js";
+} from "../../domain/UserPreferencesDomainService.js";
+import { recordAuditEvent } from "../../infra/auditService.js";
 
-async function handler(req, res) {
+export async function handleUserPreferences(req, res) {
   if (!["GET", "PUT", "DELETE"].includes(req.method)) {
     const traceId = getTraceId(req);
     return fail(res, { code: "METHOD_NOT_ALLOWED", message: "Método não permitido" }, 405, traceId);
@@ -39,12 +38,8 @@ async function handler(req, res) {
       return fail(res, { code: "UNAUTHORIZED", message: "Token inválido" }, 401, traceId);
     }
 
-    // ------------------------------------------------------------------
-    // GET — listar preferências (opcional: prefix)
-    // ------------------------------------------------------------------
     if (req.method === "GET") {
-      const urlParams = req.url?.split("?")[1] ? new URLSearchParams(req.url.split("?")[1]) : null;
-      const prefix = urlParams?.get("prefix") || null;
+      const prefix = req.query?.prefix || null;
 
       const { data, error } = await getPreferences(supabase, user.id, prefix);
 
@@ -56,20 +51,12 @@ async function handler(req, res) {
       return ok(res, { preferences: data });
     }
 
-    // ------------------------------------------------------------------
-    // PUT — upsert preferência
-    // ------------------------------------------------------------------
     if (req.method === "PUT") {
       const body = typeof req.body === "string" ? JSON.parse(req.body || "{}") : req.body || {};
       const { key, value } = body;
 
       if (!key) {
-        return fail(
-          res,
-          { code: "KEY_INVALID", message: "key é obrigatória" },
-          400,
-          traceId
-        );
+        return fail(res, { code: "KEY_INVALID", message: "key é obrigatória" }, 400, traceId);
       }
 
       const keyCheck = validateKey(key);
@@ -112,20 +99,11 @@ async function handler(req, res) {
       return ok(res, { preference: data });
     }
 
-    // ------------------------------------------------------------------
-    // DELETE — remover preferência
-    // ------------------------------------------------------------------
     if (req.method === "DELETE") {
-      const urlParams = req.url?.split("?")[1] ? new URLSearchParams(req.url.split("?")[1]) : null;
-      const keyParam = urlParams?.get("key");
+      const keyParam = req.query?.key;
 
       if (!keyParam) {
-        return fail(
-          res,
-          { code: "KEY_INVALID", message: "key é obrigatória (query)" },
-          400,
-          traceId
-        );
+        return fail(res, { code: "KEY_INVALID", message: "key é obrigatória (query)" }, 400, traceId);
       }
 
       const keyCheck = validateKey(keyParam);
@@ -143,12 +121,7 @@ async function handler(req, res) {
         .single();
 
       if (!existing) {
-        return fail(
-          res,
-          { code: "PREFERENCE_NOT_FOUND", message: "Preferência não encontrada" },
-          404,
-          traceId
-        );
+        return fail(res, { code: "PREFERENCE_NOT_FOUND", message: "Preferência não encontrada" }, 404, traceId);
       }
 
       const { error } = await supabase
@@ -191,5 +164,3 @@ async function handler(req, res) {
     );
   }
 }
-
-export default withCors(handler);

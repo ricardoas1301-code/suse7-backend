@@ -1,15 +1,14 @@
-// ======================================================================
-// API /api/user/preferences/reset — Resetar preferências por prefixo
-// POST { prefix: "modal." }
-// ======================================================================
+// ==================================================
+// SUSE7 — Handler: User Preferences Reset
+// Arquivo: src/handlers/user/preferencesReset.js
+// ==================================================
 
 import { createClient } from "@supabase/supabase-js";
-import { config } from "../../../src/infra/config.js";
-import { ok, fail, getTraceId } from "../../../src/infra/http.js";
-import { withCors } from "../../../src/utils/withCors.js";
-import { recordAuditEvent } from "../../../src/infra/auditService.js";
+import { config } from "../../infra/config.js";
+import { ok, fail, getTraceId } from "../../infra/http.js";
+import { recordAuditEvent } from "../../infra/auditService.js";
 
-async function handler(req, res) {
+export async function handleUserPreferencesReset(req, res) {
   if (req.method !== "POST") {
     const traceId = getTraceId(req);
     return fail(res, { code: "METHOD_NOT_ALLOWED", message: "Método não permitido" }, 405, traceId);
@@ -37,17 +36,11 @@ async function handler(req, res) {
     const { prefix } = body;
 
     if (!prefix || typeof prefix !== "string" || prefix.trim().length === 0) {
-      return fail(
-        res,
-        { code: "KEY_INVALID", message: "prefix é obrigatório" },
-        400,
-        traceId
-      );
+      return fail(res, { code: "KEY_INVALID", message: "prefix é obrigatório" }, 400, traceId);
     }
 
     const prefixNorm = prefix.trim().toLowerCase();
 
-    // Buscar preferências que começam com o prefixo
     const { data: toDelete, error: fetchError } = await supabase
       .from("user_preferences")
       .select("id, key, value")
@@ -113,5 +106,3 @@ async function handler(req, res) {
     );
   }
 }
-
-export default withCors(handler);

@@ -8,8 +8,7 @@
 // ======================================================================
 
 import { createClient } from "@supabase/supabase-js";
-import { config } from "../../src/infra/config.js";
-import { withCors } from "../../src/utils/withCors.js";
+import { config } from "../../infra/config.js";
 
 const BUCKET = "product-images";
 const LOG_PREFIX = "[SEO_RENAME]";
@@ -30,10 +29,6 @@ function getExt(path) {
   return m ? m[1].toLowerCase() : "jpg";
 }
 
-/**
- * Gera nome limpo: {keywordsSlug}-{index}.{ext}
- * Fallback incremental em caso de colisão: {keywordsSlug}-{index}-2.{ext}, etc.
- */
 function findNextAvailableFileName(keywordsSlug, index, ext, takenNames) {
   const kw = keywordsSlug || "seo";
   const base = `${kw}-${index}.${ext}`;
@@ -47,7 +42,7 @@ function findNextAvailableFileName(keywordsSlug, index, ext, takenNames) {
   return candidate;
 }
 
-async function handler(req, res) {
+export async function handleImagesSeoRename(req, res) {
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Método não permitido", code: "METHOD_NOT_ALLOWED" });
   }
@@ -259,5 +254,3 @@ async function handler(req, res) {
     return res.status(500).json({ error: "Erro interno", code: "INTERNAL_ERROR" });
   }
 }
-
-export default withCors(handler);

@@ -3,21 +3,15 @@
 // Inicia o OAuth (NÃO exige usuário logado)
 // ======================================================
 
-import { withCors } from "../../src/utils/withCors.js";
+import { config } from "../../infra/config.js";
 
-function handler(req, res) {
+export async function handleMLConnect(req, res) {
   try {
-    // --------------------------------------------------
-    // UUID do Supabase (opcional)
-    // --------------------------------------------------
-    const supabaseUserId = req.query.user_id || null;
+    const supabaseUserId = req.query?.user_id || null;
 
-    const clientId = process.env.ML_CLIENT_ID;
-    const redirectUri = process.env.ML_REDIRECT_URI;
+    const clientId = config.mlClientId || process.env.ML_CLIENT_ID;
+    const redirectUri = config.mlRedirectUri || process.env.ML_REDIRECT_URI;
 
-    // --------------------------------------------------
-    // Logs de debug (Vercel)
-    // --------------------------------------------------
     console.log("ML_CLIENT_ID:", clientId ? "OK" : "UNDEFINED");
     console.log("ML_REDIRECT_URI:", redirectUri ? "OK" : "UNDEFINED");
     console.log("Supabase User ID:", supabaseUserId || "NÃO INFORMADO");
@@ -28,16 +22,10 @@ function handler(req, res) {
       });
     }
 
-    // --------------------------------------------------
-    // State (opcional, mas recomendado)
-    // --------------------------------------------------
     const state = supabaseUserId
       ? encodeURIComponent(supabaseUserId)
       : undefined;
 
-    // --------------------------------------------------
-    // Montagem da URL de autorização
-    // --------------------------------------------------
     let authUrl =
       "https://auth.mercadolivre.com.br/authorization" +
       "?response_type=code" +
@@ -49,7 +37,6 @@ function handler(req, res) {
     }
 
     return res.redirect(authUrl);
-
   } catch (err) {
     console.error("Erro /api/ml/connect:", err);
     return res.status(500).json({
@@ -57,5 +44,3 @@ function handler(req, res) {
     });
   }
 }
-
-export default withCors(handler);

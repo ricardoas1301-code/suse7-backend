@@ -4,12 +4,11 @@
 // ======================================================================
 
 import { createClient } from "@supabase/supabase-js";
-import { config } from "../../src/infra/config.js";
-import { ok, fail, getTraceId } from "../../src/infra/http.js";
-import { withCors } from "../../src/utils/withCors.js";
-import { evaluateProductHealth } from "../../src/domain/ProductHealthDomainService.js";
+import { config } from "../../infra/config.js";
+import { ok, fail, getTraceId } from "../../infra/http.js";
+import { evaluateProductHealth } from "../../domain/ProductHealthDomainService.js";
 
-async function handler(req, res) {
+export async function handleProductsHealth(req, res) {
   if (req.method !== "GET") {
     const traceId = getTraceId(req);
     return fail(res, { code: "METHOD_NOT_ALLOWED", message: "Método não permitido" }, 405, traceId);
@@ -33,9 +32,7 @@ async function handler(req, res) {
       return fail(res, { code: "UNAUTHORIZED", message: "Token inválido" }, 401, traceId);
     }
 
-    const productId = req.url?.split("?")[1]
-      ? new URLSearchParams(req.url.split("?")[1]).get("product_id")
-      : null;
+    const productId = req.query?.product_id || null;
 
     if (!productId) {
       return fail(
@@ -46,9 +43,6 @@ async function handler(req, res) {
       );
     }
 
-    // ------------------------------------------------------------------
-    // Buscar produto (ownership + dados)
-    // ------------------------------------------------------------------
     const { data: product, error: productError } = await supabase
       .from("products")
       .select(
@@ -73,9 +67,6 @@ async function handler(req, res) {
     let adTitles = [];
     let imagesLinks = [];
 
-    // ------------------------------------------------------------------
-    // Variações (se format=variants)
-    // ------------------------------------------------------------------
     if (format === "variants") {
       const { data: vars } = await supabase
         .from("product_variants")
@@ -85,9 +76,6 @@ async function handler(req, res) {
       variants = vars || [];
     }
 
-    // ------------------------------------------------------------------
-    // Títulos alternativos
-    // ------------------------------------------------------------------
     const { data: titles } = await supabase
       .from("product_ad_titles")
       .select("id, title")
@@ -96,18 +84,12 @@ async function handler(req, res) {
       .eq("is_active", true);
     adTitles = titles || [];
 
-    // ------------------------------------------------------------------
-    // Imagens (product_image_links)
-    // ------------------------------------------------------------------
     const { data: images } = await supabase
       .from("product_image_links")
       .select("id")
       .eq("product_id", productId);
     imagesLinks = images || [];
 
-    // ------------------------------------------------------------------
-    // Avaliar saúde
-    // ------------------------------------------------------------------
     const health = evaluateProductHealth(product, variants, adTitles, imagesLinks);
 
     return ok(res, {
@@ -132,5 +114,3 @@ async function handler(req, res) {
     );
   }
 }
-
-export default withCors(handler);

@@ -1,14 +1,13 @@
-// ======================================================================
-// API /api/notifications/mark-read — Marcar notificações como lidas
-// POST { ids: [uuid] } OU { all: true }
-// ======================================================================
+// ==================================================
+// SUSE7 — Handler: Notifications Mark Read
+// Arquivo: src/handlers/notifications/markRead.js
+// ==================================================
 
 import { createClient } from "@supabase/supabase-js";
-import { config } from "../../src/infra/config.js";
-import { ok, fail, getTraceId } from "../../src/infra/http.js";
-import { withCors } from "../../src/utils/withCors.js";
+import { config } from "../../infra/config.js";
+import { ok, fail, getTraceId } from "../../infra/http.js";
 
-async function handler(req, res) {
+export async function handleNotificationsMarkRead(req, res) {
   if (req.method !== "POST") {
     const traceId = getTraceId(req);
     return fail(res, { code: "METHOD_NOT_ALLOWED", message: "Método não permitido" }, 405, traceId);
@@ -97,5 +96,3 @@ async function handler(req, res) {
     );
   }
 }
-
-export default withCors(handler);
