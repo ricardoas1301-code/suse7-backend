@@ -26,6 +26,19 @@ const ML_CONNECT_ENV_KEYS = [
 // ----------------------------------------------
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
+// ----------------------------------------------
+// maskSupabaseUrl — Mascara URL mostrando só project ref (server-side log)
+// ----------------------------------------------
+function maskSupabaseUrl(url) {
+  if (!url?.trim()) return "(empty)";
+  try {
+    const m = url.match(/https:\/\/([a-z]+)\.supabase\.co/);
+    return m ? `https://${m[1]}.supabase.co` : "(unknown)";
+  } catch {
+    return "(parse-error)";
+  }
+}
+
 export async function handleMlConnect(req, res) {
   const errorId = Date.now();
   const path = "/api/ml/connect";
@@ -85,15 +98,33 @@ export async function handleMlConnect(req, res) {
     const state = generateSecureState();
 
     // ------------------------------
-    // 4) Persistir state no Supabase
+    // 4) Persistir state no Supabase (diagnóstico)
     // ------------------------------
-    await persistOAuthState(
+    console.log("[ml/connect] SUPABASE_URL (masked):", maskSupabaseUrl(process.env.SUPABASE_URL));
+    console.log("[ml/connect] persistOAuthState:start", { state, user_id: trimmedUserId });
+
+    const persistResult = await persistOAuthState(
       process.env.SUPABASE_URL,
       process.env.SUPABASE_SERVICE_ROLE_KEY,
       state,
       trimmedUserId,
       "ml"
     );
+
+    console.log("[ml/connect] persistOAuthState:result", {
+      data: persistResult.data,
+      error: persistResult.error ? { message: persistResult.error.message, code: persistResult.error.code } : null,
+    });
+
+    if (persistResult.error) {
+      console.error("[ml/connect] persistOAuthState failed, NOT redirecting", persistResult.error);
+      return res.status(500).json({
+        ok: false,
+        error: "persistOAuthState failed",
+        errorId,
+        details: persistResult.error?.message || String(persistResult.error),
+      });
+    }
 
     // ------------------------------
     // 5) Montar URL OAuth e redirecionar 302

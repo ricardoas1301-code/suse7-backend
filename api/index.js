@@ -63,11 +63,11 @@ export default async function handler(req, res) {
     }
     if (path === "/api/ml/connect") {
       const mod = await import("../src/handlers/ml/connect.js");
-      return mod.handleMlConnect(req, res);
+      return await mod.handleMlConnect(req, res);
     }
     if (path === "/api/ml/callback") {
       const mod = await import("../src/handlers/ml/callback.js");
-      return mod.handleMlCallback(req, res);
+      return await mod.handleMlCallback(req, res);
     }
     if (path === "/api/ml/status") {
       const mod = await import("../src/handlers/ml/status.js");

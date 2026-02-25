@@ -42,21 +42,20 @@ export function buildMlAuthUrl(clientId, redirectUri, state) {
 
 // ----------------------------------------------
 // persistOAuthState — Persiste state no Supabase (service role, bypass RLS)
+// Retorna { data, error } para diagnóstico (não lança)
 // ----------------------------------------------
 export async function persistOAuthState(supabaseUrl, serviceRoleKey, state, userId, marketplace = "ml") {
   const supabase = createClient(supabaseUrl, serviceRoleKey);
   const expiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString();
 
-  const { error } = await supabase.from("oauth_states").insert({
+  const { data, error } = await supabase.from("oauth_states").insert({
     state,
     user_id: userId,
     marketplace,
     expires_at: expiresAt,
   });
 
-  if (error) {
-    throw new Error(`persistOAuthState: ${error.message}`);
-  }
+  return { data, error };
 }
 
 // ----------------------------------------------
