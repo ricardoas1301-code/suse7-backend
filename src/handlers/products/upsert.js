@@ -16,6 +16,10 @@ import {
   validateReadyRequirements,
 } from "../../domain/ProductStatusDomainService.js";
 import { recordAuditEvent } from "../../infra/auditService.js";
+import {
+  validateCreatePayload,
+  buildProductInsertPayload,
+} from "./create.js";
 
 export async function handleProductsUpsert(req, res) {
   if (req.method !== "POST") {
@@ -52,8 +56,20 @@ export async function handleProductsUpsert(req, res) {
     const normalized = normalizeProductPayload(product);
     const isUpdate = mode === "edit" && productId;
 
+    // ------------------------------------------------------
+    // CREATE: validar payload mínimo
+    // ------------------------------------------------------
     if (!isUpdate) {
       normalized.status = "draft";
+      const createCheck = validateCreatePayload(normalized);
+      if (!createCheck.valid) {
+        return fail(
+          res,
+          { code: createCheck.code, message: createCheck.message },
+          400,
+          traceId
+        );
+      }
     }
 
     const skuCheck = await validateSkuUniqueness(normalized, variants, {
@@ -159,13 +175,39 @@ export async function handleProductsUpsert(req, res) {
         console.error("[products/upsert] audit update fail", auditErr);
       }
     } else {
+      // ------------------------------------------------------
+      // CREATE: inserir em public.products
+      // ------------------------------------------------------
+      const insertPayload = buildProductInsertPayload(normalized, user.id);
+
+      const { data: inserted, error: insertError } = await supabase
+        .from("products")
+        .insert(insertPayload)
+        .select("id")
+        .single();
+
+      if (insertError) {
+        console.error("[products/upsert] create insert fail", insertError);
+        return fail(
+          res,
+          {
+            code: "DB_ERROR",
+            message: "Erro ao criar produto",
+            details: process.env.NODE_ENV === "development" ? insertError?.message : undefined,
+          },
+          500,
+          traceId
+        );
+      }
+
+      const newProductId = inserted?.id ?? null;
+
       try {
-        const entityId = productId ?? crypto.randomUUID();
         const diff = { before: null, after: normalized };
         await recordAuditEvent({
           userId: user.id,
           entityType: "product",
-          entityId,
+          entityId: newProductId,
           action: "create",
           diff,
           traceId,
@@ -173,8 +215,23 @@ export async function handleProductsUpsert(req, res) {
       } catch (auditErr) {
         console.error("[products/upsert] audit create fail", auditErr);
       }
+
+      // TODO: Se product.format === "variants" e variants.length > 0:
+      // Inserir em public.product_variants vinculando product_id.
+      // sort_order seguindo array order. user_id = auth.uid.
+      // Validar SKU obrigatório por variação.
+
+      return ok(res, {
+        ok: true,
+        productId: newProductId,
+        message: "Produto criado com sucesso",
+      });
     }
 
+    // ------------------------------------------------------
+    // UPDATE: (lógica existente retorna aqui após validações)
+    // Por ora o update ainda não persiste; manter contrato.
+    // ------------------------------------------------------
     return ok(res, {
       ok: true,
       productId: productId || null,
