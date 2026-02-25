@@ -1,7 +1,7 @@
 // ======================================================
-// /api/ml/callback — RECEBE code + state (UUID)
+// /api/ml/callback — RECEBE code + state (token seguro)
 // Objetivo:
-// - Validar state (user_id Supabase)
+// - Resolver state -> user_id via oauth_states
 // - Trocar code por token no Mercado Livre
 // - Buscar dados do seller (GET /users/me) para capturar nickname
 // - Salvar tokens + ml_nickname no Supabase (ml_tokens)
@@ -10,6 +10,7 @@
 
 import { createClient } from "@supabase/supabase-js";
 import { config } from "../../infra/config.js";
+import { resolveOAuthState } from "./_helpers/oauthConnect.js";
 
 export async function handleMLCallback(req, res) {
   try {
@@ -20,14 +21,27 @@ export async function handleMLCallback(req, res) {
     console.log("🔥 ML CALLBACK EXECUTADO", new Date().toISOString());
 
     const code = req.query?.code;
-    const supabaseUserId = req.query?.state;
+    const state = req.query?.state;
 
     if (!code) {
       return res.status(400).json({ error: "Code não encontrado" });
     }
 
+    if (!state) {
+      return res.status(400).json({ error: "State não encontrado" });
+    }
+
+    // Resolver user_id pelo state (oauth_states)
+    const supabaseUserId = await resolveOAuthState(
+      config.supabaseUrl,
+      config.supabaseServiceRoleKey,
+      state,
+      "ml"
+    );
+
     if (!supabaseUserId) {
-      return res.status(400).json({ error: "State (UUID) não encontrado" });
+      console.error("❌ State inválido ou expirado no callback ML:", state);
+      return res.status(401).json({ error: "State inválido ou expirado" });
     }
 
     const supabase = createClient(
@@ -42,7 +56,7 @@ export async function handleMLCallback(req, res) {
       .maybeSingle();
 
     if (profileError || !profile) {
-      console.error("❌ UUID inválido no callback ML:", supabaseUserId);
+      console.error("❌ Usuário inválido no callback ML:", supabaseUserId);
       return res.status(401).json({ error: "Usuário inválido para este state" });
     }
 
