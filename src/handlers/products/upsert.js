@@ -188,12 +188,18 @@ export async function handleProductsUpsert(req, res) {
 
       if (insertError) {
         console.error("[products/upsert] create insert fail", insertError);
+        const errMsg = insertError?.message || String(insertError);
+        const isColumnMissing = /column.*does not exist|ad_titles/i.test(errMsg);
+        const message = isColumnMissing
+          ? "Erro ao criar produto. Aplique a migration ad_titles no Supabase (APPLY_MANUAL_products_ad_titles.sql)."
+          : "Erro ao criar produto";
         return fail(
           res,
           {
             code: "DB_ERROR",
-            message: "Erro ao criar produto",
-            details: process.env.NODE_ENV === "development" ? insertError?.message : undefined,
+            message,
+            details: errMsg,
+            traceId,
           },
           500,
           traceId
@@ -239,12 +245,14 @@ export async function handleProductsUpsert(req, res) {
     });
   } catch (err) {
     console.error("[products/upsert] fail", err);
+    const errMsg = err?.message || String(err);
     return fail(
       res,
       {
         code: "INTERNAL_ERROR",
         message: "Erro interno",
-        details: process.env.NODE_ENV === "development" ? String(err?.message) : undefined,
+        details: errMsg,
+        traceId,
       },
       500,
       traceId
