@@ -67,11 +67,11 @@ export default async function handler(req, res) {
     }
     if (path === "/api/ml/callback") {
       const mod = await import("../src/handlers/ml/callback.js");
-      return await mod.handleMlCallback(req, res);
+      return await mod.default(req, res);
     }
     if (path === "/api/ml/status") {
       const mod = await import("../src/handlers/ml/status.js");
-      return mod.handleMlStatus(req, res);
+      return await mod.default(req, res);
     }
     if (path === "/api/products/health") {
       const mod = await import("../src/handlers/products/health.js");

@@ -12,7 +12,7 @@ import { createClient } from "@supabase/supabase-js";
 import { config } from "../../infra/config.js";
 import { getValidMLToken } from "./_helpers/mlToken.js";
 
-export async function handleMLStatus(req, res) {
+async function handleMLStatus(req, res) {
   if (req.method !== "GET") {
     return res.status(405).json({ error: "Método não permitido" });
   }
@@ -66,3 +66,5 @@ export async function handleMLStatus(req, res) {
     });
   }
 }
+
+export default handleMLStatus;

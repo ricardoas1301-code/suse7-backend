@@ -23,7 +23,7 @@ const ML_CALLBACK_ENV_KEYS = [
   "FRONTEND_URL",
 ];
 
-export async function handleMLCallback(req, res) {
+async function handleMLCallback(req, res) {
   const errorId = Date.now();
   try {
     if (req.method !== "GET") {
@@ -180,3 +180,5 @@ export async function handleMLCallback(req, res) {
     });
   }
 }
+
+export default handleMLCallback;
