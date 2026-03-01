@@ -39,6 +39,17 @@ export default async function handler(req, res) {
     req.query = Object.fromEntries(url.searchParams);
 
     // ------------------------------
+    // Health check (DEV e produção) — GET /api/health
+    // ------------------------------
+    if (path === "/api/health") {
+      return res.status(200).json({
+        ok: true,
+        service: "suse7-backend",
+        timestamp: new Date().toISOString(),
+      });
+    }
+
+    // ------------------------------
     // Rotas (lazy import — FASE 2)
     // ------------------------------
     if (path === "/api/user/preferences") {

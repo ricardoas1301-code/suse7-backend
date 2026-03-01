@@ -17,6 +17,7 @@ export function applyCors(req, res) {
     "https://www.suse7.com.br",
     "http://localhost:5173",
     "http://localhost:3000",
+    "http://localhost:3001",
   ]);
 
   const origin = req.headers?.origin;

@@ -1,0 +1,14 @@
+# Dependências (nunca versionar)
+node_modules/
+
+# Ambiente e segredos
+.env
+.env.*
+.env*.local
+
+# Vercel
+.vercel/
+
+# Logs
+logs/
+
