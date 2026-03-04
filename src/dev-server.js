@@ -84,15 +84,19 @@ const server = http.createServer(async (req, res) => {
   // ----------------------------------------------------------------------
   const hasBody = /^(POST|PUT|PATCH)$/i.test(req.method);
   if (hasBody) {
-    const chunks = [];
-    for await (const chunk of req) {
-      chunks.push(chunk);
-    }
-    const raw = Buffer.concat(chunks).toString("utf8");
+    const raw = await new Promise((resolve, reject) => {
+      const chunks = [];
+      req.on("data", (chunk) => chunks.push(chunk));
+      req.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
+      req.on("error", reject);
+    });
     try {
-      req.body = raw ? JSON.parse(raw) : {};
+      req.body = raw && raw.trim() ? JSON.parse(raw) : {};
     } catch {
       req.body = {};
+    }
+    if (pathname === "/api/products/upsert" && process.env.NODE_ENV !== "production") {
+      console.log("[dev-server] POST /api/products/upsert body keys:", Object.keys(req.body || {}));
     }
   } else {
     req.body = {};

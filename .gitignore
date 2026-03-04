@@ -12,3 +12,6 @@ node_modules/
 # Logs
 logs/
 
+# Arquivo acidental/lixo no root (ex.: comando cd digitado errado)
+/cd
+

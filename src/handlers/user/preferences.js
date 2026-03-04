@@ -23,6 +23,12 @@ export async function handleUserPreferences(req, res) {
   const traceId = getTraceId(req);
 
   try {
+    // Valida config Supabase (evita 500 por env vars ausentes; mesmo critério de notifications)
+    if (!config.supabaseUrl?.trim() || !config.supabaseServiceRoleKey?.trim()) {
+      console.error("[user/preferences] traceId:", traceId, "SUPABASE_URL ou SUPABASE_SERVICE_ROLE_KEY ausente");
+      return fail(res, { code: "CONFIG_ERROR", message: "Configuração do banco indisponível" }, 503, traceId);
+    }
+
     const authHeader = req.headers.authorization;
     if (!authHeader?.startsWith("Bearer ")) {
       return fail(res, { code: "UNAUTHORIZED", message: "Token não informado" }, 401, traceId);

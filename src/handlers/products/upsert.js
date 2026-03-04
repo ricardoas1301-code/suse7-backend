@@ -50,6 +50,9 @@ export async function handleProductsUpsert(req, res) {
     const productId = product?.id;
 
     if (!product) {
+      if (process.env.NODE_ENV !== "production") {
+        console.warn("[products/upsert] body keys recebido:", Object.keys(body));
+      }
       const hint =
         process.env.NODE_ENV === "development"
           ? " Verifique se o body da requisição foi enviado como JSON com chave 'product'."
