@@ -50,7 +50,16 @@ export async function handleProductsUpsert(req, res) {
     const productId = product?.id;
 
     if (!product) {
-      return fail(res, { code: "INVALID_INPUT", message: "product é obrigatório" }, 400, traceId);
+      const hint =
+        process.env.NODE_ENV === "development"
+          ? " Verifique se o body da requisição foi enviado como JSON com chave 'product'."
+          : "";
+      return fail(
+        res,
+        { code: "INVALID_INPUT", message: "product é obrigatório" + hint },
+        400,
+        traceId
+      );
     }
 
     const normalized = normalizeProductPayload(product);

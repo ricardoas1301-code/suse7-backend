@@ -7,9 +7,24 @@
 // - Repassa todas as requisições /api/* ao handler de api/index.js.
 // - Porta: process.env.PORT ou 3001 (frontend já chama localhost:3001).
 // - CORS e rotas compatíveis com o entry da Vercel (api/index.js).
+// - Carrega .env da raiz do projeto para SUPABASE_* etc. (só em dev; Vercel injeta env).
 // ==================================================
 
+import "dotenv/config";
+
 import http from "node:http";
+
+// ----------------------------------------------------------------------
+// Log de config em DEV (uma vez no boot) — conferir match com frontend
+// 401 em /api/user/preferences e /api/notifications = mesmo projeto?
+// ----------------------------------------------------------------------
+const supabaseUrl = process.env.SUPABASE_URL || "";
+const supabaseMasked =
+  supabaseUrl && supabaseUrl.length > 20
+    ? `${supabaseUrl.slice(0, 12)}...${supabaseUrl.slice(-18)}`
+    : supabaseUrl || "(não definido)";
+console.log("[S7 Backend] SUPABASE_URL =", supabaseMasked);
+console.log("[S7 Backend] SUPABASE_SERVICE_ROLE_KEY =", process.env.SUPABASE_SERVICE_ROLE_KEY ? "***definido***" : "(não definido)");
 
 // Handler único da API (mesmo usado na Vercel)
 const apiHandler = (await import("../api/index.js")).default;
@@ -61,6 +76,26 @@ const server = http.createServer(async (req, res) => {
     res.writeHead(404, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ ok: false, error: "Not found", path: pathname }));
     return;
+  }
+
+  // ----------------------------------------------------------------------
+  // Ler e parsear body para POST/PUT/PATCH (Vercel injeta req.body; em Node não existe)
+  // Sem isso, handlers recebem req.body vazio e retornam 400 "product é obrigatório"
+  // ----------------------------------------------------------------------
+  const hasBody = /^(POST|PUT|PATCH)$/i.test(req.method);
+  if (hasBody) {
+    const chunks = [];
+    for await (const chunk of req) {
+      chunks.push(chunk);
+    }
+    const raw = Buffer.concat(chunks).toString("utf8");
+    try {
+      req.body = raw ? JSON.parse(raw) : {};
+    } catch {
+      req.body = {};
+    }
+  } else {
+    req.body = {};
   }
 
   // req compatível: host para montar URL no handler
