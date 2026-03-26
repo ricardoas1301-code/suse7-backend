@@ -11,6 +11,7 @@
 import { createClient } from "@supabase/supabase-js";
 import { config } from "../../infra/config.js";
 import { getValidMLToken } from "./_helpers/mlToken.js";
+import { ML_MARKETPLACE_SLUG } from "./_helpers/mlMarketplace.js";
 
 async function handleMLStatus(req, res) {
   if (req.method !== "GET") {
@@ -33,6 +34,7 @@ async function handleMLStatus(req, res) {
       .from("ml_tokens")
       .select("access_token, expires_at, ml_nickname")
       .eq("user_id", user_id)
+      .eq("marketplace", ML_MARKETPLACE_SLUG)
       .maybeSingle();
 
     if (error || !mlData?.access_token) {

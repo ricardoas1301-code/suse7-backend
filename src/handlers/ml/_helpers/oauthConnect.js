@@ -33,8 +33,8 @@ export function buildMlAuthUrl(clientId, redirectUri, state) {
   const base = "https://auth.mercadolivre.com.br/authorization";
   const params = new URLSearchParams({
     response_type: "code",
-    client_id: clientId,
-    redirect_uri: redirectUri,
+    client_id: String(clientId || "").trim(),
+    redirect_uri: String(redirectUri || "").trim(),
     state,
   });
   return `${base}?${params.toString()}`;
@@ -74,4 +74,31 @@ export async function resolveOAuthState(supabaseUrl, serviceRoleKey, state, mark
 
   if (error || !data) return null;
   return data.user_id;
+}
+
+// ----------------------------------------------
+// resolveAndConsumeOAuthState — Lê user_id e remove o state (one-time)
+// ----------------------------------------------
+export async function resolveAndConsumeOAuthState(
+  supabaseUrl,
+  serviceRoleKey,
+  state,
+  marketplace = "ml"
+) {
+  const supabase = createClient(supabaseUrl, serviceRoleKey);
+  const now = new Date().toISOString();
+  const { data, error } = await supabase
+    .from("oauth_states")
+    .delete()
+    .eq("state", state)
+    .eq("marketplace", marketplace)
+    .gt("expires_at", now)
+    .select("user_id")
+    .maybeSingle();
+
+  if (error) {
+    console.error("[oauth] resolveAndConsumeOAuthState", error);
+    return null;
+  }
+  return data?.user_id ?? null;
 }

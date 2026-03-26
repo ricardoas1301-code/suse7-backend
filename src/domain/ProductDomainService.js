@@ -186,7 +186,7 @@ export async function validateSkuUniqueness(payload, variants, ctx) {
         return {
           valid: false,
           code: "SKU_DUPLICATE",
-          message: "SKU já existe para este seller.",
+          message: "Já existe um produto com este SKU",
           details: { sku: norm, scope: "payload" },
         };
       }
@@ -218,7 +218,7 @@ export async function validateSkuUniqueness(payload, variants, ctx) {
     return {
       valid: false,
       code: "SKU_DUPLICATE",
-      message: "SKU já existe para este seller.",
+      message: "Já existe um produto com este SKU",
       details: { sku: norm, scope: "database", collisionProductId: p.id },
     };
   }
@@ -247,7 +247,7 @@ export async function validateSkuUniqueness(payload, variants, ctx) {
     return {
       valid: false,
       code: "SKU_DUPLICATE",
-      message: "SKU já existe para este seller.",
+      message: "Já existe um produto com este SKU",
       details: { sku: norm, scope: "database", collisionProductId: v.product_id },
     };
   }

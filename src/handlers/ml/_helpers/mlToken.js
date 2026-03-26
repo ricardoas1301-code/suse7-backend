@@ -4,6 +4,7 @@
 // ======================================================
 
 import { createClient } from "@supabase/supabase-js";
+import { ML_MARKETPLACE_SLUG } from "./mlMarketplace.js";
 
 export async function getValidMLToken(userId) {
   if (!userId) {
@@ -19,6 +20,7 @@ export async function getValidMLToken(userId) {
     .from("ml_tokens")
     .select("access_token, refresh_token, expires_at")
     .eq("user_id", userId)
+    .eq("marketplace", ML_MARKETPLACE_SLUG)
     .single();
 
   if (error || !data) {
@@ -34,19 +36,21 @@ export async function getValidMLToken(userId) {
 
   console.log("🔄 Renovando token ML...");
 
-  const refreshResponse = await fetch(
-    "https://api.mercadolibre.com/oauth/token",
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        grant_type: "refresh_token",
-        client_id: process.env.ML_CLIENT_ID,
-        client_secret: process.env.ML_CLIENT_SECRET,
-        refresh_token: data.refresh_token,
-      }),
-    }
-  );
+  const refreshBody = new URLSearchParams({
+    grant_type: "refresh_token",
+    client_id: process.env.ML_CLIENT_ID.trim(),
+    client_secret: process.env.ML_CLIENT_SECRET.trim(),
+    refresh_token: data.refresh_token,
+  });
+
+  const refreshResponse = await fetch("https://api.mercadolibre.com/oauth/token", {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/x-www-form-urlencoded",
+    },
+    body: refreshBody.toString(),
+  });
 
   const refreshData = await refreshResponse.json();
 
@@ -67,7 +71,8 @@ export async function getValidMLToken(userId) {
       expires_in: refreshData.expires_in,
       updated_at: new Date().toISOString(),
     })
-    .eq("user_id", userId);
+    .eq("user_id", userId)
+    .eq("marketplace", ML_MARKETPLACE_SLUG);
 
   return refreshData.access_token;
 }

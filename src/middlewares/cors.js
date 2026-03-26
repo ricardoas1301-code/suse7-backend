@@ -10,7 +10,7 @@
 
 export function applyCors(req, res) {
   // ------------------------------
-  // ORIGENS PERMITIDAS (Allowlist)
+  // ORIGENS PERMITIDAS (Allowlist + CORS_ALLOWED_ORIGINS)
   // ------------------------------
   const allowedOrigins = new Set([
     "https://suse7.com.br",
@@ -19,6 +19,16 @@ export function applyCors(req, res) {
     "http://localhost:3000",
     "http://localhost:3001",
   ]);
+
+  const extraRaw = [process.env.CORS_ALLOWED_ORIGINS, process.env.CORS_ORIGINS]
+    .filter(Boolean)
+    .join(",");
+  if (extraRaw.trim()) {
+    for (const o of extraRaw.split(",")) {
+      const t = o.trim();
+      if (t) allowedOrigins.add(t);
+    }
+  }
 
   const origin = req.headers?.origin;
 

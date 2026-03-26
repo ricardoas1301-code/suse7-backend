@@ -10,9 +10,10 @@
 
 import { createClient } from "@supabase/supabase-js";
 import {
-  resolveOAuthState,
+  resolveAndConsumeOAuthState,
   validateEnv,
 } from "./_helpers/oauthConnect.js";
+import { ML_MARKETPLACE_SLUG } from "./_helpers/mlMarketplace.js";
 
 const ML_CALLBACK_ENV_KEYS = [
   "SUPABASE_URL",
@@ -57,8 +58,8 @@ async function handleMLCallback(req, res) {
       });
     }
 
-    // Resolver user_id pelo state (oauth_states)
-    const supabaseUserId = await resolveOAuthState(
+    // Resolver user_id pelo state (oauth_states) e consumir state (one-time)
+    const supabaseUserId = await resolveAndConsumeOAuthState(
       process.env.SUPABASE_URL,
       process.env.SUPABASE_SERVICE_ROLE_KEY,
       state,
@@ -86,16 +87,30 @@ async function handleMLCallback(req, res) {
       return res.status(401).json({ error: "Usuário inválido para este state" });
     }
 
+    const redirectUri = process.env.ML_REDIRECT_URI?.trim();
+    if (!redirectUri) {
+      return res.status(500).json({
+        ok: false,
+        error: "ML_REDIRECT_URI não configurada",
+        errorId,
+      });
+    }
+
+    const tokenBody = new URLSearchParams({
+      grant_type: "authorization_code",
+      client_id: process.env.ML_CLIENT_ID.trim(),
+      client_secret: process.env.ML_CLIENT_SECRET.trim(),
+      code: typeof code === "string" ? code : String(code),
+      redirect_uri: redirectUri,
+    });
+
     const tokenResponse = await fetch("https://api.mercadolibre.com/oauth/token", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        grant_type: "authorization_code",
-        client_id: process.env.ML_CLIENT_ID,
-        client_secret: process.env.ML_CLIENT_SECRET,
-        code,
-        redirect_uri: process.env.ML_REDIRECT_URI,
-      }),
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: tokenBody.toString(),
     });
 
     const mlData = await tokenResponse.json();
@@ -103,9 +118,9 @@ async function handleMLCallback(req, res) {
     if (!mlData.access_token) {
       console.error("[ml/callback] step_failed: exchange_code", mlData);
 
-      const frontendUrl = process.env.FRONTEND_URL;
+      const fe = process.env.FRONTEND_URL?.replace(/\/+$/, "") || "";
       return res.redirect(
-        `${frontendUrl}/perfil/integracoes/mercado-livre?ml_error=token`
+        `${fe}/perfil/integracoes/mercado-livre?ml_error=token`
       );
     }
 
@@ -136,14 +151,15 @@ async function handleMLCallback(req, res) {
       .upsert(
         {
           user_id: supabaseUserId,
+          marketplace: ML_MARKETPLACE_SLUG,
           ml_user_id: String(mlData.user_id),
           ml_nickname: mlNickname,
           access_token: mlData.access_token,
           refresh_token: mlData.refresh_token,
           expires_in: mlData.expires_in,
           expires_at: expiresAt,
-          scope: mlData.scope || null,
-          token_type: mlData.token_type || null,
+          scope: mlData.scope ?? "",
+          token_type: mlData.token_type ?? "bearer",
           updated_at: new Date().toISOString(),
         },
         { onConflict: "user_id" }
@@ -152,14 +168,15 @@ async function handleMLCallback(req, res) {
     if (upsertError) {
       console.error("[ml/callback] step_failed: persist_tokens", upsertError);
 
-      const frontendUrl = process.env.FRONTEND_URL;
+      const fe = process.env.FRONTEND_URL?.replace(/\/+$/, "") || "";
       return res.redirect(
-        `${frontendUrl}/perfil/integracoes/mercado-livre?ml_error=save`
+        `${fe}/perfil/integracoes/mercado-livre?ml_error=save`
       );
     }
 
+    const fe = process.env.FRONTEND_URL?.replace(/\/+$/, "") || "";
     return res.redirect(
-      `${process.env.FRONTEND_URL}/perfil/integracoes/mercado-livre`
+      `${fe}/perfil/integracoes/mercado-livre?ml=connected`
     );
   } catch (err) {
     const envCheck = validateEnv(ML_CALLBACK_ENV_KEYS);
