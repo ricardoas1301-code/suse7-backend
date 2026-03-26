@@ -92,6 +92,10 @@ export default async function handler(req, res) {
       const mod = await import("../src/handlers/products/upsert.js");
       return mod.handleProductsUpsert(req, res);
     }
+    if (path === "/api/products/for-edit") {
+      const mod = await import("../src/handlers/products/getForEdit.js");
+      return mod.handleProductsForEdit(req, res);
+    }
     if (path === "/api/products/change-status") {
       const mod = await import("../src/handlers/products/changeStatus.js");
       return mod.handleProductsChangeStatus(req, res);
@@ -99,6 +103,10 @@ export default async function handler(req, res) {
     if (path === "/api/products/ad-titles") {
       const mod = await import("../src/handlers/products/adTitles.js");
       return mod.handleProductsAdTitles(req, res);
+    }
+    if (path === "/api/products/catalog-rankings") {
+      const mod = await import("../src/handlers/products/catalogRankings.js");
+      return mod.handleProductsCatalogRankings(req, res);
     }
     if (path === "/api/jobs/stock-min-check") {
       const mod = await import("../src/handlers/jobs/stockMinCheck.js");

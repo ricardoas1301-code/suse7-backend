@@ -19,7 +19,9 @@ import { recordAuditEvent } from "../../infra/auditService.js";
 import {
   validateCreatePayload,
   buildProductInsertPayload,
+  buildProductUpdatePayload,
 } from "./create.js";
+import { syncProductVariantsAfterParentUpdate } from "./variantSync.js";
 
 export async function handleProductsUpsert(req, res) {
   if (req.method !== "POST") {
@@ -46,8 +48,21 @@ export async function handleProductsUpsert(req, res) {
     }
 
     const body = typeof req.body === "string" ? JSON.parse(req.body || "{}") : req.body || {};
-    const { product, mode = "create", variants = [] } = body;
-    const productId = product?.id;
+    const { product, mode: modeRaw = "create", variants = [] } = body;
+    const modeNorm = String(modeRaw || "create").trim().toLowerCase();
+
+    if (process.env.NODE_ENV !== "production") {
+      const vc = Array.isArray(variants) ? variants.length : -1;
+      console.info("[products/upsert] request", {
+        mode: modeNorm,
+        productId: product?.id ?? "(create)",
+        format: product?.format,
+        variantCount: vc,
+        bodyKeys: Object.keys(body),
+      });
+    }
+    const productId =
+      product?.id != null && String(product.id).trim() !== "" ? String(product.id).trim() : "";
 
     if (!product) {
       if (process.env.NODE_ENV !== "production") {
@@ -66,7 +81,7 @@ export async function handleProductsUpsert(req, res) {
     }
 
     const normalized = normalizeProductPayload(product);
-    const isUpdate = mode === "edit" && productId;
+    const isUpdate = modeNorm === "edit" && Boolean(productId);
 
     // ------------------------------------------------------
     // CREATE: validar payload mínimo
@@ -234,10 +249,35 @@ export async function handleProductsUpsert(req, res) {
         console.error("[products/upsert] audit create fail", auditErr);
       }
 
-      // TODO: Se product.format === "variants" e variants.length > 0:
-      // Inserir em public.product_variants vinculando product_id.
-      // sort_order seguindo array order. user_id = auth.uid.
-      // Validar SKU obrigatório por variação.
+      const formatCreate = String(normalized.format || "simple").toLowerCase();
+      if (
+        newProductId &&
+        formatCreate === "variants" &&
+        Array.isArray(variants) &&
+        variants.length > 0
+      ) {
+        const sync = await syncProductVariantsAfterParentUpdate({
+          supabase,
+          userId: user.id,
+          productId: newProductId,
+          variants,
+        });
+        if (!sync.ok) {
+          console.error("[products/upsert] variant sync fail (create)", sync.message);
+          return fail(
+            res,
+            {
+              code: "VARIANT_SYNC_ERROR",
+              message:
+                sync.message ||
+                "Produto criado, mas falhou ao salvar variações. Edite o produto e salve novamente.",
+              traceId,
+            },
+            500,
+            traceId
+          );
+        }
+      }
 
       return ok(res, {
         ok: true,
@@ -247,13 +287,72 @@ export async function handleProductsUpsert(req, res) {
     }
 
     // ------------------------------------------------------
-    // UPDATE: (lógica existente retorna aqui após validações)
-    // Por ora o update ainda não persiste; manter contrato.
+    // UPDATE: persistir campos em public.products (incl. product_images jsonb)
     // ------------------------------------------------------
+    const updatePayload = buildProductUpdatePayload(normalized, user.id);
+    const { data: updatedRows, error: updateError } = await supabase
+      .from("products")
+      .update(updatePayload)
+      .eq("id", productId)
+      .eq("user_id", user.id)
+      .select("id");
+
+    if (updateError) {
+      console.error("[products/upsert] update fail", updateError);
+      return fail(
+        res,
+        {
+          code: "DB_ERROR",
+          message: "Erro ao atualizar produto",
+          details: updateError.message,
+          traceId,
+        },
+        500,
+        traceId
+      );
+    }
+
+    if (!Array.isArray(updatedRows) || updatedRows.length === 0) {
+      console.error("[products/upsert] update affected 0 rows", { productId, userId: user.id });
+      return fail(
+        res,
+        {
+          code: "PRODUCT_NOT_UPDATED",
+          message: "Nenhuma linha foi atualizada. Verifique se o produto existe e pertence à sua conta.",
+          traceId,
+        },
+        404,
+        traceId
+      );
+    }
+
+    const formatNorm = String(normalized.format || "simple").toLowerCase();
+    if (formatNorm === "variants" && Array.isArray(variants) && variants.length > 0) {
+      const sync = await syncProductVariantsAfterParentUpdate({
+        supabase,
+        userId: user.id,
+        productId,
+        variants,
+      });
+      if (!sync.ok) {
+        console.error("[products/upsert] variant sync fail", sync.message);
+        return fail(
+          res,
+          {
+            code: "VARIANT_SYNC_ERROR",
+            message: sync.message || "Produto atualizado, mas falhou ao salvar variações.",
+            traceId,
+          },
+          500,
+          traceId
+        );
+      }
+    }
+
     return ok(res, {
       ok: true,
       productId: productId || null,
-      message: "Validação concluída",
+      message: "Produto atualizado com sucesso",
     });
   } catch (err) {
     console.error("[products/upsert] fail", err);

@@ -8,25 +8,22 @@
 // ----------------------------------------------------------------------
 
 /**
- * Normaliza SKU para comparação de unicidade.
+ * Normaliza SKU para comparação de unicidade e coluna normalized_sku (alinhado ao Postgres).
  * - trim
- * - uppercase
  * - colapsar espaços internos (múltiplos → um)
+ * Preserva maiúsculas/minúsculas exatamente como digitado.
  * @param {string} sku
  * @returns {string}
  */
 export function normalizeSku(sku) {
   if (sku == null || typeof sku !== "string") return "";
-  return sku
-    .trim()
-    .toUpperCase()
-    .replace(/\s+/g, " ");
+  return sku.trim().replace(/\s+/g, " ");
 }
 
 /**
  * Normaliza payload de produto para persistência.
  * - trim em strings principais
- * - sku: trim + uppercase + remover espaços duplicados
+ * - sku: trim + colapsar espaços (sem alterar maiúsculas/minúsculas)
  * - ean/gtin: somente números (strip non-digits)
  * @param {Record<string, unknown>} payload
  * @returns {Record<string, unknown>}
@@ -52,6 +49,24 @@ export function normalizeProductPayload(payload) {
 
   if (out.sku != null && typeof out.sku === "string") {
     out.sku = normalizeSku(out.sku);
+  }
+
+  // Formato variações: products.sku = SKU pai / raiz (literal como digitado em sku_base).
+  // O front pode enviar sku vazio e sku_base preenchido; aqui unificamos antes do insert/update.
+  const fmt = String(out.format || "simple").toLowerCase();
+  if (fmt === "variants") {
+    const main =
+      out.sku != null && typeof out.sku === "string" ? normalizeSku(out.sku) : "";
+    if (main === "" && out.sku_base != null && typeof out.sku_base === "string") {
+      const fromBase = normalizeSku(out.sku_base);
+      if (fromBase !== "") {
+        out.sku = fromBase;
+      }
+    }
+  }
+
+  if (out.sku_base != null && typeof out.sku_base === "string") {
+    out.sku_base = normalizeSku(out.sku_base);
   }
 
   const digitsOnly = (v) => (typeof v === "string" ? v.replace(/\D/g, "") : v);
@@ -88,6 +103,10 @@ export function validateRequiredFields(payload, ctx = {}) {
   if (format === "simple") {
     if (!payload.sku || String(payload.sku).trim() === "") {
       errors.push("SKU é obrigatório no formato simples.");
+    }
+  } else if (format === "variants") {
+    if (!payload.sku || String(payload.sku).trim() === "") {
+      errors.push("SKU raiz (base do produto) é obrigatório no formato com variações.");
     }
   }
 
@@ -148,9 +167,15 @@ export async function validateSkuUniqueness(payload, variants, ctx) {
     }
   } else if (format === "variants" && Array.isArray(variants)) {
     // ------------------------------------------------------------------
-    // Nível A: duplicatas dentro do payload
+    // Nível A: duplicatas dentro do payload (SKU pai + variações)
     // ------------------------------------------------------------------
     const seen = new Map();
+    const parentRaw = payload?.sku != null ? String(payload.sku) : "";
+    if (parentRaw.trim() !== "") {
+      const norm = normalizeSku(parentRaw);
+      seen.set(norm, "parent");
+      skusToCheck.push({ sku: norm, raw: parentRaw });
+    }
     for (let i = 0; i < variants.length; i++) {
       const v = variants[i];
       const raw = v?.sku != null ? String(v.sku) : "";
@@ -176,12 +201,11 @@ export async function validateSkuUniqueness(payload, variants, ctx) {
   // Nível B: colisão contra o banco (products + product_variants)
   // ------------------------------------------------------------------
 
-  // 1) Produtos simples (sku na tabela products)
+  // 1) products.sku — simples e pai em produtos com variações (índice único por usuário + normalized_sku)
   const { data: products } = await supabase
     .from("products")
     .select("id, sku")
     .eq("user_id", userId)
-    .eq("format", "simple")
     .not("sku", "is", null);
 
   const normSet = new Set(skusToCheck.map((s) => s.sku));

@@ -30,6 +30,55 @@ function toInt(v) {
 }
 
 /**
+ * Formato canônico jsonb: [{ "storage_path": "userId/.../file" }] (fonte de verdade).
+ * Opcional: { "url" } como cache legado. Leitura no client resolve URL via getPublicUrl.
+ * @param {unknown} v
+ * @returns {Array<{ storage_path?: string; url?: string }>|null}
+ */
+export function normalizeProductImagesForDb(v) {
+  if (v == null) return null;
+
+  if (Array.isArray(v)) {
+    const items = v
+      .map((item) => {
+        if (item == null) return null;
+        if (typeof item === "string") {
+          const t = item.trim();
+          if (t.startsWith("http")) return { url: t };
+          if (t.includes("/") && !t.includes(" ")) return { storage_path: t };
+          return null;
+        }
+        if (typeof item === "object" && item != null) {
+          const o = /** @type {{ storage_path?: string; url?: string }} */ ({});
+          const sp = String(/** @type {{ storage_path?: unknown }} */ (item).storage_path ?? "").trim();
+          if (sp && !sp.includes(" ")) o.storage_path = sp;
+          const u = String(/** @type {{ url?: unknown }} */ (item).url ?? "").trim();
+          if (u.startsWith("http")) o.url = u;
+          return Object.keys(o).length ? o : null;
+        }
+        return null;
+      })
+      .filter(Boolean);
+    return items.length ? items : null;
+  }
+
+  if (typeof v === "string") {
+    const s = v.trim();
+    if (!s) return null;
+    if (s.startsWith("http")) return [{ url: s }];
+    try {
+      const p = JSON.parse(s);
+      return normalizeProductImagesForDb(p);
+    } catch {
+      if (s.includes("/") && !s.includes(" ")) return [{ storage_path: s }];
+      return null;
+    }
+  }
+
+  return null;
+}
+
+/**
  * Monta payload de insert para public.products (CREATE).
  * user_id vem de auth.uid (NUNCA do client).
  * @param {Record<string, unknown>} product - produto normalizado
@@ -81,9 +130,36 @@ export function buildProductInsertPayload(product, userId) {
 
     // Títulos do anúncio (jsonb)
     ad_titles: adTitles,
+
+    // Miniatura / listagem — [{ url }] ou null
+    product_images: normalizeProductImagesForDb(p.product_images),
   };
 
   return insert;
+}
+
+/**
+ * Payload de UPDATE (sem user_id; status vem do produto quando informado).
+ * @param {Record<string, unknown>} product
+ * @param {string} userId
+ * @returns {Record<string, unknown>}
+ */
+export function buildProductUpdatePayload(product, userId) {
+  const insert = buildProductInsertPayload(product, userId);
+  const { user_id, ...rest } = insert;
+  void user_id;
+
+  const p = product || {};
+  const out = {
+    ...rest,
+    product_images: normalizeProductImagesForDb(p.product_images),
+  };
+
+  if (p.status != null && String(p.status).trim() !== "") {
+    out.status = String(p.status).trim().toLowerCase();
+  }
+
+  return out;
 }
 
 /**
@@ -104,6 +180,17 @@ export function validateCreatePayload(product) {
   const format = String(product.format ?? "simple").toLowerCase();
   if (format !== "simple" && format !== "variants") {
     return { valid: false, code: "INVALID_INPUT", message: "format deve ser 'simple' ou 'variants'" };
+  }
+
+  if (format === "variants") {
+    const sku = String(product.sku ?? "").trim();
+    if (!sku) {
+      return {
+        valid: false,
+        code: "INVALID_INPUT",
+        message: "SKU raiz (base) é obrigatório para produto com variações.",
+      };
+    }
   }
 
   return { valid: true };
