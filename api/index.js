@@ -84,6 +84,14 @@ export default async function handler(req, res) {
       const mod = await import("../src/handlers/ml/status.js");
       return await mod.default(req, res);
     }
+    if (path === "/api/ml/sync-listings") {
+      const mod = await import("../src/handlers/ml/listingsSync.js");
+      return await mod.default(req, res);
+    }
+    if (path === "/api/ml/listings") {
+      const mod = await import("../src/handlers/ml/listingsList.js");
+      return await mod.default(req, res);
+    }
     if (path === "/api/products/health") {
       const mod = await import("../src/handlers/products/health.js");
       return mod.handleProductsHealth(req, res);
