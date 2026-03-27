@@ -6,6 +6,10 @@
 // - Buscar dados do seller (GET /users/me) para capturar nickname
 // - Salvar tokens + ml_nickname no Supabase (ml_tokens)
 // - Redirecionar para /perfil/integracoes/mercado-livre
+//
+// Redirect final:
+// - Usa FRONTEND_URL do ambiente (DEV: ex. http://localhost:5173 | PROD: https://suse7.com.br)
+// - Validação explícita evita redirect silencioso para URL inválida ou placeholder
 // ======================================================
 
 import { createClient } from "@supabase/supabase-js";
@@ -23,6 +27,88 @@ const ML_CALLBACK_ENV_KEYS = [
   "ML_REDIRECT_URI",
   "FRONTEND_URL",
 ];
+
+// ======================================================
+// Helpers — URL base do frontend (redirect pós-OAuth)
+// ======================================================
+
+/**
+ * Remove espaços e barras finais da URL base (sem alterar path interno).
+ */
+function sanitizeFrontendBaseUrl(value) {
+  if (value == null) return "";
+  const trimmed = String(value).trim();
+  return trimmed.replace(/\/+$/, "");
+}
+
+/**
+ * Detecta valores típicos de tutorial / .env de exemplo que não devem ir para produção.
+ */
+function isPlaceholderFrontendUrl(raw) {
+  const s = String(raw || "").trim();
+  if (!s) return true;
+  const lower = s.toLowerCase().replace(/_/g, "-");
+
+  if (/url-exata-do-frontend/i.test(lower)) return true;
+  if (/url-real-do-frontend/i.test(lower)) return true;
+  if (lower.includes("placeholder-frontend")) return true;
+  if (lower.includes("your-frontend-url")) return true;
+  if (lower.includes("troque-por-sua-url")) return true;
+
+  return false;
+}
+
+/**
+ * Valida FRONTEND_URL para uso em res.redirect.
+ * Exige esquema http(s) e URL parseável; rejeita placeholders óbvios.
+ *
+ * @returns {{ ok: true, base: string } | { ok: false, reason: string }}
+ */
+function resolveValidatedFrontendBaseUrl(raw) {
+  const sanitized = sanitizeFrontendBaseUrl(raw);
+
+  if (!sanitized) {
+    return { ok: false, reason: "FRONTEND_URL ausente ou vazia após trim" };
+  }
+
+  if (!/^https?:\/\//i.test(sanitized)) {
+    return {
+      ok: false,
+      reason: "FRONTEND_URL deve começar com http:// ou https://",
+    };
+  }
+
+  if (isPlaceholderFrontendUrl(sanitized)) {
+    return {
+      ok: false,
+      reason:
+        "FRONTEND_URL parece placeholder de documentação; defina a URL real do frontend deste ambiente",
+    };
+  }
+
+  try {
+    const parsed = new URL(sanitized);
+    if (!parsed.hostname || parsed.hostname.length < 1) {
+      return { ok: false, reason: "FRONTEND_URL sem hostname válido" };
+    }
+  } catch {
+    return { ok: false, reason: "FRONTEND_URL não é uma URL absoluta válida" };
+  }
+
+  return { ok: true, base: sanitized };
+}
+
+/**
+ * Monta URL da tela de integração ML com query fixa.
+ */
+function buildMlIntegrationRedirect(frontendBase, querySuffix) {
+  const path = "/perfil/integracoes/mercado-livre";
+  return `${frontendBase}${path}?${querySuffix}`;
+}
+
+// ======================================================
+// Handler principal
+// ======================================================
 
 async function handleMLCallback(req, res) {
   const errorId = Date.now();
@@ -46,7 +132,9 @@ async function handleMLCallback(req, res) {
       return res.status(400).json({ ok: false, error: "State não encontrado" });
     }
 
-    // Validar ENV antes de qualquer operação
+    // ------------------------------
+    // ENV obrigatórias
+    // ------------------------------
     const envCheck = validateEnv(ML_CALLBACK_ENV_KEYS);
     if (!envCheck.ok) {
       const msg = `Missing env: ${envCheck.missing.join(", ")}`;
@@ -58,7 +146,35 @@ async function handleMLCallback(req, res) {
       });
     }
 
-    // Resolver user_id pelo state (oauth_states) e consumir state (one-time)
+    // ------------------------------
+    // FRONTEND_URL: validar ANTES de consumir state / trocar code
+    // (evita perder state e deixar usuário sem redirect utilizável)
+    // ------------------------------
+    const frontendResolution = resolveValidatedFrontendBaseUrl(process.env.FRONTEND_URL);
+    if (!frontendResolution.ok) {
+      console.error("[ml/callback] FRONTEND_URL inválida — não redirecionando", {
+        errorId,
+        reason: frontendResolution.reason,
+        rawLength: process.env.FRONTEND_URL?.length ?? 0,
+        rawPreview: (() => {
+          const r = String(process.env.FRONTEND_URL || "");
+          if (!r) return "(empty)";
+          return r.length > 80 ? `${r.slice(0, 80)}…` : r;
+        })(),
+      });
+      return res.status(500).json({
+        ok: false,
+        error: "FRONTEND_URL inválida no ambiente atual",
+        detail: frontendResolution.reason,
+        errorId,
+      });
+    }
+
+    const frontendBase = frontendResolution.base;
+
+    // ------------------------------
+    // State OAuth (one-time)
+    // ------------------------------
     const supabaseUserId = await resolveAndConsumeOAuthState(
       process.env.SUPABASE_URL,
       process.env.SUPABASE_SERVICE_ROLE_KEY,
@@ -117,11 +233,7 @@ async function handleMLCallback(req, res) {
 
     if (!mlData.access_token) {
       console.error("[ml/callback] step_failed: exchange_code", mlData);
-
-      const fe = process.env.FRONTEND_URL?.replace(/\/+$/, "") || "";
-      return res.redirect(
-        `${fe}/perfil/integracoes/mercado-livre?ml_error=token`
-      );
+      return res.redirect(buildMlIntegrationRedirect(frontendBase, "ml_error=token"));
     }
 
     const expiresAt = new Date(Date.now() + mlData.expires_in * 1000).toISOString();
@@ -167,17 +279,15 @@ async function handleMLCallback(req, res) {
 
     if (upsertError) {
       console.error("[ml/callback] step_failed: persist_tokens", upsertError);
-
-      const fe = process.env.FRONTEND_URL?.replace(/\/+$/, "") || "";
-      return res.redirect(
-        `${fe}/perfil/integracoes/mercado-livre?ml_error=save`
-      );
+      return res.redirect(buildMlIntegrationRedirect(frontendBase, "ml_error=save"));
     }
 
-    const fe = process.env.FRONTEND_URL?.replace(/\/+$/, "") || "";
-    return res.redirect(
-      `${fe}/perfil/integracoes/mercado-livre?ml=connected`
-    );
+    const successUrl = buildMlIntegrationRedirect(frontendBase, "ml=connected");
+    console.log("[ml/callback] redirect sucesso → integração ML", {
+      errorId,
+      host: new URL(frontendBase).hostname,
+    });
+    return res.redirect(successUrl);
   } catch (err) {
     const envCheck = validateEnv(ML_CALLBACK_ENV_KEYS);
     console.error("[ml/callback] errorId:", errorId, {
