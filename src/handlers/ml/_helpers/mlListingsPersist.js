@@ -11,6 +11,7 @@
 // ======================================================
 
 import { ML_MARKETPLACE_SLUG } from "./mlMarketplace.js";
+import { upsertMarketplaceListingHealthFromMlItem } from "./mlListingHealthPersist.js";
 
 /** @param {unknown} v */
 function toFiniteNumber(v) {
@@ -202,7 +203,7 @@ function mapDescriptionRows(description) {
  * @param {string} userId
  * @param {object} item - resposta GET /items/:id (payload completo)
  * @param {object|null} description - resposta GET /items/:id/description ou null se indisponível
- * @param {{ log?: (msg: string, extra?: object) => void }} [opts]
+ * @param {{ log?: (msg: string, extra?: object) => void; accessToken?: string }} [opts]
  */
 export async function persistMercadoLibreListing(supabase, userId, item, description, opts = {}) {
   const log = opts.log || (() => {});
@@ -342,6 +343,13 @@ export async function persistMercadoLibreListing(supabase, userId, item, descrip
     },
   });
   if (snapErr) log("insert_snapshot_warn", { snapErr });
+
+  await upsertMarketplaceListingHealthFromMlItem(supabase, userId, item, {
+    log,
+    accessToken: opts.accessToken,
+    nowIso,
+    marketplace: ML_MARKETPLACE_SLUG,
+  });
 
   return { listingId, external_listing_id: listingRow.external_listing_id };
 }

@@ -13,6 +13,7 @@ import {
   fetchItemDescription,
 } from "./_helpers/mercadoLibreItemsApi.js";
 import { persistMercadoLibreListing } from "./_helpers/mlListingsPersist.js";
+import { getHealthSyncMetrics, resetHealthSyncMetrics } from "./_helpers/mlListingHealthPersist.js";
 
 const PAGE_LIMIT = 100;
 const MAX_ITEMS = Math.min(10000, Math.max(1, parseInt(process.env.ML_SYNC_MAX_ITEMS || "3000", 10) || 3000));
@@ -70,6 +71,15 @@ export default async function handleMlListingsSync(req, res) {
     const sellerId = String(tokRow.ml_user_id);
     console.log(logPrefix, "start", { userId, sellerId, maxItems: MAX_ITEMS, batch: BATCH_CONCURRENCY });
 
+    resetHealthSyncMetrics();
+    console.log("[ml/health] env", {
+      ML_SYNC_SKIP_VISITS: process.env.ML_SYNC_SKIP_VISITS === "1",
+      ML_SYNC_SKIP_PERFORMANCE: process.env.ML_SYNC_SKIP_PERFORMANCE === "1",
+      ML_SYNC_HEALTH_LOG_SAMPLE: process.env.ML_SYNC_HEALTH_LOG_SAMPLE || "(default 5)",
+      note:
+        "Se ML_SYNC_SKIP_VISITS ou ML_SYNC_SKIP_PERFORMANCE estiverem em 1, visitas/performance não são buscadas; o upsert de health ainda grava fees/frete/promo/raw a partir do item.",
+    });
+
     // ------------------------------
     // Coletar IDs (paginação até esgotar ou MAX_ITEMS)
     // ------------------------------
@@ -119,6 +129,7 @@ export default async function handleMlListingsSync(req, res) {
         syncStage = "persist";
         await persistMercadoLibreListing(supabase, userId, item, description, {
           log: (m, x) => logItem(m, { itemId, ...x }),
+          accessToken,
         });
       } catch (err) {
         err.syncStage = syncStage;
@@ -148,11 +159,13 @@ export default async function handleMlListingsSync(req, res) {
     }
 
     const duration_ms = Date.now() - started;
+    const healthMetrics = getHealthSyncMetrics();
     console.log(logPrefix, "done", {
       scanned: allIds.length,
       imported,
       failed: failures.length,
       duration_ms,
+      health: healthMetrics,
     });
 
     return res.status(200).json({
@@ -163,6 +176,7 @@ export default async function handleMlListingsSync(req, res) {
         processed: imported,
         failed: failures.length,
         duration_ms,
+        health: healthMetrics,
       },
       failures: failures.slice(0, 100),
     });

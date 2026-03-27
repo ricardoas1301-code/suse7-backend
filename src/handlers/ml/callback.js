@@ -7,6 +7,10 @@
 // - Salvar tokens + ml_nickname no Supabase (ml_tokens)
 // - Redirecionar para /perfil/integracoes/mercado-livre
 //
+// Persistência: createClient com SUPABASE_SERVICE_ROLE_KEY (bypass RLS).
+// Se upsert(onConflict) falhar (índice/constraint incompatível com PostgREST),
+// fallback explícito: UPDATE por (user_id, marketplace) ou INSERT.
+//
 // Redirect final:
 // - Usa FRONTEND_URL do ambiente (DEV: ex. http://localhost:5173 | PROD: https://suse7.com.br)
 // - Validação explícita evita redirect silencioso para URL inválida ou placeholder
@@ -18,6 +22,7 @@ import {
   validateEnv,
 } from "./_helpers/oauthConnect.js";
 import { ML_MARKETPLACE_SLUG } from "./_helpers/mlMarketplace.js";
+import { config } from "../../infra/config.js";
 
 const ML_CALLBACK_ENV_KEYS = [
   "SUPABASE_URL",
@@ -106,6 +111,149 @@ function buildMlIntegrationRedirect(frontendBase, querySuffix) {
   return `${frontendBase}${path}?${querySuffix}`;
 }
 
+/**
+ * Log estruturado de erro PostgREST / Supabase (diagnóstico persistência).
+ */
+function logSupabasePersistError(context, err) {
+  const e = err && typeof err === "object" ? err : { message: String(err) };
+  console.error("[ml/callback] supabase_error", context, {
+    message: e.message ?? null,
+    code: e.code ?? null,
+    details: e.details ?? null,
+    hint: e.hint ?? null,
+    // PostgREST / pg
+    constraint: e.constraint ?? e?.cause ?? null,
+  });
+}
+
+/**
+ * Payload enviado ao banco sem vazar tokens completos.
+ */
+function summarizeMlTokensRowForLog(row) {
+  if (!row || typeof row !== "object") return {};
+  const at = row.access_token;
+  const rt = row.refresh_token;
+  return {
+    user_id: row.user_id,
+    marketplace: row.marketplace,
+    ml_user_id: row.ml_user_id,
+    ml_nickname: row.ml_nickname,
+    expires_at: row.expires_at,
+    expires_in: row.expires_in,
+    scope: row.scope,
+    token_type: row.token_type,
+    access_token_prefix: typeof at === "string" ? `${at.slice(0, 14)}…` : null,
+    refresh_token_present: typeof rt === "string" && rt.length > 0,
+  };
+}
+
+/**
+ * Cliente Supabase com service role (nunca anon key).
+ */
+function createServiceRoleSupabase() {
+  const url = config.supabaseUrl?.trim();
+  const key = config.supabaseServiceRoleKey?.trim();
+  if (!url || !key) {
+    throw new Error("SUPABASE_URL ou SUPABASE_SERVICE_ROLE_KEY ausentes em config");
+  }
+  return createClient(url, key, {
+    auth: { autoRefreshToken: false, persistSession: false },
+  });
+}
+
+/**
+ * Persiste ml_tokens: tenta upsert; em falha, update ou insert manual.
+ */
+async function persistMlTokens(supabase, row) {
+  const logSummary = summarizeMlTokensRowForLog(row);
+
+  console.log("[ml/callback] persist_ml_tokens_start", {
+    strategy: "upsert",
+    onConflict: "user_id,marketplace",
+    payload_summary: logSummary,
+  });
+
+  const upsertResult = await supabase
+    .from("ml_tokens")
+    .upsert(row, { onConflict: "user_id,marketplace" })
+    .select("id, user_id, marketplace, updated_at");
+
+  if (!upsertResult.error) {
+    console.log("[ml/callback] persist_ml_tokens_ok", {
+      via: "upsert",
+      rows_returned: upsertResult.data?.length ?? 0,
+      first: upsertResult.data?.[0] ?? null,
+    });
+    return { ok: true };
+  }
+
+  logSupabasePersistError("persist_tokens_upsert_failed", upsertResult.error);
+
+  console.warn("[ml/callback] persist_ml_tokens_fallback", {
+    reason: "upsert_failed_trying_update_then_insert",
+  });
+
+  const { data: existing, error: selErr } = await supabase
+    .from("ml_tokens")
+    .select("id")
+    .eq("user_id", row.user_id)
+    .eq("marketplace", row.marketplace)
+    .maybeSingle();
+
+  if (selErr) {
+    logSupabasePersistError("persist_tokens_select_existing_failed", selErr);
+    return { ok: false, error: selErr };
+  }
+
+  if (existing?.id) {
+    const { data: updated, error: updErr } = await supabase
+      .from("ml_tokens")
+      .update({
+        ml_user_id: row.ml_user_id,
+        ml_nickname: row.ml_nickname,
+        access_token: row.access_token,
+        refresh_token: row.refresh_token,
+        expires_in: row.expires_in,
+        expires_at: row.expires_at,
+        scope: row.scope,
+        token_type: row.token_type,
+        updated_at: row.updated_at,
+      })
+      .eq("user_id", row.user_id)
+      .eq("marketplace", row.marketplace)
+      .select("id, updated_at");
+
+    if (updErr) {
+      logSupabasePersistError("persist_tokens_update_failed", updErr);
+      return { ok: false, error: updErr };
+    }
+
+    console.log("[ml/callback] persist_ml_tokens_ok", {
+      via: "update",
+      rows: updated?.length ?? 0,
+      first: updated?.[0] ?? null,
+    });
+    return { ok: true };
+  }
+
+  const { data: inserted, error: insErr } = await supabase
+    .from("ml_tokens")
+    .insert(row)
+    .select("id, user_id, marketplace, updated_at");
+
+  if (insErr) {
+    logSupabasePersistError("persist_tokens_insert_failed", insErr);
+    return { ok: false, error: insErr };
+  }
+
+  console.log("[ml/callback] persist_ml_tokens_ok", {
+    via: "insert",
+    rows_returned: inserted?.length ?? 0,
+    first: inserted?.[0] ?? null,
+  });
+  return { ok: true };
+}
+
 // ======================================================
 // Handler principal
 // ======================================================
@@ -146,6 +294,19 @@ async function handleMLCallback(req, res) {
       });
     }
 
+    console.log("[ml/callback] supabase_client", {
+      supabase_url_host: (() => {
+        try {
+          return new URL(config.supabaseUrl).hostname;
+        } catch {
+          return "(invalid_url)";
+        }
+      })(),
+      service_role_key_prefix: config.supabaseServiceRoleKey
+        ? `${String(config.supabaseServiceRoleKey).slice(0, 12)}…`
+        : "(missing)",
+    });
+
     // ------------------------------
     // FRONTEND_URL: validar ANTES de consumir state / trocar code
     // (evita perder state e deixar usuário sem redirect utilizável)
@@ -173,11 +334,11 @@ async function handleMLCallback(req, res) {
     const frontendBase = frontendResolution.base;
 
     // ------------------------------
-    // State OAuth (one-time)
+    // State OAuth (one-time) — mesmo service role
     // ------------------------------
     const supabaseUserId = await resolveAndConsumeOAuthState(
-      process.env.SUPABASE_URL,
-      process.env.SUPABASE_SERVICE_ROLE_KEY,
+      config.supabaseUrl,
+      config.supabaseServiceRoleKey,
       state,
       "ml"
     );
@@ -187,10 +348,7 @@ async function handleMLCallback(req, res) {
       return res.status(401).json({ ok: false, error: "Invalid/expired state" });
     }
 
-    const supabase = createClient(
-      process.env.SUPABASE_URL,
-      process.env.SUPABASE_SERVICE_ROLE_KEY
-    );
+    const supabase = createServiceRoleSupabase();
 
     const { data: profile, error: profileError } = await supabase
       .from("profiles")
@@ -258,28 +416,39 @@ async function handleMLCallback(req, res) {
       console.warn("⚠️ Erro ao buscar /users/me (ignorado):", meErr?.message);
     }
 
-    // Upsert por (user_id, marketplace): exige coluna marketplace + índice único composto no banco.
-    const { error: upsertError } = await supabase
-      .from("ml_tokens")
-      .upsert(
-        {
-          user_id: supabaseUserId,
-          marketplace: ML_MARKETPLACE_SLUG,
-          ml_user_id: String(mlData.user_id),
-          ml_nickname: mlNickname,
-          access_token: mlData.access_token,
-          refresh_token: mlData.refresh_token,
-          expires_in: mlData.expires_in,
-          expires_at: expiresAt,
-          scope: mlData.scope ?? "",
-          token_type: mlData.token_type ?? "bearer",
-          updated_at: new Date().toISOString(),
-        },
-        { onConflict: "user_id,marketplace" }
-      );
+    const mlUserIdForRow =
+      mlData.user_id != null && mlData.user_id !== "" ? String(mlData.user_id) : "";
+    if (!mlUserIdForRow) {
+      console.error("[ml/callback] step_failed: ml_user_id_missing_from_token_response", {
+        keys: Object.keys(mlData || {}),
+      });
+      return res.redirect(buildMlIntegrationRedirect(frontendBase, "ml_error=token"));
+    }
 
-    if (upsertError) {
-      console.error("[ml/callback] step_failed: persist_tokens", upsertError);
+    const row = {
+      user_id: supabaseUserId,
+      marketplace: ML_MARKETPLACE_SLUG,
+      ml_user_id: mlUserIdForRow,
+      ml_nickname: mlNickname,
+      access_token: mlData.access_token,
+      refresh_token: mlData.refresh_token ?? null,
+      expires_in: mlData.expires_in,
+      expires_at: expiresAt,
+      scope: mlData.scope ?? "",
+      token_type: mlData.token_type ?? "bearer",
+      updated_at: new Date().toISOString(),
+    };
+
+    if (!row.refresh_token) {
+      console.warn("[ml/callback] ml_refresh_token_absent", {
+        user_id: supabaseUserId,
+        marketplace: ML_MARKETPLACE_SLUG,
+      });
+    }
+
+    const persist = await persistMlTokens(supabase, row);
+
+    if (!persist.ok) {
       return res.redirect(buildMlIntegrationRedirect(frontendBase, "ml_error=save"));
     }
 
