@@ -1,6 +1,13 @@
 // ======================================================
-// Persistência de anúncios ML → tabelas marketplace_*
-// Upsert listing por (marketplace, external_listing_id); filhos substituídos por import.
+// FASE 2 — Persistência completa de anúncios ML → marketplace_*
+//
+// Estratégia:
+// - Principal: upsert por (marketplace, external_listing_id) com colunas normalizadas
+//   + espelho de frete + contagens + raw_json completo do item.
+// - Filhos (descrição, atributos, fotos, variações, shipping): DELETE por listing_id
+//   e INSERT em lote → resync idempotente, sem duplicatas.
+// - Snapshots: sempre novo INSERT (histórico de auditoria); payload inclui item + descrição.
+// - Multi-marketplace: marketplace fixo em ML_MARKETPLACE_SLUG (constante compartilhada).
 // ======================================================
 
 import { ML_MARKETPLACE_SLUG } from "./mlMarketplace.js";
@@ -19,8 +26,16 @@ function toInt(v) {
   return Math.trunc(n);
 }
 
+/** @param {unknown} v */
+function toText(v) {
+  if (v == null) return null;
+  const s = String(v).trim();
+  return s === "" ? null : s;
+}
+
 /**
  * Extrai saúde numérica quando a API envia número ou objeto aninhado.
+ * Não inventa valor se o payload não trouxer sinal claro.
  */
 function extractHealth(item) {
   if (item == null) return null;
@@ -34,7 +49,7 @@ function extractHealth(item) {
 }
 
 /**
- * SKU do vendedor: seller_custom_field ou atributo SELLER_SKU.
+ * SKU exibido / derivado: mantém lógica legado (custom field ou atributo SELLER_SKU).
  */
 function extractSellerSku(item) {
   if (item?.seller_custom_field != null && String(item.seller_custom_field).trim() !== "") {
@@ -48,11 +63,68 @@ function extractSellerSku(item) {
 }
 
 /**
- * Monta linha principal marketplace_listings a partir do JSON do item ML.
+ * Texto de garantia: warranty direto ou sale_terms (WARRANTY / “garantia”).
+ */
+function extractWarrantyText(item) {
+  const w = item?.warranty;
+  if (w != null && String(w).trim() !== "") return String(w);
+
+  const terms = item?.sale_terms;
+  if (!Array.isArray(terms)) return null;
+
+  for (const t of terms) {
+    const id = String(t?.id || "").toUpperCase();
+    const name = String(t?.name || "").toLowerCase();
+    if (id.includes("WARRANTY") || name.includes("garantia")) {
+      const vn = t?.value_name ?? t?.value_struct?.number ?? t?.value_struct?.unit;
+      if (vn != null) return String(vn);
+    }
+  }
+  return null;
+}
+
+/**
+ * Tags do item como JSONB (array preservado; string vira [string]).
+ */
+function extractTagsJsonb(item) {
+  const tags = item?.tags;
+  if (tags == null) return null;
+  if (Array.isArray(tags)) return tags;
+  if (typeof tags === "object") return tags;
+  return [tags];
+}
+
+/**
+ * Campos de frete espelhados na tabela principal (consultas / BI sem join).
+ */
+function extractShippingMirror(item) {
+  const sh = item?.shipping;
+  if (!sh || typeof sh !== "object") {
+    return {
+      shipping_mode: null,
+      shipping_free: null,
+      shipping_local_pick_up: null,
+      shipping_logistic_type: null,
+    };
+  }
+  return {
+    shipping_mode: sh.mode != null ? String(sh.mode) : null,
+    shipping_free: sh.free_shipping === undefined ? null : Boolean(sh.free_shipping),
+    shipping_local_pick_up: sh.local_pick_up === undefined ? null : Boolean(sh.local_pick_up),
+    shipping_logistic_type: sh.logistic_type != null ? String(sh.logistic_type) : null,
+  };
+}
+
+/**
+ * Monta linha principal marketplace_listings a partir do JSON do item ML (GET /items/:id).
  */
 export function mapMlItemToListingRow(userId, item, nowIso) {
   const id = item?.id != null ? String(item.id) : null;
   if (!id) throw new Error("Item ML sem id");
+
+  const pics = Array.isArray(item.pictures) ? item.pictures : [];
+  const vars = Array.isArray(item.variations) ? item.variations : [];
+  const ship = extractShippingMirror(item);
 
   return {
     user_id: userId,
@@ -75,16 +147,52 @@ export function mapMlItemToListingRow(userId, item, nowIso) {
     buying_mode: item.buying_mode != null ? String(item.buying_mode) : null,
     condition: item.condition != null ? String(item.condition) : null,
     seller_sku: extractSellerSku(item),
+    seller_custom_field: toText(item.seller_custom_field),
     catalog_listing: Boolean(item.catalog_listing),
-    catalog_product_id:
-      item.catalog_product_id != null ? String(item.catalog_product_id) : null,
+    catalog_product_id: item.catalog_product_id != null ? String(item.catalog_product_id) : null,
+    official_store_id:
+      item.official_store_id != null ? String(item.official_store_id) : null,
+    inventory_id: item.inventory_id != null ? String(item.inventory_id) : null,
+    warranty_text: extractWarrantyText(item),
+    accepts_mercadopago:
+      item.accepts_mercadopago === undefined ? null : Boolean(item.accepts_mercadopago),
+    tags: extractTagsJsonb(item),
+    pictures_count: pics.length,
+    variations_count: vars.length,
     health: extractHealth(item),
-    date_created: item.date_created ? String(item.date_created) : null,
+    date_created: item.date_created
+      ? String(item.date_created)
+      : item.start_time
+        ? String(item.start_time)
+        : null,
     last_updated: item.last_updated ? String(item.last_updated) : null,
     api_imported_at: nowIso,
     api_last_seen_at: nowIso,
     raw_json: item,
     updated_at: nowIso,
+    ...ship,
+  };
+}
+
+/**
+ * Normaliza resposta GET /items/:id/description para colunas + raw_json completo.
+ */
+function mapDescriptionRows(description) {
+  if (!description || typeof description !== "object") {
+    return { plain_text: null, html_text: null, raw_json: {} };
+  }
+
+  const plain = description.plain_text != null ? String(description.plain_text) : null;
+  let html = description.html_text != null ? String(description.html_text) : null;
+  const textField = description.text != null ? String(description.text) : null;
+  if (!html && textField && /<[a-z][\s\S]*>/i.test(textField)) {
+    html = textField;
+  }
+
+  return {
+    plain_text: plain,
+    html_text: html,
+    raw_json: description,
   };
 }
 
@@ -92,7 +200,7 @@ export function mapMlItemToListingRow(userId, item, nowIso) {
  * Persiste item + descrição + filhos + snapshot bruto.
  * @param {import("@supabase/supabase-js").SupabaseClient} supabase
  * @param {string} userId
- * @param {object} item - resposta GET /items/:id
+ * @param {object} item - resposta GET /items/:id (payload completo)
  * @param {object|null} description - resposta GET /items/:id/description ou null se indisponível
  * @param {{ log?: (msg: string, extra?: object) => void }} [opts]
  */
@@ -115,7 +223,7 @@ export async function persistMercadoLibreListing(supabase, userId, item, descrip
   const listingId = upserted.id;
 
   // ------------------------------------------------------------------
-  // Filhos: limpar e reinserir (importação completa por versão atual da API)
+  // Filhos: limpar e reinserir (cada sync substitui o snapshot normalizado)
   // ------------------------------------------------------------------
   const { error: delA } = await supabase
     .from("marketplace_listing_attributes")
@@ -136,20 +244,21 @@ export async function persistMercadoLibreListing(supabase, userId, item, descrip
   await supabase.from("marketplace_listing_shipping").delete().eq("listing_id", listingId);
 
   // ------------------------------------------------------------------
-  // Descrição
+  // Descrição (falha na descrição não aborta — já tratada no sync antes de persist)
   // ------------------------------------------------------------------
   if (description && typeof description === "object") {
+    const mapped = mapDescriptionRows(description);
     const { error: dErr } = await supabase.from("marketplace_listing_descriptions").insert({
       listing_id: listingId,
-      plain_text: description.plain_text ?? null,
-      html_text: description.text != null ? String(description.text) : description.html_text ?? null,
-      raw_json: description,
+      plain_text: mapped.plain_text,
+      html_text: mapped.html_text,
+      raw_json: mapped.raw_json,
     });
     if (dErr) log("insert_description_warn", { dErr });
   }
 
   // ------------------------------------------------------------------
-  // Atributos
+  // Atributos (cada atributo com raw_json = objeto original da API)
   // ------------------------------------------------------------------
   const attrs = Array.isArray(item.attributes) ? item.attributes : [];
   if (attrs.length > 0) {
@@ -168,7 +277,7 @@ export async function persistMercadoLibreListing(supabase, userId, item, descrip
   }
 
   // ------------------------------------------------------------------
-  // Fotos
+  // Fotos (ordem = índice no array pictures do ML)
   // ------------------------------------------------------------------
   const pics = Array.isArray(item.pictures) ? item.pictures : [];
   if (pics.length > 0) {
@@ -185,7 +294,7 @@ export async function persistMercadoLibreListing(supabase, userId, item, descrip
   }
 
   // ------------------------------------------------------------------
-  // Variações
+  // Variações (campos extras permanecem em raw_json)
   // ------------------------------------------------------------------
   const vars = Array.isArray(item.variations) ? item.variations : [];
   if (vars.length > 0) {
@@ -205,7 +314,7 @@ export async function persistMercadoLibreListing(supabase, userId, item, descrip
   }
 
   // ------------------------------------------------------------------
-  // Frete
+  // Frete (tabela dedicada + já espelhado na principal em mapMlItemToListingRow)
   // ------------------------------------------------------------------
   const sh = item.shipping;
   if (sh && typeof sh === "object") {
@@ -221,11 +330,16 @@ export async function persistMercadoLibreListing(supabase, userId, item, descrip
   }
 
   // ------------------------------------------------------------------
-  // Snapshot bruto (item + descrição recebidos nesta importação)
+  // Snapshot bruto: item completo da API + descrição (auditoria / reprocessamento)
   // ------------------------------------------------------------------
   const { error: snapErr } = await supabase.from("marketplace_listing_raw_snapshots").insert({
     listing_id: listingId,
-    payload: { item, description: description ?? null, imported_at: nowIso },
+    payload: {
+      item,
+      description: description ?? null,
+      imported_at: nowIso,
+      marketplace: ML_MARKETPLACE_SLUG,
+    },
   });
   if (snapErr) log("insert_snapshot_warn", { snapErr });
 

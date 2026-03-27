@@ -99,18 +99,31 @@ export default async function handleMlListingsSync(req, res) {
 
     const logItem = (msg, extra) => console.log(logPrefix, msg, extra || {});
 
+    /**
+     * Por item: fetch → descrição (best-effort) → persist.
+     * Erros carregam `syncStage` para o resumo de falhas.
+     */
     async function processOne(itemId) {
-      const item = await fetchItem(accessToken, itemId);
-      let description = null;
+      let syncStage = "fetch_item";
       try {
-        description = await fetchItemDescription(accessToken, itemId);
-      } catch (de) {
-        logItem("description_skip", { itemId, reason: de?.message, status: de?.status });
-      }
+        const item = await fetchItem(accessToken, itemId);
 
-      await persistMercadoLibreListing(supabase, userId, item, description, {
-        log: (m, x) => logItem(m, { itemId, ...x }),
-      });
+        syncStage = "fetch_description";
+        let description = null;
+        try {
+          description = await fetchItemDescription(accessToken, itemId);
+        } catch (de) {
+          logItem("description_skip", { itemId, reason: de?.message, status: de?.status });
+        }
+
+        syncStage = "persist";
+        await persistMercadoLibreListing(supabase, userId, item, description, {
+          log: (m, x) => logItem(m, { itemId, ...x }),
+        });
+      } catch (err) {
+        err.syncStage = syncStage;
+        throw err;
+      }
     }
 
     // ------------------------------
@@ -125,9 +138,11 @@ export default async function handleMlListingsSync(req, res) {
         if (r.status === "fulfilled") {
           imported += 1;
         } else {
-          const errMsg = r.reason?.message || String(r.reason);
-          failures.push({ item_id: itemId, error: errMsg });
-          console.error(logPrefix, "item_failed", { itemId, error: errMsg });
+          const reason = r.reason;
+          const errMsg = reason?.message || String(reason);
+          const stage = reason?.syncStage || "unknown";
+          failures.push({ item_id: itemId, stage, error: errMsg });
+          console.error(logPrefix, "item_failed", { itemId, stage, error: errMsg });
         }
       });
     }
@@ -145,6 +160,7 @@ export default async function handleMlListingsSync(req, res) {
       summary: {
         scanned: allIds.length,
         imported,
+        processed: imported,
         failed: failures.length,
         duration_ms,
       },

@@ -21,7 +21,7 @@ export default async function handleMlListingsList(req, res) {
     const { data, error } = await supabase
       .from("marketplace_listings")
       .select(
-        "id, title, marketplace, price, available_quantity, sold_quantity, status, external_listing_id, permalink, health, api_last_seen_at, currency_id"
+        "id, title, marketplace, price, available_quantity, sold_quantity, status, external_listing_id, permalink, health, api_last_seen_at, currency_id, pictures_count, variations_count"
       )
       .eq("user_id", user.id)
       .order("api_last_seen_at", { ascending: false });
