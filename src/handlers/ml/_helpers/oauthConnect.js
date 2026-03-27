@@ -36,6 +36,8 @@ export function buildMlAuthUrl(clientId, redirectUri, state) {
     client_id: String(clientId || "").trim(),
     redirect_uri: String(redirectUri || "").trim(),
     state,
+    // Escopos explícitos (ML): sem read, /orders/search pode não retornar vendas do vendedor.
+    scope: "offline_access read write",
   });
   return `${base}?${params.toString()}`;
 }

@@ -10,7 +10,12 @@
 import { requireAuthUser } from "./_helpers/requireAuthUser.js";
 import { getValidMLToken } from "./_helpers/mlToken.js";
 import { ML_MARKETPLACE_SLUG } from "./_helpers/mlMarketplace.js";
-import { searchSellerOrdersPage, fetchOrderById } from "./_helpers/mercadoLibreOrdersApi.js";
+import {
+  fetchMercadoLibreUserMe,
+  searchSellerOrdersPage,
+  fetchOrderById,
+  nextOrdersSearchOffset,
+} from "./_helpers/mercadoLibreOrdersApi.js";
 import {
   persistMercadoLibreOrder,
   rebuildListingSalesMetricsForUser,
@@ -78,10 +83,41 @@ export default async function handleMlSalesSync(req, res) {
       });
     }
 
-    const sellerId = String(tokRow.ml_user_id);
+    const mlUserIdFromDb = String(tokRow.ml_user_id).trim();
+
+    let sellerId = mlUserIdFromDb;
+    try {
+      const me = await fetchMercadoLibreUserMe(accessToken);
+      const meId = me?.id != null ? String(me.id).trim() : null;
+      if (meId) {
+        if (meId !== mlUserIdFromDb) {
+          console.warn(logPrefix, "seller_id_mismatch_using_users_me", {
+            ml_tokens_ml_user_id: mlUserIdFromDb,
+            users_me_id: meId,
+            nickname: me?.nickname,
+          });
+          const { error: fixErr } = await supabase
+            .from("ml_tokens")
+            .update({ ml_user_id: meId, updated_at: new Date().toISOString() })
+            .eq("user_id", userId)
+            .eq("marketplace", ML_MARKETPLACE_SLUG);
+          if (fixErr) {
+            console.error(logPrefix, "failed_to_persist_me_id", fixErr);
+          }
+        }
+        sellerId = meId;
+      }
+    } catch (meErr) {
+      console.error(logPrefix, "users_me_failed_fallback_db_ml_user_id", {
+        message: meErr?.message,
+        mlUserIdFromDb,
+      });
+    }
+
     console.log(logPrefix, "start", {
       userId,
       sellerId,
+      ml_user_id_from_db: mlUserIdFromDb,
       maxOrders: MAX_ORDERS,
       batch: BATCH_CONCURRENCY,
     });
@@ -107,11 +143,14 @@ export default async function handleMlSalesSync(req, res) {
         allIds.push(oid);
       }
 
-      offset += batch.length;
+      const prevOffset = offset;
+      offset = nextOrdersSearchOffset(offset, PAGE_LIMIT, batch.length);
       console.log(logPrefix, "search_page", {
-        offset,
+        offset_prev: prevOffset,
+        offset_next: offset,
         collected: allIds.length,
         pageSize: batch.length,
+        paging_total: page.paging?.total,
       });
 
       if (batch.length < PAGE_LIMIT) break;
@@ -206,6 +245,20 @@ export default async function handleMlSalesSync(req, res) {
         listings_metrics_updated: metricsInfo.listingsUpdated,
         duration_ms,
       },
+      diagnostic:
+        scanned === 0
+          ? {
+              seller_id_used: sellerId,
+              ml_user_id_from_db: mlUserIdFromDb,
+              paging_total_from_api: marketplaceTotalHint,
+              hints: [
+                "Confira logs [ml/orders]: http_status, total_results_hint, orders_returned.",
+                "Defina ML_ORDERS_LOG_RAW=1 para body completo da API (uma página).",
+                "Se scope antigo não incluía read: reconecte OAuth (Perfil → Integrações) após deploy com escopos explícitos.",
+                "Se sort quebrar no seu site: ML_ORDERS_SEARCH_NO_SORT=1.",
+              ],
+            }
+          : undefined,
       failures: failures.slice(0, 100),
     });
   } catch (err) {
