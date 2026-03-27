@@ -258,6 +258,7 @@ async function handleMLCallback(req, res) {
       console.warn("⚠️ Erro ao buscar /users/me (ignorado):", meErr?.message);
     }
 
+    // Upsert por (user_id, marketplace): exige coluna marketplace + índice único composto no banco.
     const { error: upsertError } = await supabase
       .from("ml_tokens")
       .upsert(
@@ -274,7 +275,7 @@ async function handleMLCallback(req, res) {
           token_type: mlData.token_type ?? "bearer",
           updated_at: new Date().toISOString(),
         },
-        { onConflict: "user_id" }
+        { onConflict: "user_id,marketplace" }
       );
 
     if (upsertError) {
