@@ -30,16 +30,97 @@ function toInt(v) {
 }
 
 /**
- * Valores monetários ML podem vir number ou { value: n } / amount.
+ * Valores monetários ML podem vir number, string ("99.90" / "99,90") ou
+ * objeto { value, amount, total } (às vezes aninhado em currency_id).
  */
 function parseMlMoney(v) {
-  if (v == null) return null;
+  if (v == null || v === "") return null;
   if (typeof v === "number" && Number.isFinite(v)) return v;
+  if (typeof v === "string") {
+    const t = v.trim();
+    if (!t) return null;
+    const lastComma = t.lastIndexOf(",");
+    const lastDot = t.lastIndexOf(".");
+    if (lastComma !== -1 && lastComma > lastDot) {
+      return toFiniteNumber(t.replace(/\./g, "").replace(",", "."));
+    }
+    if (lastDot !== -1 && lastDot > lastComma) {
+      return toFiniteNumber(t.replace(/,/g, ""));
+    }
+    return toFiniteNumber(t.replace(",", "."));
+  }
   if (typeof v === "object") {
     const inner = v.value ?? v.amount ?? v.total;
-    if (inner != null) return toFiniteNumber(inner);
+    if (inner != null && inner !== v) return parseMlMoney(inner);
   }
   return toFiniteNumber(v);
+}
+
+/**
+ * Preços por linha em order_items (ML varia formato; vários fallbacks).
+ *
+ * Regras finais:
+ * - unit_price: preço unitário efetivo da linha (full_unit_price ou unit_price, etc.).
+ * - gross_amount: total da linha; se a API não mandar total explícito, quantity * unit_price.
+ * - fee_amount: sale_fee da linha quando existir.
+ * - net_amount: apenas quando há fee confiável → gross_amount - fee_amount; senão null
+ *   (evita duplicar bruto como “líquido”; no rebuild, net usa fallback para gross só na agregação).
+ */
+export function extractOrderLinePricing(line) {
+  const qty = toInt(line?.quantity) ?? 1;
+  const itemObj = line?.item && typeof line.item === "object" ? line.item : {};
+
+  const unitCandidates = [
+    line?.full_unit_price,
+    line?.unit_price,
+    line?.base_unit_price,
+    line?.discounted_unit_price,
+    itemObj?.price,
+    itemObj?.base_price,
+  ];
+
+  let unit = null;
+  for (const c of unitCandidates) {
+    unit = parseMlMoney(c);
+    if (unit != null) break;
+  }
+
+  const grossCandidates = [
+    line?.total_amount,
+    line?.base_total_amount,
+    line?.full_total_amount,
+    line?.gross_amount,
+    line?.gross_price,
+    line?.paid_amount,
+    line?.transaction_amount,
+  ];
+
+  let gross = null;
+  for (const c of grossCandidates) {
+    gross = parseMlMoney(c);
+    if (gross != null) break;
+  }
+
+  if (gross == null && unit != null && qty > 0) {
+    gross = unit * qty;
+  }
+
+  if (gross != null && unit != null && qty > 0) {
+    const expected = unit * qty;
+    const ratio = gross / expected;
+    if (ratio > 0.01 && ratio < 0.99) {
+      unit = gross / qty;
+    }
+  }
+
+  const fee = parseMlMoney(line?.sale_fee ?? line?.listing_fee ?? line?.discount_fee);
+
+  let net = null;
+  if (gross != null && fee != null) {
+    net = gross - fee;
+  }
+
+  return { qty, unit, gross, fee, net };
 }
 
 /**
@@ -132,16 +213,7 @@ export function mapMlOrderItemToRow(userId, marketplace, salesOrderId, line, now
         ? String(line.variation_id)
         : null;
 
-  const qty = toInt(line.quantity) ?? 1;
-  const unit = parseMlMoney(line.unit_price ?? line.full_unit_price);
-  const lineTotal =
-    parseMlMoney(line.total_amount) ??
-    (unit != null ? unit * qty : parseMlMoney(line.full_unit_price));
-
-  const fee = parseMlMoney(line.sale_fee);
-  let net = null;
-  if (lineTotal != null && fee != null) net = lineTotal - fee;
-  else if (lineTotal != null) net = lineTotal;
+  const { qty, unit, gross: lineTotal, fee, net } = extractOrderLinePricing(line);
 
   const extLineId =
     line.id != null
@@ -172,7 +244,7 @@ export function mapMlOrderItemToRow(userId, marketplace, salesOrderId, line, now
     quantity: qty,
     unit_price: unit,
     gross_amount: lineTotal,
-    fee_amount: fee,
+    fee_amount: fee ?? null,
     shipping_share_amount: parseMlMoney(line.shipping_cost_share),
     tax_amount: parseMlMoney(line.taxes?.[0]?.amount ?? line.tax_amount),
     net_amount: net,
@@ -190,6 +262,8 @@ export function mapMlOrderItemToRow(userId, marketplace, salesOrderId, line, now
  */
 export async function persistMercadoLibreOrder(supabase, userId, order, opts = {}) {
   const log = opts.log || (() => {});
+  /** @type {{ remaining: number } | null | undefined} */
+  const pricingDebug = opts.pricingDebug;
   const marketplace = opts.marketplace || ML_MARKETPLACE_SLUG;
   const nowIso = new Date().toISOString();
 
@@ -244,6 +318,23 @@ export async function persistMercadoLibreOrder(supabase, userId, order, opts = {
   const lines = Array.isArray(order.order_items) ? order.order_items : [];
   if (lines.length > 0) {
     const rows = lines.map((line) => mapMlOrderItemToRow(userId, marketplace, salesOrderId, line, nowIso));
+
+    if (pricingDebug && pricingDebug.remaining > 0) {
+      console.log("[ml/sync-sales] pricing_debug_sample", {
+        external_order_id: extPreview,
+        lines: rows.map((r) => ({
+          external_listing_id: r.external_listing_id,
+          quantity: r.quantity,
+          unit_price: r.unit_price,
+          gross_amount: r.gross_amount,
+          fee_amount: r.fee_amount,
+          tax_amount: r.tax_amount,
+          net_amount: r.net_amount,
+        })),
+      });
+      pricingDebug.remaining -= 1;
+    }
+
     const { error: insErr } = await supabase.from("sales_order_items").insert(rows);
     if (insErr) log("insert_order_items_failed", { insErr, salesOrderId });
     if (insErr) throw insErr;

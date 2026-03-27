@@ -1,6 +1,7 @@
 // ======================================================
 // GET /api/ml/listings
 // Lista anúncios importados do usuário autenticado (marketplace_listings).
+// Enriquece com Fase 3 (listing_sales_metrics) quando existir sync de vendas.
 // ======================================================
 
 import { requireAuthUser } from "./_helpers/requireAuthUser.js";
@@ -31,7 +32,46 @@ export default async function handleMlListingsList(req, res) {
       return res.status(500).json({ ok: false, error: "Erro ao listar anúncios" });
     }
 
-    return res.status(200).json({ ok: true, listings: data ?? [] });
+    const listings = data ?? [];
+
+    const marketplaces = [...new Set(listings.map((l) => l.marketplace).filter(Boolean))];
+    const { data: metricsRows, error: metErr } =
+      marketplaces.length === 0
+        ? { data: [], error: null }
+        : await supabase
+            .from("listing_sales_metrics")
+            .select(
+              "marketplace, external_listing_id, qty_sold_total, gross_revenue_total, net_revenue_total, orders_count, last_sale_at"
+            )
+            .eq("user_id", user.id)
+            .in("marketplace", marketplaces);
+
+    if (metErr) {
+      console.error("[ml/listings] metrics_query_error", metErr);
+      return res.status(500).json({ ok: false, error: "Erro ao carregar métricas de vendas" });
+    }
+
+    /** @type {Map<string, Record<string, unknown>>} */
+    const metricsByKey = new Map();
+    for (const m of metricsRows || []) {
+      const mk = `${m.marketplace}\t${m.external_listing_id}`;
+      metricsByKey.set(mk, m);
+    }
+
+    const merged = listings.map((l) => {
+      const mk = `${l.marketplace}\t${l.external_listing_id}`;
+      const met = metricsByKey.get(mk);
+      return {
+        ...l,
+        metrics_qty_sold: met?.qty_sold_total ?? null,
+        metrics_gross_revenue: met?.gross_revenue_total ?? null,
+        metrics_net_revenue: met?.net_revenue_total ?? null,
+        metrics_orders_count: met?.orders_count ?? null,
+        metrics_last_sale_at: met?.last_sale_at ?? null,
+      };
+    });
+
+    return res.status(200).json({ ok: true, listings: merged });
   } catch (err) {
     console.error("[ml/listings] fatal", err);
     return res.status(500).json({ ok: false, error: "Erro interno" });

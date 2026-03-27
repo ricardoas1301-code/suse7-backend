@@ -26,6 +26,12 @@ const BATCH_CONCURRENCY = Math.min(
   Math.max(1, parseInt(process.env.ML_SYNC_SALES_BATCH_CONCURRENCY || "4", 10) || 4)
 );
 
+/** Amostra de log por pedido (unit/gross/net). Defina ML_SALES_DEBUG_SAMPLE=5 no ambiente; default 0. */
+const PRICING_DEBUG_ORDERS = Math.min(
+  5,
+  Math.max(0, parseInt(process.env.ML_SALES_DEBUG_SAMPLE || "0", 10) || 0)
+);
+
 export default async function handleMlSalesSync(req, res) {
   if (req.method !== "POST") {
     return res.status(405).json({ ok: false, error: "Método não permitido" });
@@ -117,6 +123,8 @@ export default async function handleMlSalesSync(req, res) {
     const started = Date.now();
     let processed = 0;
 
+    const pricingDebug = PRICING_DEBUG_ORDERS > 0 ? { remaining: PRICING_DEBUG_ORDERS } : null;
+
     /**
      * Um pedido: GET /orders/:id → persistência isolada (falha não aborta os outros).
      */
@@ -128,6 +136,7 @@ export default async function handleMlSalesSync(req, res) {
         await persistMercadoLibreOrder(supabase, userId, detail, {
           marketplace: ML_MARKETPLACE_SLUG,
           log: (msg, extra) => console.log(logPrefix, msg, { orderId, ...extra }),
+          pricingDebug: pricingDebug || undefined,
         });
       } catch (err) {
         err.syncStage = syncStage;
