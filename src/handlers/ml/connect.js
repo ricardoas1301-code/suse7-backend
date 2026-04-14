@@ -1,0 +1,189 @@
+// ======================================================
+// /api/ml/connect — OAuth Mercado Livre (Vercel)
+// Inicia o OAuth (NÃO exige usuário logado)
+// Padrão Strategy/Adapter para futuros marketplaces
+// ======================================================
+
+import {
+  validateEnv,
+  generateSecureState,
+  buildMlAuthUrl,
+  persistOAuthState,
+  validateMlConnectOAuthEnv,
+  getMlOAuthRuntimeLabel,
+  classifyMlOAuthRedirect,
+  maskMlClientIdForLog,
+} from "./_helpers/oauthConnect.js";
+import { sendRedirect } from "../../infra/httpRedirect.js";
+
+// ----------------------------------------------
+// Env keys necessárias para ML connect
+// ----------------------------------------------
+const ML_CONNECT_ENV_KEYS = ["SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY"];
+
+// ----------------------------------------------
+// UUID v4 regex (simplificado)
+// ----------------------------------------------
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+// ----------------------------------------------
+// maskSupabaseUrl — Mascara URL mostrando só project ref (server-side log)
+// ----------------------------------------------
+function maskSupabaseUrl(url) {
+  if (!url?.trim()) return "(empty)";
+  try {
+    const m = url.match(/https:\/\/([a-z]+)\.supabase\.co/);
+    return m ? `https://${m[1]}.supabase.co` : "(unknown)";
+  } catch {
+    return "(parse-error)";
+  }
+}
+
+export async function handleMlConnect(req, res) {
+  const errorId = Date.now();
+  const path = "/api/ml/connect";
+  const userId = req.query?.user_id ?? null;
+
+  try {
+    // ------------------------------
+    // 1) Validar método e user_id
+    // ------------------------------
+    if (req.method !== "GET") {
+      return res.status(405).json({
+        ok: false,
+        error: "Method not allowed",
+        errorId,
+      });
+    }
+
+    if (!userId || typeof userId !== "string") {
+      return res.status(400).json({
+        ok: false,
+        error: "Missing query: user_id",
+        errorId,
+      });
+    }
+
+    const trimmedUserId = userId.trim();
+    if (!UUID_REGEX.test(trimmedUserId)) {
+      return res.status(400).json({
+        ok: false,
+        error: "Invalid user_id format (expected UUID)",
+        errorId,
+      });
+    }
+
+    // ------------------------------
+    // 2) Validar ENV vars necessárias
+    // ------------------------------
+    const envCheck = validateEnv(ML_CONNECT_ENV_KEYS);
+    if (!envCheck.ok) {
+      const msg = `Missing env: ${envCheck.missing.join(", ")}`;
+      console.error("[ml/connect]", {
+        errorId,
+        path,
+        user_id: trimmedUserId,
+        missingEnv: envCheck.missing,
+      });
+      return res.status(500).json({
+        ok: false,
+        error: msg,
+        errorId,
+      });
+    }
+
+    const mlOAuth = validateMlConnectOAuthEnv(req);
+    if (!mlOAuth.ok) {
+      console.error("[ml/connect] invalid_ml_oauth_env", { errorId, errors: mlOAuth.errors });
+      return res.status(500).json({
+        ok: false,
+        error: "Configuração OAuth do Mercado Livre inválida no servidor",
+        errorId,
+        details: mlOAuth.errors,
+      });
+    }
+
+    const cid = process.env.ML_CLIENT_ID?.trim() || "";
+    const ru = process.env.ML_REDIRECT_URI?.trim() || "";
+    const { oauthMode } = classifyMlOAuthRedirect(ru);
+    console.info("[ML_AUTH] oauth_config_final", {
+      clientIdPreview: maskMlClientIdForLog(cid),
+      redirectUri: ru,
+      env: getMlOAuthRuntimeLabel(),
+      host: req.headers?.host ?? null,
+      oauthMode,
+    });
+
+    // ------------------------------
+    // 3) Gerar state seguro
+    // ------------------------------
+    const state = generateSecureState();
+
+    // ------------------------------
+    // 4) Persistir state no Supabase (diagnóstico)
+    // ------------------------------
+    console.log("[ml/connect] SUPABASE_URL (masked):", maskSupabaseUrl(process.env.SUPABASE_URL));
+    console.log("[ml/connect] persistOAuthState:start", { state, user_id: trimmedUserId });
+
+    const persistResult = await persistOAuthState(
+      process.env.SUPABASE_URL,
+      process.env.SUPABASE_SERVICE_ROLE_KEY,
+      state,
+      trimmedUserId,
+      "ml"
+    );
+
+    console.log("[ml/connect] persistOAuthState:result", {
+      data: persistResult.data,
+      error: persistResult.error ? { message: persistResult.error.message, code: persistResult.error.code } : null,
+    });
+
+    if (persistResult.error) {
+      console.error("[ml/connect] persistOAuthState failed, NOT redirecting", persistResult.error);
+      return res.status(500).json({
+        ok: false,
+        error: "persistOAuthState failed",
+        errorId,
+        details: persistResult.error?.message || String(persistResult.error),
+      });
+    }
+
+    // ------------------------------
+    // 5) Montar URL OAuth e redirecionar 302
+    // ------------------------------
+    const authUrl = buildMlAuthUrl(
+      process.env.ML_CLIENT_ID,
+      process.env.ML_REDIRECT_URI,
+      state
+    );
+
+    console.info("[ML_AUTH] connect_redirect", {
+      state_len: state?.length ?? 0,
+      redirectUri: process.env.ML_REDIRECT_URI?.trim() ?? null,
+    });
+
+    sendRedirect(res, authUrl, 302);
+    return;
+  } catch (err) {
+    // ------------------------------
+    // Erro: log completo + mensagem diagnóstica
+    // ------------------------------
+    const envCheck = validateEnv(ML_CONNECT_ENV_KEYS);
+    console.error("[ml/connect] errorId:", errorId, {
+      path,
+      user_id: userId,
+      missingEnv: envCheck.missing,
+      stack: err?.stack,
+    });
+
+    const diagnosticMsg = envCheck.ok
+      ? err?.message || "Internal error"
+      : `Missing env: ${envCheck.missing.join(", ")}`;
+
+    return res.status(500).json({
+      ok: false,
+      error: diagnosticMsg,
+      errorId,
+    });
+  }
+}

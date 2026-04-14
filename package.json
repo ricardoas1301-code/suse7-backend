@@ -1,0 +1,20 @@
+{
+  "name": "suse7-backend",
+  "version": "1.0.0",
+  "type": "module",
+  "engines": {
+    "node": "24.x"
+  },
+  "scripts": {
+    "dev": "node ./src/dev-server.js",
+    "dev:vercel": "vercel dev --listen 3001",
+    "start": "node -e \"console.log('Use: npm run dev (local) or npm run dev:vercel')\""
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.87.1",
+    "@vercel/functions": "^3.0.0",
+    "decimal.js": "^10.6.0",
+    "dotenv": "^17.3.1",
+    "node-fetch": "^3.3.2"
+  }
+}
