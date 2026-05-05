@@ -65,6 +65,44 @@ function resolveRouterPath(rawUrl, baseUrl) {
   return path;
 }
 
+/**
+ * Match robusto para POST via __path (encoding/case) ou pathname direto.
+ * @param {string} rawUrl
+ */
+function rawUrlLooksLikeMarketplaceAccountSyncJob(rawUrl) {
+  const r = String(rawUrl || "");
+  if (
+    r.includes("__path=jobs%2Fmarketplace-account-sync") ||
+    r.includes("__path=jobs%2fmarketplace-account-sync") ||
+    r.includes("__path=jobs/marketplace-account-sync") ||
+    r.includes("&__path=jobs%2Fmarketplace-account-sync") ||
+    r.includes("&__path=jobs%2fmarketplace-account-sync") ||
+    r.includes("&__path=jobs/marketplace-account-sync") ||
+    r.includes("/jobs/marketplace-account-sync")
+  ) {
+    return true;
+  }
+  try {
+    const dec = decodeURIComponent(r);
+    return dec.includes("__path=jobs/marketplace-account-sync") || dec.includes("jobs/marketplace-account-sync");
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Path já normalizado pelo router (sem query).
+ * @param {string} pathname
+ */
+function isMarketplaceAccountSyncResolvedPath(pathname) {
+  const p = String(pathname || "").replace(/\/+$/, "") || "/";
+  return (
+    p === "/api/jobs/marketplace-account-sync" ||
+    p === "/jobs/marketplace-account-sync" ||
+    p.endsWith("/jobs/marketplace-account-sync")
+  );
+}
+
 // ==================================================
 // Router
 // ==================================================
@@ -86,8 +124,88 @@ export default async function handler(req, res) {
   try {
     const baseUrl = `http://${req.headers?.host || "localhost"}`;
     const rawUrl = req.url || "/api";
+
+    // ------------------------------
+    // HOTFIX — Job ML Webhook Events
+    // Bypass pelo rawUrl para evitar falha de match no router único Vercel.
+    // ------------------------------
+    if (
+      rawUrl.includes("__path=jobs%2Fml-webhook-events") ||
+      rawUrl.includes("__path=jobs/ml-webhook-events") ||
+      rawUrl.includes("/jobs/ml-webhook-events")
+    ) {
+      console.log("[S7 API Router] HOTFIX matched ML webhook events job", {
+        rawUrl,
+        method: req.method,
+        router_version: "ml-webhook-job-rawurl-hotfix-v1",
+      });
+
+      const mod = await import("../src/handlers/jobs/mlWebhookEventsJob.js");
+      return mod.handleJobsMlWebhookEvents(req, res);
+    }
+
+    // ------------------------------
+    // HOTFIX — Marketplace Account Sync Job (mesmo padrão do webhook ML)
+    // ------------------------------
+    if (rawUrlLooksLikeMarketplaceAccountSyncJob(rawUrl)) {
+      console.log("[S7 API Router] matched marketplace account sync job", {
+        path: "(rawUrl-hotfix)",
+        rawUrl,
+        method: req.method,
+        router_version: "marketplace-account-sync-rawurl-hotfix-v1",
+      });
+
+      const mod = await import("../src/handlers/jobs/marketplaceAccountSyncJob.js");
+      return mod.handleJobsMarketplaceAccountSync(req, res);
+    }
+
     const url = new URL(rawUrl, baseUrl);
     const path = resolveRouterPath(rawUrl, baseUrl);
+
+    console.log("[S7 API Router] resolved path", {
+      path,
+      rawUrl,
+      method: req.method,
+      router_version: "ml-webhook-job-top-route-v1",
+    });
+
+    if (path === "/api/debug/router-version") {
+      return res.status(200).json({
+        ok: true,
+        router_version: "ml-webhook-job-top-route-v1",
+        path,
+        rawUrl,
+        timestamp: new Date().toISOString(),
+      });
+    }
+
+    if (
+      path === "/api/jobs/ml-webhook-events" ||
+      path === "/jobs/ml-webhook-events" ||
+      path.endsWith("/jobs/ml-webhook-events")
+    ) {
+      console.log("[S7 API Router] matched ML webhook events job", {
+        path,
+        rawUrl,
+        method: req.method,
+        router_version: "ml-webhook-job-top-route-v1",
+      });
+
+      const mod = await import("../src/handlers/jobs/mlWebhookEventsJob.js");
+      return mod.handleJobsMlWebhookEvents(req, res);
+    }
+
+    if (isMarketplaceAccountSyncResolvedPath(path)) {
+      console.log("[S7 API Router] matched marketplace account sync job", {
+        path,
+        rawUrl,
+        method: req.method,
+        router_version: "marketplace-account-sync-route-v1",
+      });
+
+      const mod = await import("../src/handlers/jobs/marketplaceAccountSyncJob.js");
+      return mod.handleJobsMarketplaceAccountSync(req, res);
+    }
 
     req.query = Object.fromEntries(url.searchParams);
 
@@ -242,6 +360,43 @@ export default async function handler(req, res) {
     if (path.startsWith("/api/dev-center")) {
       const mod = await import("../src/handlers/devCenter/index.js");
       return mod.handleDevCenter(req, res, path);
+    }
+
+    if (/^\/api\/seller\/companies\/[^/]+$/.test(path) && req.method === "GET") {
+      const m = path.match(/^\/api\/seller\/companies\/([^/]+)$/);
+      req.params = { ...(req.params || {}), companyId: m?.[1] || null };
+      const mod = await import("../src/handlers/seller/companies.js");
+      return mod.default(req, res);
+    }
+    if (path === "/api/seller/companies" && (req.method === "GET" || req.method === "POST")) {
+      const mod = await import("../src/handlers/seller/companies.js");
+      return mod.default(req, res);
+    }
+    if (/^\/api\/seller\/companies\/[^/]+$/.test(path) && req.method === "PATCH") {
+      const m = path.match(/^\/api\/seller\/companies\/([^/]+)$/);
+      req.params = { ...(req.params || {}), companyId: m?.[1] || null };
+      const mod = await import("../src/handlers/seller/companies.js");
+      return mod.default(req, res);
+    }
+    if (path === "/api/marketplace/accounts" && req.method === "GET") {
+      const mod = await import("../src/handlers/marketplace/accounts.js");
+      return mod.default(req, res);
+    }
+    if (/^\/api\/marketplace\/accounts\/[^/]+\/sync-status$/.test(path) && req.method === "GET") {
+      const mod = await import("../src/handlers/marketplace/accountSyncStatus.js");
+      return mod.default(req, res, path);
+    }
+    if (/^\/api\/marketplace\/accounts\/[^/]+$/.test(path) && (req.method === "PATCH" || req.method === "DELETE")) {
+      const mod = await import("../src/handlers/marketplace/accountById.js");
+      return mod.default(req, res, path);
+    }
+
+    if (
+      path === "/api/competition/listings" ||
+      /^\/api\/competition\/listing\/[^/]+\/(overview|discover|select|insights)$/.test(path)
+    ) {
+      const mod = await import("../src/handlers/competition/index.js");
+      return mod.default(req, res, path);
     }
 
     // ------------------------------

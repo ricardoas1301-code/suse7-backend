@@ -1,0 +1,21 @@
+name: Marketplace Account Sync Cron
+
+on:
+  schedule:
+    - cron: "*/1 * * * *"
+  workflow_dispatch: {}
+
+jobs:
+  run-prod:
+    runs-on: ubuntu-latest
+    if: ${{ secrets.S7_PROD_MARKETPLACE_SYNC_JOB_URL != '' && secrets.S7_PROD_JOB_SECRET != '' }}
+    steps:
+      - name: Trigger production marketplace-account-sync job
+        run: |
+          set -euo pipefail
+          http_code=$(curl -sS -f -o /tmp/marketplace-sync-prod.json -w "%{http_code}" -X POST "${{ secrets.S7_PROD_MARKETPLACE_SYNC_JOB_URL }}" \
+            -H "Content-Type: application/json" \
+            -H "X-Job-Secret: ${{ secrets.S7_PROD_JOB_SECRET }}" \
+            -d '{"limit":5}')
+          echo "PROD HTTP status: ${http_code}"
+          cat /tmp/marketplace-sync-prod.json
