@@ -1,0 +1,18 @@
+name: ML Webhook Events Cron
+
+on:
+  schedule:
+    - cron: "*/1 * * * *" # roda a cada 1 minuto
+  workflow_dispatch:
+
+jobs:
+  run-ml-webhook-job:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Call ML Webhook Job API (PROD)
+        run: |
+          curl -X POST "${{ secrets.S7_PROD_WEBHOOK_JOB_URL }}" \
+            -H "Content-Type: application/json" \
+            -H "X-Job-Secret: ${{ secrets.S7_PROD_JOB_SECRET }}" \
+            -d '{"limit":20}'
