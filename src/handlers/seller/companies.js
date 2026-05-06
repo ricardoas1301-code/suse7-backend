@@ -1,5 +1,25 @@
 import { requireAuthUser } from "../ml/_helpers/requireAuthUser.js";
 
+function trimStr(v) {
+  if (v == null) return "";
+  return String(v).trim();
+}
+
+/** Schema real: company_name / trade_name — compat com payloads legados (`name`, etc.). */
+function pickCompanyLegalName(body) {
+  const b = body && typeof body === "object" ? body : {};
+  const candidates = [trimStr(b.company_name), trimStr(b.razao_social), trimStr(b.name), trimStr(b.nome_empresa)];
+  const hit = candidates.find((s) => s !== "");
+  return hit || null;
+}
+
+function pickDocumentCnpj14(body) {
+  const b = body && typeof body === "object" ? body : {};
+  const raw = b.document_cnpj ?? b.document ?? b.cnpj ?? b.cpf_cnpj ?? "";
+  const digits = String(raw).replace(/\D/g, "").slice(0, 14);
+  return digits.length === 14 ? digits : null;
+}
+
 function emptyCompanies() {
   return { ok: true, companies: [] };
 }
@@ -26,23 +46,27 @@ function shapeCompany(row) {
 }
 
 async function loadCompanies(supabase, userId) {
-  const variants = [
+  const selectVariants = [
     "id, user_id, company_name, trade_name, document_cnpj, is_primary, active, created_at, default_tax_rate, logo_url",
     "id, user_id, company_name, trade_name, document_cnpj, is_primary, active, created_at",
     "id, user_id, company_name, trade_name, document_cnpj, is_primary, active",
     "id, user_id, company_name, trade_name, document_cnpj",
   ];
-  for (const selectExpr of variants) {
-    const { data, error } = await supabase
-      .from("seller_companies")
-      .select(selectExpr)
-      .eq("user_id", userId)
-      .order("is_primary", { ascending: false })
-      .order("created_at", { ascending: false });
-    if (!error) return { data: Array.isArray(data) ? data : [], error: null };
-    const shapeIssue =
-      String(error?.code ?? "") === "42703" || String(error?.message ?? "").toLowerCase().includes("column");
-    if (!shapeIssue) return { data: [], error };
+  for (const selectExpr of selectVariants) {
+    const hasPrimaryCol = selectExpr.includes("is_primary");
+    const orderModes = hasPrimaryCol ? [{ primary: true }, { primary: false }] : [{ primary: false }];
+    for (const ord of orderModes) {
+      let q = supabase.from("seller_companies").select(selectExpr).eq("user_id", userId);
+      if (ord.primary) {
+        q = q.order("is_primary", { ascending: false });
+      }
+      q = q.order("created_at", { ascending: false });
+      const { data, error } = await q;
+      if (!error) return { data: Array.isArray(data) ? data : [], error: null };
+      const shapeIssue =
+        String(error?.code ?? "") === "42703" || String(error?.message ?? "").toLowerCase().includes("column");
+      if (!shapeIssue) return { data: [], error };
+    }
   }
   return { data: [], error: null };
 }
@@ -89,22 +113,52 @@ export default async function handleSellerCompanies(req, res) {
 
     if (req.method === "POST") {
       const body = req.body && typeof req.body === "object" ? req.body : {};
-      const companyName =
-        body.company_name != null && String(body.company_name).trim() !== "" ? String(body.company_name).trim() : null;
-      const documentCnpj =
-        body.document_cnpj != null ? String(body.document_cnpj).replace(/\D/g, "").slice(0, 14) : null;
+      const companyName = pickCompanyLegalName(body);
+      const documentCnpj = pickDocumentCnpj14(body);
       if (!companyName || !documentCnpj) {
-        return res.status(400).json({ ok: false, error: "company_name e document_cnpj são obrigatórios" });
+        return res.status(400).json({
+          ok: false,
+          error: "company_name (ou name legado) e document_cnpj (14 dígitos) são obrigatórios",
+        });
       }
+      const tradeRaw =
+        body.trade_name != null && String(body.trade_name).trim() !== "" ? String(body.trade_name).trim() : null;
       const payload = {
         user_id: user.id,
         company_name: companyName,
-        trade_name: body.trade_name != null ? String(body.trade_name).trim() || null : null,
+        trade_name: tradeRaw ?? companyName,
         document_cnpj: documentCnpj,
         active: body.active !== false,
       };
-      const { data, error } = await supabase.from("seller_companies").insert(payload).select("*").single();
+
+      const { count, error: countErr } = await supabase
+        .from("seller_companies")
+        .select("id", { count: "exact", head: true })
+        .eq("user_id", user.id);
+      if (!countErr && Number(count) === 0) {
+        payload.is_primary = body.is_primary !== false;
+      }
+
+      let { data, error } = await supabase.from("seller_companies").insert(payload).select("*").single();
+      if (
+        error &&
+        payload.is_primary != null &&
+        String(error?.message ?? "")
+          .toLowerCase()
+          .includes("is_primary")
+      ) {
+        delete payload.is_primary;
+        ({ data, error } = await supabase.from("seller_companies").insert(payload).select("*").single());
+      }
       if (error || !data) {
+        const dup =
+          String(error?.code ?? "") === "23505" ||
+          String(error?.message ?? "")
+            .toLowerCase()
+            .includes("duplicate");
+        if (dup) {
+          return res.status(409).json({ ok: false, error: "Empresa já cadastrada para este CNPJ" });
+        }
         console.error("[Suse7][API][seller-companies] failed", {
           message: error?.message,
           code: error?.code,
@@ -116,7 +170,10 @@ export default async function handleSellerCompanies(req, res) {
     }
 
     if (req.method === "PATCH" && companyId) {
-      const body = req.body && typeof req.body === "object" ? req.body : {};
+      let body = req.body && typeof req.body === "object" ? req.body : {};
+      if (body.name != null && trimStr(body.name) !== "" && !Object.prototype.hasOwnProperty.call(body, "company_name")) {
+        body = { ...body, company_name: trimStr(body.name) };
+      }
       const patch = {};
       const fields = [
         "company_name",
