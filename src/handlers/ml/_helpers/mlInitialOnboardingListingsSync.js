@@ -170,6 +170,8 @@ export async function runMlInitialListingsSyncJobTurn(supabase, job, runtime) {
         syncReason: "initial_onboarding",
         skipProductLink: true,
         marketplaceAccountId: accountId,
+        sellerCompanyId:
+          accountRow.seller_company_id != null ? String(accountRow.seller_company_id) : null,
       });
     } catch (err) {
       /** @type {Error & { syncStage?: string }} */

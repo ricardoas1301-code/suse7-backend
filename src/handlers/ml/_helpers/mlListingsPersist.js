@@ -178,7 +178,13 @@ function extractShippingMirror(item) {
 /**
  * Monta linha principal marketplace_listings a partir do JSON do item ML (GET /items/:id).
  */
-export function mapMlItemToListingRow(userId, item, nowIso) {
+export function mapMlItemToListingRow(
+  userId,
+  item,
+  nowIso,
+  marketplaceAccountId = null,
+  sellerCompanyId = null
+) {
   const id = item?.id != null ? String(item.id) : null;
   if (!id) throw new Error("Item ML sem id");
 
@@ -189,6 +195,8 @@ export function mapMlItemToListingRow(userId, item, nowIso) {
   return {
     user_id: userId,
     marketplace: ML_MARKETPLACE_SLUG,
+    marketplace_account_id: marketplaceAccountId,
+    seller_company_id: sellerCompanyId,
     external_listing_id: id,
     site_id: item.site_id != null ? String(item.site_id) : null,
     title: item.title ?? null,
@@ -329,6 +337,14 @@ function mapDescriptionRows(description) {
 export async function persistMercadoLibreListing(supabase, userId, item, description, opts = {}) {
   const log = opts.log || (() => {});
   const nowIso = new Date().toISOString();
+  const marketplaceAccountId =
+    opts.marketplaceAccountId != null && String(opts.marketplaceAccountId).trim() !== ""
+      ? String(opts.marketplaceAccountId).trim()
+      : null;
+  const sellerCompanyId =
+    opts.sellerCompanyId != null && String(opts.sellerCompanyId).trim() !== ""
+      ? String(opts.sellerCompanyId).trim()
+      : null;
 
   let workingItem =
     item && typeof item === "object"
@@ -424,7 +440,13 @@ export async function persistMercadoLibreListing(supabase, userId, item, descrip
     }
   }
 
-  const listingRow = mapMlItemToListingRow(userId, workingItem, nowIso);
+  const listingRow = mapMlItemToListingRow(
+    userId,
+    workingItem,
+    nowIso,
+    marketplaceAccountId,
+    sellerCompanyId
+  );
 
   const { data: upserted, error: upErr } = await supabase
     .from("marketplace_listings")

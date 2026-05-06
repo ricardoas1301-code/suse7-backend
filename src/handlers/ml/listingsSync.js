@@ -134,7 +134,37 @@ export default async function handleMlListingsSync(req, res) {
       });
     }
 
-    const sellerId = String(tokRow.ml_user_id);
+    const requestedAccountId =
+      body.marketplace_account_id != null && String(body.marketplace_account_id).trim() !== ""
+        ? String(body.marketplace_account_id).trim()
+        : null;
+
+    let sellerId = String(tokRow.ml_user_id);
+    let marketplaceAccountId = requestedAccountId;
+    let sellerCompanyId = null;
+    if (requestedAccountId) {
+      const { data: acc, error: accErr } = await supabase
+        .from("marketplace_accounts")
+        .select("id, external_seller_id, seller_company_id, status, marketplace")
+        .eq("id", requestedAccountId)
+        .eq("user_id", userId)
+        .maybeSingle();
+      if (accErr) {
+        console.error(logPrefix, "account_lookup_failed", {
+          message: accErr?.message,
+          code: accErr?.code,
+        });
+      } else if (acc?.id && String(acc.status || "").toLowerCase() === "active") {
+        marketplaceAccountId = String(acc.id);
+        sellerCompanyId =
+          acc.seller_company_id != null && String(acc.seller_company_id).trim() !== ""
+            ? String(acc.seller_company_id).trim()
+            : null;
+        if (acc.external_seller_id != null && String(acc.external_seller_id).trim() !== "") {
+          sellerId = String(acc.external_seller_id).trim();
+        }
+      }
+    }
     console.log(logPrefix, "start", { userId, sellerId, maxItems: MAX_ITEMS, batch: BATCH_CONCURRENCY });
 
     resetHealthSyncMetrics();
@@ -237,6 +267,8 @@ export default async function handleMlListingsSync(req, res) {
           accessToken,
           syncReason: "manual_import",
           skipProductLink: true,
+          marketplaceAccountId,
+          sellerCompanyId,
           trace: productLinkTrace ?? undefined,
         });
       } catch (err) {
