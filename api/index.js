@@ -307,6 +307,14 @@ export default async function handler(req, res) {
       const mod = await import("../src/handlers/ml/salesSummary.js");
       return await mod.default(req, res);
     }
+    if (path === "/api/sales" && req.method === "GET") {
+      const mod = await import("../src/handlers/sales/list.js");
+      return mod.default(req, res);
+    }
+    if (path === "/api/sales/summary" && req.method === "GET") {
+      const mod = await import("../src/handlers/sales/summary.js");
+      return mod.default(req, res);
+    }
     if (path === "/api/pricing/simulate") {
       const mod = await import("../src/handlers/pricing/simulate.js");
       return mod.default(req, res);

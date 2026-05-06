@@ -33,6 +33,18 @@ export default async function handleMlListingsList(req, res) {
 
   const auth = await requireAuthUser(req);
   if (auth.error) {
+    if (auth.error.code === "CONFIG_ERROR") {
+      return res.status(200).json({
+        ok: true,
+        listing_grid_contract_version: LISTING_GRID_MONEY_CONTRACT_VERSION,
+        pricing_protocol: "suse7-pricing-v1",
+        listings: [],
+        items: [],
+        page: 1,
+        page_size: 50,
+        total: 0,
+      });
+    }
     return res.status(auth.error.status).json({ ok: false, error: auth.error.message });
   }
 
@@ -48,8 +60,21 @@ export default async function handleMlListingsList(req, res) {
       .order("api_last_seen_at", { ascending: false });
 
     if (error) {
-      console.error("[ml/listings] query_error", error);
-      return res.status(500).json({ ok: false, error: "Erro ao listar anúncios" });
+      console.error("[Suse7][API][ml-listings] failed", {
+        message: error?.message,
+        code: error?.code,
+        details: error?.details,
+      });
+      return res.status(200).json({
+        ok: true,
+        listing_grid_contract_version: LISTING_GRID_MONEY_CONTRACT_VERSION,
+        pricing_protocol: "suse7-pricing-v1",
+        listings: [],
+        items: [],
+        page: 1,
+        page_size: 50,
+        total: 0,
+      });
     }
 
     const listings = (data ?? []).map((row) => {
@@ -95,8 +120,11 @@ export default async function handleMlListingsList(req, res) {
     const healthLoad = await fetchAllListingHealthRowsCompat(supabase, user.id);
     const healthRows = healthLoad.data;
     if (healthRows == null) {
-      console.error("[ml/listings] health_query_error", healthLoad.error ?? "unknown");
-      return res.status(500).json({ ok: false, error: "Erro ao carregar saúde dos anúncios" });
+      console.error("[Suse7][API][ml-listings] failed", {
+        message: healthLoad.error?.message ?? "health query failed",
+        code: healthLoad.error?.code,
+        details: healthLoad.error?.details,
+      });
     }
 
     /** @type {Map<string, Record<string, unknown>>} */
@@ -135,8 +163,11 @@ export default async function handleMlListingsList(req, res) {
       .eq("user_id", user.id);
 
     if (metErr) {
-      console.error("[ml/listings] metrics_query_error", metErr);
-      return res.status(500).json({ ok: false, error: "Erro ao carregar métricas de vendas" });
+      console.error("[Suse7][API][ml-listings] failed", {
+        message: metErr?.message,
+        code: metErr?.code,
+        details: metErr?.details,
+      });
     }
 
     /** @type {Map<string, Record<string, unknown>>} */
@@ -289,9 +320,26 @@ export default async function handleMlListingsList(req, res) {
        * Totais importados: `legacy_imported_orders_metrics` / gross_* (agregado, não unitário).
        */
       listings: listingsOut,
+      items: listingsOut,
+      page: 1,
+      page_size: 50,
+      total: listingsOut.length,
     });
   } catch (err) {
-    console.error("[ml/listings] fatal", err);
-    return res.status(500).json({ ok: false, error: "Erro interno" });
+    console.error("[Suse7][API][ml-listings] failed", {
+      message: err?.message,
+      code: err?.code,
+      details: err?.details,
+    });
+    return res.status(200).json({
+      ok: true,
+      listing_grid_contract_version: LISTING_GRID_MONEY_CONTRACT_VERSION,
+      pricing_protocol: "suse7-pricing-v1",
+      listings: [],
+      items: [],
+      page: 1,
+      page_size: 50,
+      total: 0,
+    });
   }
 }

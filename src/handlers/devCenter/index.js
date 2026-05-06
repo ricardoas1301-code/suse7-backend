@@ -68,13 +68,24 @@ function normalizePriority(v) {
  */
 export async function handleDevCenter(req, res, path) {
   const traceId = getTraceId(req);
+  const isBootstrap = path === "/api/dev-center/bootstrap" && req.method === "GET";
+  const bootstrapFallback = () =>
+    ok(res, {
+      ok: true,
+      enabled: false,
+      allowed: false,
+      missions: [],
+      currentMission: null,
+    });
 
   if (!config.supabaseUrl?.trim() || !config.supabaseServiceRoleKey?.trim()) {
+    if (isBootstrap) return bootstrapFallback();
     return fail(res, { code: "CONFIG_ERROR", message: "Configuração do banco indisponível" }, 503, traceId);
   }
 
   const authHeader = req.headers.authorization;
   if (!authHeader?.startsWith("Bearer ")) {
+    if (isBootstrap) return bootstrapFallback();
     return fail(res, { code: "UNAUTHORIZED", message: "Token não informado" }, 401, traceId);
   }
   const token = authHeader.slice(7);
@@ -88,6 +99,7 @@ export async function handleDevCenter(req, res, path) {
     error: authError,
   } = await supabase.auth.getUser(token);
   if (authError || !user?.id) {
+    if (isBootstrap) return bootstrapFallback();
     return fail(res, { code: "UNAUTHORIZED", message: "Token inválido" }, 401, traceId);
   }
 
@@ -98,9 +110,12 @@ export async function handleDevCenter(req, res, path) {
     if (!allowed) {
       return ok(res, {
         ok: true,
+        enabled: false,
         allowed: false,
         user_id: user.id,
         email: userEmail || null,
+        missions: [],
+        currentMission: null,
       });
     }
     const { data: missions, error: mErr } = await supabase
@@ -110,15 +125,21 @@ export async function handleDevCenter(req, res, path) {
       )
       .order("updated_at", { ascending: false });
     if (mErr) {
-      console.error("[dev-center] bootstrap list", mErr);
-      return fail(res, { code: "DB_ERROR", message: "Erro ao listar missões" }, 500, traceId);
+      console.error("[Suse7][API][dev-center-bootstrap] failed", {
+        message: mErr?.message,
+        code: mErr?.code,
+        details: mErr?.details,
+      });
+      return bootstrapFallback();
     }
     return ok(res, {
       ok: true,
+      enabled: true,
       allowed: true,
       user_id: user.id,
       email: userEmail || null,
       missions: missions ?? [],
+      currentMission: null,
     });
   }
 

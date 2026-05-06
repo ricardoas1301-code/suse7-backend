@@ -9,6 +9,17 @@ import { ok, fail, getTraceId } from "../../infra/http.js";
 
 export async function handleNotifications(req, res) {
   const traceId = getTraceId(req);
+  const emptyPage = {
+    ok: true,
+    items: [],
+    notifications: [],
+    unread_count: 0,
+    critical_count: 0,
+    page: 1,
+    page_size: 20,
+    total: 0,
+    pagination: { page: 1, page_size: 20, total: 0 },
+  };
 
   if (req.method !== "GET") {
     return fail(res, { code: "METHOD_NOT_ALLOWED", message: "Método não permitido" }, 405, traceId);
@@ -17,8 +28,10 @@ export async function handleNotifications(req, res) {
   try {
     // Valida config Supabase (evita 500 por env vars ausentes)
     if (!config.supabaseUrl?.trim() || !config.supabaseServiceRoleKey?.trim()) {
-      console.error("[notifications] traceId:", traceId, "SUPABASE_URL ou SUPABASE_SERVICE_ROLE_KEY ausente");
-      return fail(res, { code: "CONFIG_ERROR", message: "Configuração do banco indisponível" }, 503, traceId);
+      console.error("[Suse7][API][notifications] failed", {
+        message: "SUPABASE_URL ou SUPABASE_SERVICE_ROLE_KEY ausente",
+      });
+      return ok(res, emptyPage);
     }
 
     const authHeader = req.headers.authorization;
@@ -38,17 +51,23 @@ export async function handleNotifications(req, res) {
 
     // Parse query da URL (não depende de req.query)
     const url = new URL(req.url || "", `http://${req.headers?.host || "localhost"}`);
-    const filterRead = url.searchParams.get("unread");  // unread=true => read_at IS NULL
-    const limit = Math.min(Math.max(Number(url.searchParams.get("limit") || 50) || 50, 1), 200);
+    const filterRead = url.searchParams.get("unread"); // unread=true => read_at IS NULL
+    const page = Math.max(1, Number.parseInt(url.searchParams.get("page") || "1", 10) || 1);
+    const pageSize = Math.min(
+      200,
+      Math.max(1, Number.parseInt(url.searchParams.get("page_size") || url.searchParams.get("limit") || "20", 10) || 20)
+    );
+    const from = (page - 1) * pageSize;
+    const to = from + pageSize - 1;
 
     // Colunas mínimas (evitar 42703): id, user_id, type, read_at, created_at
     // payload, product_id etc. podem não existir em prod
     let q = supabase
       .from("notifications")
-      .select("id, user_id, type, read_at, created_at")
+      .select("id, user_id, type, read_at, created_at", { count: "exact" })
       .eq("user_id", user.id)
       .order("created_at", { ascending: false })
-      .limit(limit);
+      .range(from, to);
 
     if (filterRead === "true") {
       q = q.is("read_at", null);
@@ -59,35 +78,44 @@ export async function handleNotifications(req, res) {
     console.log("[notifications] traceId:", traceId, "query params:", {
       userId: user.id,
       filterRead,
-      limit,
+      page,
+      pageSize,
     });
 
-    const { data, error } = await q;
+    const { data, error, count } = await q;
 
     if (error) {
-      console.error("[notifications] traceId:", traceId, "Supabase error:", error?.code, error?.message, error?.details, error?.hint);
-      return res.status(400).json({
-        ok: false,
-        code: error?.code || "DB_ERROR",
-        message: error?.message || "Erro ao listar notificações",
+      console.error("[Suse7][API][notifications] failed", {
+        message: error?.message,
+        code: error?.code,
         details: error?.details,
-        hint: error?.hint,
-        traceId,
       });
+      return ok(res, { ...emptyPage, page, page_size: pageSize, pagination: { page, page_size: pageSize, total: 0 } });
     }
 
-    return ok(res, { notifications: data || [] });
-  } catch (err) {
-    console.error("[notifications] traceId:", traceId, "fail:", err?.message, err?.stack);
-    return fail(
-      res,
-      {
-        code: "INTERNAL_ERROR",
-        message: "Erro interno",
-        details: process.env.NODE_ENV === "development" ? String(err?.message) : undefined,
+    const rows = Array.isArray(data) ? data : [];
+    const unreadCount = rows.filter((n) => n?.read_at == null).length;
+    return ok(res, {
+      ok: true,
+      items: rows,
+      notifications: rows,
+      unread_count: unreadCount,
+      critical_count: 0,
+      page,
+      page_size: pageSize,
+      total: Number.isFinite(count) ? count : rows.length,
+      pagination: {
+        page,
+        page_size: pageSize,
+        total: Number.isFinite(count) ? count : rows.length,
       },
-      500,
-      traceId
-    );
+    });
+  } catch (err) {
+    console.error("[Suse7][API][notifications] failed", {
+      message: err?.message,
+      code: err?.code,
+      details: err?.details,
+    });
+    return ok(res, emptyPage);
   }
 }

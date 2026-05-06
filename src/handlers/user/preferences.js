@@ -25,8 +25,10 @@ export async function handleUserPreferences(req, res) {
   try {
     // Valida config Supabase (evita 500 por env vars ausentes; mesmo critério de notifications)
     if (!config.supabaseUrl?.trim() || !config.supabaseServiceRoleKey?.trim()) {
-      console.error("[user/preferences] traceId:", traceId, "SUPABASE_URL ou SUPABASE_SERVICE_ROLE_KEY ausente");
-      return fail(res, { code: "CONFIG_ERROR", message: "Configuração do banco indisponível" }, 503, traceId);
+      console.error("[Suse7][API][user-preferences] failed", {
+        message: "SUPABASE_URL ou SUPABASE_SERVICE_ROLE_KEY ausente",
+      });
+      return ok(res, { ok: true, preferences: {} });
     }
 
     const authHeader = req.headers.authorization;
@@ -45,16 +47,28 @@ export async function handleUserPreferences(req, res) {
     }
 
     if (req.method === "GET") {
-      const prefix = req.query?.prefix || null;
+      const rawPrefix = req.query?.prefix;
+      const prefixInput = rawPrefix != null ? String(rawPrefix).trim() : "";
+      const sanitizedPrefix = prefixInput.replace(/\s+/g, "").replace(/[^a-zA-Z0-9_.-]/g, "");
+      const prefix = sanitizedPrefix || null;
 
       const { data, error } = await getPreferences(supabase, user.id, prefix);
 
       if (error) {
-        console.error("[user/preferences] GET error:", error);
-        return fail(res, { code: "DB_ERROR", message: "Erro ao listar preferências" }, 500, traceId);
+        console.error("[Suse7][API][user-preferences] failed", {
+          message: error?.message,
+          code: error?.code,
+          details: error?.details,
+        });
+        return ok(res, { ok: true, preferences: {} });
       }
-
-      return ok(res, { preferences: data });
+      const rows = Array.isArray(data) ? data : [];
+      const map = {};
+      for (const row of rows) {
+        if (row?.key == null || String(row.key).trim() === "") continue;
+        map[String(row.key)] = row?.value ?? {};
+      }
+      return ok(res, { ok: true, preferences: map, preference_rows: rows });
     }
 
     if (req.method === "PUT") {
@@ -157,16 +171,11 @@ export async function handleUserPreferences(req, res) {
       return ok(res, { ok: true, message: "Preferência removida" });
     }
   } catch (err) {
-    console.error("[user/preferences] fail", err);
-    return fail(
-      res,
-      {
-        code: "INTERNAL_ERROR",
-        message: "Erro interno",
-        details: process.env.NODE_ENV === "development" ? String(err?.message) : undefined,
-      },
-      500,
-      traceId
-    );
+    console.error("[Suse7][API][user-preferences] failed", {
+      message: err?.message,
+      code: err?.code,
+      details: err?.details,
+    });
+    return ok(res, { ok: true, preferences: {} });
   }
 }
