@@ -49,7 +49,7 @@ export async function runMlInitialProductsSyncJobTurn(supabase, job, runtime) {
 
   const { data: accountRow, error: accErr } = await supabase
     .from("marketplace_accounts")
-    .select("id,status")
+    .select("id,status,seller_company_id")
     .eq("id", accountId)
     .maybeSingle();
 
@@ -63,6 +63,10 @@ export async function runMlInitialProductsSyncJobTurn(supabase, job, runtime) {
     );
     return { stopped: true };
   }
+  const sellerCompanyId =
+    accountRow?.seller_company_id != null && String(accountRow.seller_company_id).trim() !== ""
+      ? String(accountRow.seller_company_id).trim()
+      : null;
 
   let cursor = parseProductsCursor(
     jRow.last_cursor != null && typeof jRow.last_cursor === "string" ? jRow.last_cursor : null
@@ -80,6 +84,22 @@ export async function runMlInitialProductsSyncJobTurn(supabase, job, runtime) {
   let aggLinkedExisting = Number(metaBase.listings_linked_existing_product_total ?? 0) || 0;
   let aggLinkedNew = Number(metaBase.listings_linked_new_product_total ?? 0) || 0;
   let aggSkippedNoSku = Number(metaBase.listings_skipped_no_sku_total ?? 0) || 0;
+  let aggWarnings = Array.isArray(metaBase.warnings_sample)
+    ? /** @type {string[]} */ (metaBase.warnings_sample.slice(-30))
+    : [];
+
+  function stepResult() {
+    return {
+      ok: true,
+      step: "products",
+      processed: scannedTotal,
+      created: aggProductsCreated,
+      updated: 0,
+      linked: aggLinkedExisting + aggLinkedNew,
+      without_sku: aggSkippedNoSku,
+      warnings: aggWarnings.slice(-20),
+    };
+  }
 
   if (progressTotal == null) {
     const { count, error: cErr } = await supabase
@@ -87,6 +107,7 @@ export async function runMlInitialProductsSyncJobTurn(supabase, job, runtime) {
       .select("id", { count: "exact", head: true })
       .eq("user_id", userId)
       .eq("marketplace_account_id", accountId)
+      .eq("seller_company_id", sellerCompanyId)
       .in("marketplace", ML_MARKETPLACE_LISTING_ALIASES)
       .is("product_id", null);
     if (cErr) {
@@ -124,6 +145,7 @@ export async function runMlInitialProductsSyncJobTurn(supabase, job, runtime) {
       metadata: {
         ...metaBase,
         note: "nenhum_anúncio_sem_produto_nesta_conta",
+        step_result: stepResult(),
       },
     });
     console.info("[ML_INITIAL_PRODUCTS_SYNC_DONE]", {
@@ -140,6 +162,7 @@ export async function runMlInitialProductsSyncJobTurn(supabase, job, runtime) {
       .select("id, raw_json")
       .eq("user_id", userId)
       .eq("marketplace_account_id", accountId)
+      .eq("seller_company_id", sellerCompanyId)
       .in("marketplace", ML_MARKETPLACE_LISTING_ALIASES)
       .is("product_id", null)
       .order("id", { ascending: true })
@@ -189,6 +212,8 @@ export async function runMlInitialProductsSyncJobTurn(supabase, job, runtime) {
           listings_linked_existing_product_total: aggLinkedExisting,
           listings_linked_new_product_total: aggLinkedNew,
           listings_skipped_no_sku_total: aggSkippedNoSku,
+          warnings_sample: aggWarnings.slice(-30),
+          step_result: stepResult(),
         },
       });
       console.info("[ML_INITIAL_PRODUCTS_SYNC_DONE]", {
@@ -211,11 +236,13 @@ export async function runMlInitialProductsSyncJobTurn(supabase, job, runtime) {
       const raw = r.raw_json;
       if (!raw || typeof raw !== "object") {
         pageSkippedNoSku += 1;
+        aggWarnings.push(`listing:${String(r.id)}:raw_json_missing`);
         continue;
       }
       const item = /** @type {Record<string, unknown>} */ (raw);
       if (item.id == null) {
         pageSkippedNoSku += 1;
+        aggWarnings.push(`listing:${String(r.id)}:external_item_id_missing`);
         continue;
       }
       if (!extractSellerSku(item)) {
@@ -273,6 +300,8 @@ export async function runMlInitialProductsSyncJobTurn(supabase, job, runtime) {
         listings_linked_existing_product_total: aggLinkedExisting,
         listings_linked_new_product_total: aggLinkedNew,
         listings_skipped_no_sku_total: aggSkippedNoSku,
+        warnings_sample: aggWarnings.slice(-30),
+        step_result: stepResult(),
         last_batch_entries: entries.length,
         last_batch_rows: list.length,
       },
