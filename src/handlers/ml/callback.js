@@ -163,8 +163,42 @@ async function resolveSellerCompanyIdForMlCallback(supabase, userId, candidateFr
   return null;
 }
 
+/** Schema DEV legado: coluna ausente / shape PostgREST (não confundir com violação de negócio). */
+function isPostgrestSchemaShapeError(error) {
+  const c = String(error?.code ?? "");
+  const m = String(error?.message ?? "").toLowerCase();
+  return c === "42703" || m.includes("column") || m.includes("does not exist");
+}
+
+/**
+ * Atualiza colunas opcionais após insert mínimo (ignora erro de coluna ausente).
+ * @param {import("@supabase/supabase-js").SupabaseClient} supabase
+ */
+async function enrichMarketplaceAccountRow(supabase, accountId, nick, tokenExpiresAt) {
+  const nowIso = new Date().toISOString();
+  /** @type {Record<string, unknown>[]} */
+  const attempts = [
+    { ml_nickname: nick, account_alias: nick, token_expires_at: tokenExpiresAt, updated_at: nowIso },
+    { token_expires_at: tokenExpiresAt, updated_at: nowIso },
+    { ml_nickname: nick, account_alias: nick, updated_at: nowIso },
+  ];
+  for (const patch of attempts) {
+    const clean = Object.fromEntries(
+      Object.entries(patch).filter(([, v]) => v != null && v !== "")
+    );
+    if (Object.keys(clean).length === 0) continue;
+    const { error } = await supabase.from("marketplace_accounts").update(clean).eq("id", accountId);
+    if (!error) return;
+    if (!isPostgrestSchemaShapeError(error)) {
+      logSupabasePersistError("marketplace_account_enrich", error);
+      return;
+    }
+  }
+}
+
 /**
  * Upsert idempotente: (user_id + marketplace + external_seller_id). Preserva seller_company_id existente.
+ * Fallback de colunas para DEV com schema atrás do código.
  * @param {import("@supabase/supabase-js").SupabaseClient} supabase
  */
 async function upsertMercadoLivreMarketplaceAccount(supabase, ctx) {
@@ -220,43 +254,94 @@ async function upsertMercadoLivreMarketplaceAccount(supabase, ctx) {
     if (sellerCo) {
       patch.seller_company_id = sellerCo;
     }
-    const { error: upErr } = await supabase.from("marketplace_accounts").update(patch).eq("id", existing.id);
+
+    let { error: upErr } = await supabase.from("marketplace_accounts").update(patch).eq("id", existing.id);
+
+    if (upErr && isPostgrestSchemaShapeError(upErr)) {
+      const lean = { status: "active", updated_at: nowIso };
+      if (sellerCo) lean.seller_company_id = sellerCo;
+      const r2 = await supabase.from("marketplace_accounts").update(lean).eq("id", existing.id);
+      upErr = r2.error;
+    }
 
     if (upErr) {
       logSupabasePersistError("marketplace_account_update", upErr);
       return { ok: false, error: upErr, accountId: null };
     }
+    await enrichMarketplaceAccountRow(supabase, String(existing.id), nick, tokenExpiresAt);
     console.log("[ml/callback] marketplace_account_upsert_ok", { via: "update", id: existing.id });
     return { ok: true, accountId: String(existing.id), created: false };
   }
 
-  const insertRow = {
-    user_id: userId,
-    marketplace,
-    external_seller_id: ext,
-    seller_company_id: sellerCompanyIdCandidate ?? null,
-    ml_nickname: nick,
-    account_alias: nick,
-    status: "active",
-    token_expires_at: tokenExpiresAt,
-    updated_at: nowIso,
-  };
+  /** @type {Record<string, unknown>[]} */
+  const insertVariants = [
+    {
+      user_id: userId,
+      marketplace,
+      external_seller_id: ext,
+      seller_company_id: sellerCompanyIdCandidate ?? null,
+      ml_nickname: nick,
+      account_alias: nick,
+      status: "active",
+      token_expires_at: tokenExpiresAt,
+      updated_at: nowIso,
+    },
+    {
+      user_id: userId,
+      marketplace,
+      external_seller_id: ext,
+      seller_company_id: sellerCompanyIdCandidate ?? null,
+      status: "active",
+      updated_at: nowIso,
+    },
+    {
+      user_id: userId,
+      marketplace,
+      external_seller_id: ext,
+      status: "active",
+      updated_at: nowIso,
+    },
+  ];
 
-  const { data: inserted, error: insErr } = await supabase
-    .from("marketplace_accounts")
-    .insert(insertRow)
-    .select("id")
-    .single();
+  let lastInsErr = null;
+  for (let vi = 0; vi < insertVariants.length; vi++) {
+    const insertRow = insertVariants[vi];
+    const { data: inserted, error: insErr } = await supabase
+      .from("marketplace_accounts")
+      .insert(insertRow)
+      .select("id")
+      .single();
 
-  if (insErr) {
-    logSupabasePersistError("marketplace_account_insert", insErr);
-    return { ok: false, error: insErr, accountId: null };
+    if (!insErr && inserted?.id) {
+      await enrichMarketplaceAccountRow(supabase, String(inserted.id), nick, tokenExpiresAt);
+      console.log("[ml/callback] marketplace_account_upsert_ok", {
+        via: "insert",
+        id: inserted.id,
+        insert_variant: vi,
+      });
+      return { ok: true, accountId: String(inserted.id), created: true };
+    }
+
+    lastInsErr = insErr;
+    if (insErr && isPostgrestSchemaShapeError(insErr)) {
+      console.warn("[ml/callback] marketplace_account_insert_try_next_variant", {
+        variant: vi,
+        message: insErr.message,
+        code: insErr.code,
+      });
+      continue;
+    }
+    if (insErr) {
+      logSupabasePersistError("marketplace_account_insert", insErr);
+      return { ok: false, error: insErr, accountId: null };
+    }
   }
-  if (!inserted?.id) {
-    return { ok: false, error: new Error("marketplace_account_insert_no_id"), accountId: null };
+
+  if (lastInsErr) {
+    logSupabasePersistError("marketplace_account_insert_all_variants", lastInsErr);
+    return { ok: false, error: lastInsErr, accountId: null };
   }
-  console.log("[ml/callback] marketplace_account_upsert_ok", { via: "insert", id: inserted.id });
-  return { ok: true, accountId: String(inserted.id), created: true };
+  return { ok: false, error: new Error("marketplace_account_insert_no_id"), accountId: null };
 }
 
 /**

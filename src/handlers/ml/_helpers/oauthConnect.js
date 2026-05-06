@@ -295,9 +295,33 @@ export async function persistOAuthState(
     row.seller_company_id = co;
   }
 
-  const { data, error } = await supabase.from("oauth_states").insert(row);
+  let { data, error } = await supabase.from("oauth_states").insert(row);
+
+  if (error && co && isPostgrestUnknownColumnError(error)) {
+    console.warn("[oauth] persistOAuthState_retry_without_seller_company_id", {
+      message: error.message,
+      code: error.code,
+    });
+    const { data: d2, error: e2 } = await supabase
+      .from("oauth_states")
+      .insert({
+        state,
+        user_id: userId,
+        marketplace,
+        expires_at: expiresAt,
+      });
+    data = d2;
+    error = e2;
+  }
 
   return { data, error };
+}
+
+/** Coluna nova ainda não migrada no ambiente (ex.: seller_company_id em oauth_states). */
+function isPostgrestUnknownColumnError(error) {
+  const c = String(error?.code ?? "");
+  const m = String(error?.message ?? "").toLowerCase();
+  return c === "42703" || m.includes("column") || m.includes("does not exist");
 }
 
 // ----------------------------------------------
@@ -332,7 +356,7 @@ export async function resolveAndConsumeOAuthState(
 ) {
   const supabase = createClient(supabaseUrl, serviceRoleKey);
   const now = new Date().toISOString();
-  const { data, error } = await supabase
+  let { data, error } = await supabase
     .from("oauth_states")
     .delete()
     .eq("state", state)
@@ -340,6 +364,23 @@ export async function resolveAndConsumeOAuthState(
     .gt("expires_at", now)
     .select("user_id, seller_company_id")
     .maybeSingle();
+
+  if (error && isPostgrestUnknownColumnError(error)) {
+    console.warn("[oauth] resolveAndConsumeOAuthState_retry_select_user_id_only", {
+      message: error.message,
+      code: error.code,
+    });
+    const r2 = await supabase
+      .from("oauth_states")
+      .delete()
+      .eq("state", state)
+      .eq("marketplace", marketplace)
+      .gt("expires_at", now)
+      .select("user_id")
+      .maybeSingle();
+    data = r2.data;
+    error = r2.error;
+  }
 
   if (error) {
     console.error("[oauth] resolveAndConsumeOAuthState", error);
