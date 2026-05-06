@@ -22,6 +22,7 @@ import {
 } from "./marketplaceSyncJobHelpers.js";
 import { runMlInitialListingsSyncJobTurn } from "../../handlers/ml/_helpers/mlInitialOnboardingListingsSync.js";
 import { runMlInitialProductsSyncJobTurn } from "../../handlers/ml/_helpers/mlInitialOnboardingProductsSync.js";
+import { runMlInitialFeesSyncTurn } from "./mlFeesSyncService.js";
 
 const PAGE_LIMIT = 50;
 
@@ -152,13 +153,17 @@ function prerequisiteAllows(job, statusMap) {
   const t = String(job.job_type || "");
   if (t === "ml_initial_sales_history") return true;
   if (t === "ml_initial_listings") return need("ml_initial_sales_history");
-  if (t === "ml_initial_products") {
+  if (t === "ml_initial_fees") {
     return need("ml_initial_sales_history") && need("ml_initial_listings");
+  }
+  if (t === "ml_initial_products") {
+    return need("ml_initial_sales_history") && need("ml_initial_listings") && need("ml_initial_fees");
   }
   if (t === "ml_initial_customers") {
     return (
       need("ml_initial_sales_history") &&
       need("ml_initial_listings") &&
+      need("ml_initial_fees") &&
       need("ml_initial_products")
     );
   }
@@ -166,6 +171,7 @@ function prerequisiteAllows(job, statusMap) {
     return (
       need("ml_initial_sales_history") &&
       need("ml_initial_listings") &&
+      need("ml_initial_fees") &&
       need("ml_initial_products") &&
       need("ml_initial_customers")
     );
@@ -488,6 +494,41 @@ async function processCustomersJob(supabase, job) {
 /**
  * @param {import("@supabase/supabase-js").SupabaseClient} supabase
  * @param {Record<string, unknown>} job
+ * @param {{ deadlineMs: number }} runtime
+ */
+async function processFeesJob(supabase, job, runtime) {
+  const j = await ensureMarketplaceSyncJobRunning(supabase, job);
+  const userId = String(j.user_id || "");
+  const accountId = String(j.marketplace_account_id || "");
+  const sellerCompanyId = j.seller_company_id != null ? String(j.seller_company_id) : null;
+
+  try {
+    const result = await runMlInitialFeesSyncTurn(supabase, {
+      userId,
+      marketplace: ML_MARKETPLACE_SLUG,
+      marketplaceAccountId: accountId,
+      sellerCompanyId,
+      deadlineMs: runtime.deadlineMs,
+    });
+
+    await completeMarketplaceSyncJob(supabase, String(j.id), {
+      progress_current: Number(result.processed ?? 0),
+      progress_total: Number(result.processed ?? 0),
+      last_synced_at: new Date().toISOString(),
+      metadata: {
+        step_result: result,
+      },
+    });
+  } catch (e) {
+    const msg = e?.message ? String(e.message) : String(e);
+    console.error("[ML_INITIAL_FEES_ERROR]", { job_id: j.id, msg });
+    await failMarketplaceSyncJob(supabase, String(j.id), msg, "[ML_INITIAL_FEES_ERROR]");
+  }
+}
+
+/**
+ * @param {import("@supabase/supabase-js").SupabaseClient} supabase
+ * @param {Record<string, unknown>} job
  */
 async function processWebhookMonitoringJob(supabase, job) {
   const j = await ensureMarketplaceSyncJobRunning(supabase, job);
@@ -517,6 +558,10 @@ async function dispatchJobChunk(supabase, job, runtime) {
   }
   if (t === "ml_initial_products") {
     return runMlInitialProductsSyncJobTurn(supabase, job, { deadlineMs: runtime.deadlineMs });
+  }
+  if (t === "ml_initial_fees") {
+    await processFeesJob(supabase, job, runtime);
+    return { stopped: true, done: true };
   }
   if (t === "ml_initial_customers") {
     await processCustomersJob(supabase, job);
@@ -610,6 +655,7 @@ export async function runMarketplaceAccountSyncWorker(supabase, opts = {}) {
     const multiTurnTypes = new Set([
       "ml_initial_sales_history",
       "ml_initial_listings",
+      "ml_initial_fees",
       "ml_initial_products",
     ]);
     if (!out?.stopped && multiTurnTypes.has(String(job.job_type || ""))) {

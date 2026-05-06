@@ -15,6 +15,7 @@ const CHECKLIST_DEFS = [
   { key: "ml_connect", label: "Conectando conta Mercado Livre", job_type: null },
   { key: "sales_history", label: "Importando histórico de vendas", job_type: "ml_initial_sales_history" },
   { key: "listings", label: "Importando anúncios", job_type: "ml_initial_listings" },
+  { key: "fees", label: "Consolidando taxas financeiras", job_type: "ml_initial_fees" },
   { key: "products", label: "Importando produtos/SKUs", job_type: "ml_initial_products" },
   { key: "customers", label: "Importando clientes", job_type: "ml_initial_customers" },
   { key: "monitoring", label: "Preparando monitoramento automático", job_type: "ml_enable_webhook_monitoring" },
@@ -149,7 +150,7 @@ export default async function handleMarketplaceAccountSyncStatus(req, res, path)
       background_note,
       title: "Estamos preparando sua conta Mercado Livre",
       description:
-        "Vamos importar seu histórico de vendas, anúncios, produtos e clientes. Esse processo pode demorar um pouco na primeira vez. Depois disso, as atualizações serão automáticas.",
+        "Vamos importar seu histórico de vendas, anúncios, taxas financeiras, produtos e clientes. Esse processo pode demorar um pouco na primeira vez. Depois disso, as atualizações serão automáticas.",
       checklist,
     });
   } catch (e) {

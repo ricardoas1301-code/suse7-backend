@@ -7,6 +7,7 @@
 export const ML_INITIAL_SYNC_JOB_TYPES_ORDERED = [
   "ml_initial_sales_history",
   "ml_initial_listings",
+  "ml_initial_fees",
   "ml_initial_products",
   "ml_initial_customers",
   "ml_enable_webhook_monitoring",
