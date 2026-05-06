@@ -35,8 +35,9 @@ export async function saveMlWebhookEvent(payload, opts) {
     source_ip: opts.ip,
     dedupe_key: dedupeKey,
     external_event_id: meta.externalEventId,
-    status: resolved.resolved ? "pending" : "error",
+    status: "pending",
     marketplace_account_id: resolved.marketplace_account_id,
+    error_message: resolved.resolved ? null : resolved.warning,
   };
 
   const { data: existing } = await supabase

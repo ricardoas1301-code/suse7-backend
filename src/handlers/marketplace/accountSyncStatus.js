@@ -18,7 +18,7 @@ const CHECKLIST_DEFS = [
   { key: "fees", label: "Consolidando taxas financeiras", job_type: "ml_initial_fees" },
   { key: "products", label: "Importando produtos/SKUs", job_type: "ml_initial_products" },
   { key: "customers", label: "Importando clientes", job_type: "ml_initial_customers" },
-  { key: "monitoring", label: "Preparando monitoramento automático", job_type: "ml_enable_webhook_monitoring" },
+  { key: "monitoring", label: "Webhook e monitoramento contínuo", job_type: "ml_enable_webhook_monitoring" },
 ];
 
 /**

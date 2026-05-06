@@ -547,14 +547,36 @@ async function processFeesJob(supabase, job, runtime) {
  */
 async function processWebhookMonitoringJob(supabase, job) {
   const j = await ensureMarketplaceSyncJobRunning(supabase, job);
+  const accountId = j.marketplace_account_id != null ? String(j.marketplace_account_id) : null;
+  const nowIso = new Date().toISOString();
   console.info("[ML_INITIAL_WEBHOOK_MONITORING]", {
     job_id: j.id,
     marketplace_account_id: j.marketplace_account_id,
   });
+  if (accountId) {
+    const { error } = await supabase
+      .from("marketplace_accounts")
+      .update({
+        updated_at: nowIso,
+      })
+      .eq("id", accountId);
+    if (error) {
+      console.warn("[ML_INITIAL_WEBHOOK_MONITORING_WARN]", {
+        marketplace_account_id: accountId,
+        message: error.message,
+      });
+    }
+  }
   await completeStubJob(supabase, j, {
     monitoring: "webhook_pipeline_ready",
     ingest_path: "/api/ml/webhook",
     processor_job: "/api/jobs/ml-webhook-events",
+    step_result: {
+      ok: true,
+      step: "webhook_monitoring",
+      enabled: true,
+      warnings: [],
+    },
   });
 }
 

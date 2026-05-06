@@ -295,6 +295,10 @@ export default async function handler(req, res) {
       const mod = await import("../src/handlers/ml/listingPricingScenarios.js");
       return await mod.default(req, res);
     }
+    if (path === "/api/ml/webhook") {
+      const mod = await import("../src/handlers/ml/mlWebhookRoutes.js");
+      return await mod.default(req, res);
+    }
     if (path === "/api/listings/bulk-set-sku") {
       const mod = await import("../src/handlers/listings/bulkSetSku.js");
       return await mod.default(req, res);

@@ -143,10 +143,19 @@ async function processOrderEvent(supabase, event) {
   }
 
   const { userId, marketplaceAccountId } = await resolveEventContext(supabase, event);
+  const { data: account } = await supabase
+    .from("marketplace_accounts")
+    .select("seller_company_id")
+    .eq("id", marketplaceAccountId)
+    .maybeSingle();
+  const sellerCompanyId =
+    account?.seller_company_id != null ? String(account.seller_company_id) : null;
   const accessToken = await getValidMLToken(userId, { marketplaceAccountId });
   const order = await fetchOrderById(accessToken, orderId);
   await persistMercadoLibreOrder(supabase, userId, order, {
     marketplace: "mercado_livre",
+    marketplaceAccountId,
+    sellerCompanyId,
     log: (msg, extra) => {
       console.info("[ML_PROCESSOR_ORDER_PERSIST]", {
         message: msg,
@@ -248,6 +257,18 @@ export async function runMlWebhookProcessor(input = {}) {
 
       if (topic.toLowerCase() === "orders_v2") {
         await processOrderEvent(supabase, /** @type {Record<string, unknown>} */ (event));
+      } else {
+        await supabase
+          .from("ml_webhook_events")
+          .update({
+            status: "ignored",
+            processed_at: new Date().toISOString(),
+            error_message: "unsupported_topic",
+          })
+          .eq("id", eventId);
+
+        results.push({ id: eventId, status: "ignored", reason: "unsupported_topic" });
+        continue;
       }
 
       await supabase
