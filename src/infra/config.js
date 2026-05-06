@@ -26,7 +26,7 @@ export const config = {
   mlClientId: getEnv("ML_CLIENT_ID"),
   mlClientSecret: getEnv("ML_CLIENT_SECRET"),
   mlRedirectUri: getEnv("ML_REDIRECT_URI"),
-  jobSecret: getEnv("JOB_SECRET"),
+  jobSecret: getEnv("JOB_SECRET") || getEnv("ML_WEBHOOK_JOB_SECRET"),
   /**
    * Dev Center — única variável oficial de acesso (lista de e-mails, minúsculas após trim).
    * Não existe SUSE7_DEV_CENTER_ALLOWED_USER_IDS; autorização é sempre por e-mail do JWT.
