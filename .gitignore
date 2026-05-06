@@ -1,10 +1,10 @@
 # Dependências (nunca versionar)
 node_modules/
 
-# Ambiente e segredos
+# Ambiente e segredos (.env.example permanece versionado)
 .env
-.env.*
-.env*.local
+.env.local
+.env.*.local
 
 # Vercel
 .vercel/
