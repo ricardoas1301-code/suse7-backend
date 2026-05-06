@@ -170,6 +170,21 @@ function isPostgrestSchemaShapeError(error) {
   return c === "42703" || m.includes("column") || m.includes("does not exist");
 }
 
+/** Tentar insert mais “magro” (próxima variante): coluna inexistente, FK inválida, NOT NULL em coluna opcional. */
+function isMarketplaceInsertTryNextVariant(error, variantIndex, totalVariants) {
+  if (!error) return false;
+  const c = String(error.code ?? "");
+  if (isPostgrestSchemaShapeError(error)) return true;
+  if (c === "23503") return true; // FK (ex.: seller_company_id inválido)
+  if (c === "23502" && variantIndex < totalVariants - 1) return true; // NOT NULL — tenta variante sem colunas opcionais
+  return false;
+}
+
+/** Remove chaves com valor null (evita enviar FK/colunas opcionais como null explícito). */
+function omitNullKeys(row) {
+  return Object.fromEntries(Object.entries(row).filter(([, v]) => v != null));
+}
+
 /**
  * Atualiza colunas opcionais após insert mínimo (ignora erro de coluna ausente).
  * @param {import("@supabase/supabase-js").SupabaseClient} supabase
@@ -275,7 +290,7 @@ async function upsertMercadoLivreMarketplaceAccount(supabase, ctx) {
 
   /** @type {Record<string, unknown>[]} */
   const insertVariants = [
-    {
+    omitNullKeys({
       user_id: userId,
       marketplace,
       external_seller_id: ext,
@@ -285,26 +300,27 @@ async function upsertMercadoLivreMarketplaceAccount(supabase, ctx) {
       status: "active",
       token_expires_at: tokenExpiresAt,
       updated_at: nowIso,
-    },
-    {
+    }),
+    omitNullKeys({
       user_id: userId,
       marketplace,
       external_seller_id: ext,
       seller_company_id: sellerCompanyIdCandidate ?? null,
       status: "active",
       updated_at: nowIso,
-    },
-    {
+    }),
+    omitNullKeys({
       user_id: userId,
       marketplace,
       external_seller_id: ext,
       status: "active",
       updated_at: nowIso,
-    },
+    }),
   ];
 
   let lastInsErr = null;
-  for (let vi = 0; vi < insertVariants.length; vi++) {
+  const nVar = insertVariants.length;
+  for (let vi = 0; vi < nVar; vi++) {
     const insertRow = insertVariants[vi];
     const { data: inserted, error: insErr } = await supabase
       .from("marketplace_accounts")
@@ -323,11 +339,30 @@ async function upsertMercadoLivreMarketplaceAccount(supabase, ctx) {
     }
 
     lastInsErr = insErr;
-    if (insErr && isPostgrestSchemaShapeError(insErr)) {
+    if (insErr && String(insErr.code) === "23505") {
+      const { data: dupRow, error: dupErr } = await supabase
+        .from("marketplace_accounts")
+        .select("id")
+        .eq("user_id", userId)
+        .eq("marketplace", marketplace)
+        .eq("external_seller_id", ext)
+        .maybeSingle();
+      if (!dupErr && dupRow?.id) {
+        console.warn("[ml/callback] marketplace_account_insert_unique_race_recover", {
+          variant: vi,
+          id: dupRow.id,
+        });
+        await enrichMarketplaceAccountRow(supabase, String(dupRow.id), nick, tokenExpiresAt);
+        return { ok: true, accountId: String(dupRow.id), created: false };
+      }
+    }
+
+    if (insErr && isMarketplaceInsertTryNextVariant(insErr, vi, nVar)) {
       console.warn("[ml/callback] marketplace_account_insert_try_next_variant", {
         variant: vi,
         message: insErr.message,
         code: insErr.code,
+        constraint: insErr.constraint ?? null,
       });
       continue;
     }
@@ -499,6 +534,11 @@ async function handleMLCallback(req, res) {
     }
 
     console.log("[ml/callback] EXECUTADO", new Date().toISOString());
+    console.info("[ml/callback] build_fingerprint", {
+      marketplace_account_upsert_v: "schema_fallback_v3_fk_notnull_unique",
+      vercel_git_commit: process.env.VERCEL_GIT_COMMIT ?? null,
+      vercel_deployment_id: process.env.VERCEL_DEPLOYMENT_ID ?? null,
+    });
     console.log("[ml/callback] req.query.code present?", !!req.query?.code);
     console.log("[ml/callback] req.query.state present?", !!req.query?.state);
 
@@ -730,6 +770,21 @@ async function handleMLCallback(req, res) {
       sellerCompanyIdFromOAuthState
     );
 
+    console.info("[ml/callback] marketplace_account_context", {
+      errorId,
+      user_id: supabaseUserId,
+      external_seller_id: mlUserIdForRow,
+      seller_company_from_oauth_state: sellerCompanyIdFromOAuthState ? "set" : "absent",
+      seller_company_resolved: Boolean(resolvedSellerCompanyId),
+    });
+    if (!resolvedSellerCompanyId) {
+      console.warn("[ml/callback] marketplace_account_warn_no_seller_company_id", {
+        errorId,
+        user_id: supabaseUserId,
+        hint: "Nenhuma seller_companies para o usuário; insert pode falhar se a coluna for NOT NULL.",
+      });
+    }
+
     const accResult = await upsertMercadoLivreMarketplaceAccount(supabase, {
       userId: supabaseUserId,
       marketplace: ML_MARKETPLACE_SLUG,
@@ -740,9 +795,13 @@ async function handleMLCallback(req, res) {
     });
 
     if (!accResult.ok || !accResult.accountId) {
+      const er = accResult.error && typeof accResult.error === "object" ? accResult.error : {};
       console.error("[ml/callback] step_failed: marketplace_account_upsert", {
         errorId,
-        message: accResult.error?.message ?? accResult.error,
+        message: er.message ?? accResult.error,
+        code: er.code ?? null,
+        constraint: er.constraint ?? null,
+        details: er.details ?? null,
       });
       sendRedirect(res, buildMlIntegrationRedirect(frontendBase, "ml_error=save"), 302);
       return;
