@@ -470,6 +470,21 @@ async function processCustomersJob(supabase, job) {
         : {};
 
     const processed = Number(ingestion?.processedOrders ?? 0) || 0;
+    const created = Number(ingestion?.createdCustomers ?? 0) || 0;
+    const updated = Number(ingestion?.updatedCustomers ?? 0) || 0;
+    const withoutCustomer = Number(ingestion?.withoutCustomer ?? 0) || 0;
+    const warnings = Array.isArray(ingestion?.errors)
+      ? ingestion.errors.slice(-20)
+      : [];
+    const stepResult = {
+      ok: true,
+      step: "customers",
+      processed,
+      created,
+      updated,
+      without_customer: withoutCustomer,
+      warnings,
+    };
 
     await supabase
       .from("marketplace_account_sync_jobs")
@@ -479,7 +494,7 @@ async function processCustomersJob(supabase, job) {
         updated_at: nowIso,
         progress_current: processed || 1,
         progress_total: processed || 1,
-        metadata: { ...metaBase, ingestion_summary: ingestion },
+        metadata: { ...metaBase, ingestion_summary: ingestion, step_result: stepResult },
       })
       .eq("id", j.id);
 
