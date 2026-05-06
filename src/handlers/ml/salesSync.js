@@ -126,6 +126,28 @@ export default async function handleMlSalesSync(req, res) {
       batch: BATCH_CONCURRENCY,
     });
 
+    const { data: accountRow, error: accErr } = await supabase
+      .from("marketplace_accounts")
+      .select("id, seller_company_id")
+      .eq("user_id", userId)
+      .eq("marketplace", ML_MARKETPLACE_SLUG)
+      .eq("external_seller_id", sellerId)
+      .maybeSingle();
+    if (accErr) {
+      console.warn(logPrefix, "marketplace_account_lookup_failed", {
+        message: accErr?.message,
+        code: accErr?.code,
+      });
+    }
+    const marketplaceAccountId = accountRow?.id ? String(accountRow.id) : null;
+    const sellerCompanyId = accountRow?.seller_company_id ? String(accountRow.seller_company_id) : null;
+    if (!marketplaceAccountId) {
+      console.warn(logPrefix, "missing_marketplace_account_scope", {
+        userId,
+        sellerId,
+      });
+    }
+
     // ------------------------------
     // IDs de pedidos (paginação /orders/search)
     // ------------------------------
@@ -178,6 +200,8 @@ export default async function handleMlSalesSync(req, res) {
         syncStage = "persist_order";
         await persistMercadoLibreOrder(supabase, userId, detail, {
           marketplace: ML_MARKETPLACE_SLUG,
+          marketplaceAccountId,
+          sellerCompanyId,
           log: (msg, extra) => console.log(logPrefix, msg, { orderId, ...extra }),
           pricingDebug: pricingDebug || undefined,
         });

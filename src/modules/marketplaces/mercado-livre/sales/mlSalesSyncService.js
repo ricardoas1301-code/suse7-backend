@@ -73,17 +73,29 @@ export async function applyMlOrderDetailToMarketplaceSales(
     return { ok: false, reason: "order_without_id" };
   }
 
-  const { data: existing, error: exErr } = await supabase
+  let existingQuery = supabase
     .from("sales_orders")
     .select("id")
     .eq("user_id", userId)
     .eq("marketplace", ML_MARKETPLACE_SLUG)
-    .eq("external_order_id", extOrderId)
-    .maybeSingle();
+    .eq("external_order_id", extOrderId);
+  if (marketplaceAccountId) {
+    existingQuery = existingQuery.eq("marketplace_account_id", marketplaceAccountId);
+  }
+  const { data: existing, error: exErr } = await existingQuery.maybeSingle();
   if (exErr) throw exErr;
+
+  if (!marketplaceAccountId) {
+    console.warn("[Suse7][API][ml-sales-apply] missing marketplace_account_id", {
+      user_id: userId,
+      external_order_id: extOrderId,
+    });
+  }
 
   const out = await persistMercadoLibreOrder(supabase, userId, orderDetail, {
     marketplace: ML_MARKETPLACE_SLUG,
+    marketplaceAccountId: marketplaceAccountId || null,
+    sellerCompanyId: sellerCompanyId || null,
     log: (msg, extra) => {
       console.log("[Suse7][API][ml-sales-apply]", msg, extra ?? {});
     },

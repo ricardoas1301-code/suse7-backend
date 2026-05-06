@@ -188,7 +188,14 @@ function extractTaxAmount(order) {
 /**
  * Monta linha sales_orders a partir do GET /orders/:id.
  */
-export function mapMlOrderToSalesOrderRow(userId, order, marketplace, nowIso) {
+export function mapMlOrderToSalesOrderRow(
+  userId,
+  order,
+  marketplace,
+  nowIso,
+  marketplaceAccountId = null,
+  sellerCompanyId = null
+) {
   const extId = order?.id != null ? String(order.id) : null;
   if (!extId) throw new Error("Pedido ML sem id");
 
@@ -205,6 +212,8 @@ export function mapMlOrderToSalesOrderRow(userId, order, marketplace, nowIso) {
   return {
     user_id: userId,
     marketplace,
+    marketplace_account_id: marketplaceAccountId,
+    seller_company_id: sellerCompanyId,
     external_order_id: extId,
     external_pack_id: order.pack_id != null ? String(order.pack_id) : null,
     order_status: order.status != null ? String(order.status) : null,
@@ -234,7 +243,16 @@ export function mapMlOrderToSalesOrderRow(userId, order, marketplace, nowIso) {
  * Estratégia: sem id estável confiável em todos os casos → sempre substituir
  * todas as linhas do pedido no resync (ver persistMercadoLibreOrder).
  */
-export function mapMlOrderItemToRow(userId, marketplace, salesOrderId, line, nowIso) {
+export function mapMlOrderItemToRow(
+  userId,
+  marketplace,
+  salesOrderId,
+  line,
+  nowIso,
+  marketplaceAccountId = null,
+  sellerCompanyId = null,
+  externalOrderId = null
+) {
   const itemObj = line?.item && typeof line.item === "object" ? line.item : {};
   const listingId = extractExternalListingIdFromOrderLine(line);
   const variationId =
@@ -257,6 +275,9 @@ export function mapMlOrderItemToRow(userId, marketplace, salesOrderId, line, now
     sales_order_id: salesOrderId,
     user_id: userId,
     marketplace,
+    marketplace_account_id: marketplaceAccountId,
+    seller_company_id: sellerCompanyId,
+    external_order_id: externalOrderId,
     external_order_item_id: extLineId,
     external_listing_id: listingId,
     external_variation_id: variationId,
@@ -296,24 +317,42 @@ export async function persistMercadoLibreOrder(supabase, userId, order, opts = {
   /** @type {{ remaining: number } | null | undefined} */
   const pricingDebug = opts.pricingDebug;
   const marketplace = opts.marketplace || ML_MARKETPLACE_SLUG;
+  const marketplaceAccountId =
+    opts.marketplaceAccountId != null && String(opts.marketplaceAccountId).trim() !== ""
+      ? String(opts.marketplaceAccountId).trim()
+      : null;
+  const sellerCompanyId =
+    opts.sellerCompanyId != null && String(opts.sellerCompanyId).trim() !== ""
+      ? String(opts.sellerCompanyId).trim()
+      : null;
   const nowIso = new Date().toISOString();
 
   const extPreview = order?.id != null ? String(order.id) : null;
   if (!extPreview) throw new Error("Pedido ML sem id");
 
-  const { data: existingOrder, error: exErr } = await supabase
+  let existingQuery = supabase
     .from("sales_orders")
     .select("id, api_imported_at")
     .eq("marketplace", marketplace)
-    .eq("external_order_id", extPreview)
-    .maybeSingle();
+    .eq("external_order_id", extPreview);
+  if (marketplaceAccountId) {
+    existingQuery = existingQuery.eq("marketplace_account_id", marketplaceAccountId);
+  }
+  const { data: existingOrder, error: exErr } = await existingQuery.maybeSingle();
 
   if (exErr) {
     log("sales_order_prefetch_failed", { exErr, external_order_id: extPreview });
     throw exErr;
   }
 
-  const orderRow = mapMlOrderToSalesOrderRow(userId, order, marketplace, nowIso);
+  const orderRow = mapMlOrderToSalesOrderRow(
+    userId,
+    order,
+    marketplace,
+    nowIso,
+    marketplaceAccountId,
+    sellerCompanyId
+  );
   orderRow.api_imported_at = existingOrder?.api_imported_at ?? nowIso;
 
   let salesOrderId;
@@ -348,7 +387,18 @@ export async function persistMercadoLibreOrder(supabase, userId, order, opts = {
 
   const lines = Array.isArray(order.order_items) ? order.order_items : [];
   if (lines.length > 0) {
-    const rows = lines.map((line) => mapMlOrderItemToRow(userId, marketplace, salesOrderId, line, nowIso));
+    const rows = lines.map((line) =>
+      mapMlOrderItemToRow(
+        userId,
+        marketplace,
+        salesOrderId,
+        line,
+        nowIso,
+        marketplaceAccountId,
+        sellerCompanyId,
+        extPreview
+      )
+    );
 
     if (pricingDebug && pricingDebug.remaining > 0) {
       console.log("[ml/sync-sales] pricing_debug_sample", {
