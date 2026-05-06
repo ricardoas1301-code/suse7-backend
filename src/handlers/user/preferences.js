@@ -28,7 +28,7 @@ export async function handleUserPreferences(req, res) {
       console.error("[Suse7][API][user-preferences] failed", {
         message: "SUPABASE_URL ou SUPABASE_SERVICE_ROLE_KEY ausente",
       });
-      return ok(res, { ok: true, preferences: {} });
+      return ok(res, { ok: true, preferences: {}, list: [] });
     }
 
     const authHeader = req.headers.authorization;
@@ -60,7 +60,7 @@ export async function handleUserPreferences(req, res) {
           code: error?.code,
           details: error?.details,
         });
-        return ok(res, { ok: true, preferences: {} });
+        return ok(res, { ok: true, preferences: {}, list: [] });
       }
       const rows = Array.isArray(data) ? data : [];
       const map = {};
@@ -68,7 +68,7 @@ export async function handleUserPreferences(req, res) {
         if (row?.key == null || String(row.key).trim() === "") continue;
         map[String(row.key)] = row?.value ?? {};
       }
-      return ok(res, { ok: true, preferences: map, preference_rows: rows });
+      return ok(res, { ok: true, preferences: map, preference_rows: rows, list: rows });
     }
 
     if (req.method === "PUT") {
@@ -176,6 +176,6 @@ export async function handleUserPreferences(req, res) {
       code: err?.code,
       details: err?.details,
     });
-    return ok(res, { ok: true, preferences: {} });
+    return ok(res, { ok: true, preferences: {}, list: [] });
   }
 }
