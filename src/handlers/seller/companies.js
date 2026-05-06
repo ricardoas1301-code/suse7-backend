@@ -20,6 +20,89 @@ function pickDocumentCnpj14(body) {
   return digits.length === 14 ? digits : null;
 }
 
+/**
+ * Lê profiles pelo schema real: id = auth user id (não existe profiles.user_id).
+ * @param {import("@supabase/supabase-js").SupabaseClient} supabase
+ * @param {string} userId
+ */
+async function loadProfileForSellerBootstrap(supabase, userId) {
+  const variants = ["id, nome, nome_loja, email, cpf_cnpj, name", "id, nome, nome_loja, email, cpf_cnpj"];
+  for (const sel of variants) {
+    const { data, error } = await supabase.from("profiles").select(sel).eq("id", userId).maybeSingle();
+    if (!error) return data;
+    const shapeIssue =
+      String(error?.code ?? "") === "42703" || String(error?.message ?? "").toLowerCase().includes("column");
+    if (!shapeIssue) return null;
+  }
+  return null;
+}
+
+/**
+ * Deriva company_name / trade_name do profile real (sem coluna seller_companies.name).
+ */
+function companyNamesFromProfile(prof) {
+  if (!prof) return { company_name: null, trade_name: null };
+  const loja = trimStr(prof.nome_loja);
+  const nome = trimStr(prof.nome);
+  const nameCol = trimStr(prof.name);
+  const email = trimStr(prof.email);
+  const company_name = loja || nome || nameCol || email || null;
+  const trade_name = loja || company_name;
+  return { company_name, trade_name };
+}
+
+/**
+ * Se não houver seller_company e o profile tiver CNPJ (14 dígitos), cria a primeira linha.
+ * Nunca envia coluna `name` em seller_companies.
+ */
+async function tryBootstrapSellerCompanyFromProfile(supabase, userId) {
+  const prof = await loadProfileForSellerBootstrap(supabase, userId);
+  const { company_name, trade_name } = companyNamesFromProfile(prof);
+  const doc = String(prof?.cpf_cnpj ?? "").replace(/\D/g, "");
+  if (doc.length !== 14 || !company_name) {
+    return { created: false, reason: "not_cnpj_or_missing_name" };
+  }
+
+  const { data: dup } = await supabase
+    .from("seller_companies")
+    .select("id")
+    .eq("user_id", userId)
+    .eq("document_cnpj", doc)
+    .maybeSingle();
+  if (dup?.id) {
+    return { created: false, reason: "already_exists" };
+  }
+
+  const payload = {
+    user_id: userId,
+    company_name,
+    trade_name: trade_name || company_name,
+    document_cnpj: doc,
+    active: true,
+    is_primary: true,
+  };
+
+  let { error } = await supabase.from("seller_companies").insert(payload).select("id").single();
+  if (
+    error &&
+    payload.is_primary != null &&
+    String(error?.message ?? "")
+      .toLowerCase()
+      .includes("is_primary")
+  ) {
+    delete payload.is_primary;
+    ({ error } = await supabase.from("seller_companies").insert(payload).select("id").single());
+  }
+  if (error) {
+    console.error("[Suse7][API][seller-companies] bootstrap_from_profile failed", {
+      message: error?.message,
+      code: error?.code,
+    });
+    return { created: false, reason: "insert_failed" };
+  }
+  return { created: true };
+}
+
 function emptyCompanies() {
   return { ok: true, companies: [] };
 }
@@ -88,7 +171,7 @@ export default async function handleSellerCompanies(req, res) {
     const companyId = idMatch?.[1] ?? null;
 
     if (req.method === "GET" && !companyId) {
-      const { data, error } = await loadCompanies(supabase, user.id);
+      let { data, error } = await loadCompanies(supabase, user.id);
       if (error) {
         console.error("[Suse7][API][seller-companies] failed", {
           message: error?.message,
@@ -97,7 +180,18 @@ export default async function handleSellerCompanies(req, res) {
         });
         return res.status(200).json(emptyCompanies());
       }
-      return res.status(200).json({ ok: true, companies: data.map(shapeCompany) });
+      if (!data?.length) {
+        await tryBootstrapSellerCompanyFromProfile(supabase, user.id);
+        ({ data, error } = await loadCompanies(supabase, user.id));
+        if (error) {
+          console.error("[Suse7][API][seller-companies] reload after bootstrap failed", {
+            message: error?.message,
+            code: error?.code,
+          });
+          return res.status(200).json(emptyCompanies());
+        }
+      }
+      return res.status(200).json({ ok: true, companies: (data ?? []).map(shapeCompany) });
     }
 
     if (req.method === "GET" && companyId) {
