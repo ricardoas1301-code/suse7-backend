@@ -266,16 +266,36 @@ export function buildMlAuthUrl(clientId, redirectUri, state) {
 // persistOAuthState — Persiste state no Supabase (service role, bypass RLS)
 // Retorna { data, error } para diagnóstico (não lança)
 // ----------------------------------------------
-export async function persistOAuthState(supabaseUrl, serviceRoleKey, state, userId, marketplace = "ml") {
+/**
+ * @param {string | null | undefined} sellerCompanyId - UUID da empresa (opcional); validar no handler /connect.
+ */
+export async function persistOAuthState(
+  supabaseUrl,
+  serviceRoleKey,
+  state,
+  userId,
+  marketplace = "ml",
+  sellerCompanyId = null
+) {
   const supabase = createClient(supabaseUrl, serviceRoleKey);
   const expiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString();
 
-  const { data, error } = await supabase.from("oauth_states").insert({
+  /** @type {Record<string, unknown>} */
+  const row = {
     state,
     user_id: userId,
     marketplace,
     expires_at: expiresAt,
-  });
+  };
+  const co =
+    sellerCompanyId != null && String(sellerCompanyId).trim() !== ""
+      ? String(sellerCompanyId).trim()
+      : null;
+  if (co) {
+    row.seller_company_id = co;
+  }
+
+  const { data, error } = await supabase.from("oauth_states").insert(row);
 
   return { data, error };
 }
@@ -299,8 +319,11 @@ export async function resolveOAuthState(supabaseUrl, serviceRoleKey, state, mark
 }
 
 // ----------------------------------------------
-// resolveAndConsumeOAuthState — Lê user_id e remove o state (one-time)
+// resolveAndConsumeOAuthState — Lê user_id (+ seller_company_id) e remove o state (one-time)
 // ----------------------------------------------
+/**
+ * @returns {Promise<{ user_id: string; seller_company_id: string | null } | null>}
+ */
 export async function resolveAndConsumeOAuthState(
   supabaseUrl,
   serviceRoleKey,
@@ -315,12 +338,18 @@ export async function resolveAndConsumeOAuthState(
     .eq("state", state)
     .eq("marketplace", marketplace)
     .gt("expires_at", now)
-    .select("user_id")
+    .select("user_id, seller_company_id")
     .maybeSingle();
 
   if (error) {
     console.error("[oauth] resolveAndConsumeOAuthState", error);
     return null;
   }
-  return data?.user_id ?? null;
+  const uid = data?.user_id != null ? String(data.user_id).trim() : "";
+  if (!uid) return null;
+  const sid =
+    data?.seller_company_id != null && String(data.seller_company_id).trim() !== ""
+      ? String(data.seller_company_id).trim()
+      : null;
+  return { user_id: uid, seller_company_id: sid };
 }

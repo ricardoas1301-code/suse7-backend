@@ -73,6 +73,15 @@ export async function handleMlConnect(req, res) {
       });
     }
 
+    const sellerCompanyIdRaw = req.query?.seller_company_id ?? null;
+    let oauthSellerCompanyId = null;
+    if (sellerCompanyIdRaw != null && typeof sellerCompanyIdRaw === "string") {
+      const sc = sellerCompanyIdRaw.trim();
+      if (sc && UUID_REGEX.test(sc)) {
+        oauthSellerCompanyId = sc;
+      }
+    }
+
     // ------------------------------
     // 2) Validar ENV vars necessárias
     // ------------------------------
@@ -130,7 +139,8 @@ export async function handleMlConnect(req, res) {
       process.env.SUPABASE_SERVICE_ROLE_KEY,
       state,
       trimmedUserId,
-      "ml"
+      "ml",
+      oauthSellerCompanyId
     );
 
     console.log("[ml/connect] persistOAuthState:result", {

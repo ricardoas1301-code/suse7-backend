@@ -394,6 +394,10 @@ export default async function handler(req, res) {
       const mod = await import("../src/handlers/marketplace/accounts.js");
       return mod.default(req, res);
     }
+    if (/^\/api\/marketplace\/accounts\/[^/]+\/start-initial-sync$/.test(path) && req.method === "POST") {
+      const mod = await import("../src/handlers/marketplace/accountStartInitialSync.js");
+      return mod.default(req, res, path);
+    }
     if (/^\/api\/marketplace\/accounts\/[^/]+\/sync-status$/.test(path) && req.method === "GET") {
       const mod = await import("../src/handlers/marketplace/accountSyncStatus.js");
       return mod.default(req, res, path);

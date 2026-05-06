@@ -5,7 +5,8 @@
 // - Trocar code por token no Mercado Livre
 // - Buscar dados do seller (GET /users/me) para capturar nickname
 // - Salvar tokens + ml_nickname no Supabase (ml_tokens)
-// - Redirecionar para /perfil/integracoes/mercado-livre
+// - Upsert em marketplace_accounts (multiconta + external_seller_id idempotente)
+// - Redirecionar para /perfil/integracoes/mercado-livre?ml=connected&connected=1&ml_account=<uuid>
 //
 // Persistência: createClient com SUPABASE_SERVICE_ROLE_KEY (bypass RLS).
 // Se upsert(onConflict) falhar (índice/constraint incompatível com PostgREST),
@@ -107,10 +108,155 @@ function resolveValidatedFrontendBaseUrl(raw) {
 
 /**
  * Monta URL da tela de integração ML com query fixa.
+ * @param {string} querySuffix - ex.: "ml_error=token" ou query já codificada
  */
 function buildMlIntegrationRedirect(frontendBase, querySuffix) {
   const path = "/perfil/integracoes/mercado-livre";
   return `${frontendBase}${path}?${querySuffix}`;
+}
+
+const UUID_REGEX_CB =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+/**
+ * Resolve seller_company_id: valida UUID vindo do oauth_states; senão primeira empresa do usuário.
+ * @param {import("@supabase/supabase-js").SupabaseClient} supabase
+ */
+async function resolveSellerCompanyIdForMlCallback(supabase, userId, candidateFromOAuth) {
+  const cand =
+    candidateFromOAuth != null && String(candidateFromOAuth).trim() !== ""
+      ? String(candidateFromOAuth).trim()
+      : "";
+  if (cand && UUID_REGEX_CB.test(cand)) {
+    const { data, error } = await supabase
+      .from("seller_companies")
+      .select("id")
+      .eq("id", cand)
+      .eq("user_id", userId)
+      .maybeSingle();
+    if (!error && data?.id) return String(data.id);
+  }
+
+  const selectVariants = [
+    "id, is_primary, created_at",
+    "id, created_at",
+  ];
+  for (const sel of selectVariants) {
+    const hasPrimary = sel.includes("is_primary");
+    let q = supabase.from("seller_companies").select(sel).eq("user_id", userId);
+    if (hasPrimary) q = q.order("is_primary", { ascending: false });
+    q = q.order("created_at", { ascending: false }).limit(1);
+    const { data: rows, error } = await q;
+    if (error) {
+      const shape =
+        String(error?.code ?? "") === "42703" ||
+        String(error?.message ?? "")
+          .toLowerCase()
+          .includes("column");
+      if (shape) continue;
+      return null;
+    }
+    const first = Array.isArray(rows) ? rows[0] : null;
+    if (first?.id) return String(first.id);
+    return null;
+  }
+  return null;
+}
+
+/**
+ * Upsert idempotente: (user_id + marketplace + external_seller_id). Preserva seller_company_id existente.
+ * @param {import("@supabase/supabase-js").SupabaseClient} supabase
+ */
+async function upsertMercadoLivreMarketplaceAccount(supabase, ctx) {
+  const {
+    userId,
+    marketplace,
+    externalSellerId,
+    sellerCompanyIdCandidate,
+    mlNickname,
+    tokenExpiresAt,
+  } = ctx;
+  const ext = String(externalSellerId || "").trim();
+  const nowIso = new Date().toISOString();
+  const nick =
+    mlNickname != null && String(mlNickname).trim() !== "" ? String(mlNickname).trim() : null;
+
+  const { data: existing, error: selErr } = await supabase
+    .from("marketplace_accounts")
+    .select("id, seller_company_id")
+    .eq("user_id", userId)
+    .eq("marketplace", marketplace)
+    .eq("external_seller_id", ext)
+    .maybeSingle();
+
+  if (selErr) {
+    logSupabasePersistError("marketplace_account_select", selErr);
+    return { ok: false, error: selErr, accountId: null };
+  }
+
+  const mergeSellerCompany = (prevRow, incomingResolved) => {
+    const prev =
+      prevRow?.seller_company_id != null && String(prevRow.seller_company_id).trim() !== ""
+        ? String(prevRow.seller_company_id).trim()
+        : null;
+    const inc =
+      incomingResolved != null && String(incomingResolved).trim() !== ""
+        ? String(incomingResolved).trim()
+        : null;
+    if (prev) return prev;
+    return inc;
+  };
+
+  if (existing?.id) {
+    const sellerCo = mergeSellerCompany(existing, sellerCompanyIdCandidate);
+    /** @type {Record<string, unknown>} */
+    const patch = {
+      ml_nickname: nick,
+      account_alias: nick,
+      token_expires_at: tokenExpiresAt,
+      status: "active",
+      updated_at: nowIso,
+    };
+    if (sellerCo) {
+      patch.seller_company_id = sellerCo;
+    }
+    const { error: upErr } = await supabase.from("marketplace_accounts").update(patch).eq("id", existing.id);
+
+    if (upErr) {
+      logSupabasePersistError("marketplace_account_update", upErr);
+      return { ok: false, error: upErr, accountId: null };
+    }
+    console.log("[ml/callback] marketplace_account_upsert_ok", { via: "update", id: existing.id });
+    return { ok: true, accountId: String(existing.id), created: false };
+  }
+
+  const insertRow = {
+    user_id: userId,
+    marketplace,
+    external_seller_id: ext,
+    seller_company_id: sellerCompanyIdCandidate ?? null,
+    ml_nickname: nick,
+    account_alias: nick,
+    status: "active",
+    token_expires_at: tokenExpiresAt,
+    updated_at: nowIso,
+  };
+
+  const { data: inserted, error: insErr } = await supabase
+    .from("marketplace_accounts")
+    .insert(insertRow)
+    .select("id")
+    .single();
+
+  if (insErr) {
+    logSupabasePersistError("marketplace_account_insert", insErr);
+    return { ok: false, error: insErr, accountId: null };
+  }
+  if (!inserted?.id) {
+    return { ok: false, error: new Error("marketplace_account_insert_no_id"), accountId: null };
+  }
+  console.log("[ml/callback] marketplace_account_upsert_ok", { via: "insert", id: inserted.id });
+  return { ok: true, accountId: String(inserted.id), created: true };
 }
 
 /**
@@ -359,12 +505,15 @@ async function handleMLCallback(req, res) {
     // ------------------------------
     // State OAuth (one-time) — mesmo service role
     // ------------------------------
-    const supabaseUserId = await resolveAndConsumeOAuthState(
+    const oauthCtx = await resolveAndConsumeOAuthState(
       config.supabaseUrl,
       config.supabaseServiceRoleKey,
       state,
       "ml"
     );
+
+    const supabaseUserId = oauthCtx?.user_id ?? null;
+    const sellerCompanyIdFromOAuthState = oauthCtx?.seller_company_id ?? null;
 
     if (!supabaseUserId) {
       console.error("[ml/callback] step_failed: resolve_state", { state });
@@ -490,10 +639,40 @@ async function handleMLCallback(req, res) {
       return;
     }
 
-    const successUrl = buildMlIntegrationRedirect(frontendBase, "ml=connected");
+    const resolvedSellerCompanyId = await resolveSellerCompanyIdForMlCallback(
+      supabase,
+      supabaseUserId,
+      sellerCompanyIdFromOAuthState
+    );
+
+    const accResult = await upsertMercadoLivreMarketplaceAccount(supabase, {
+      userId: supabaseUserId,
+      marketplace: ML_MARKETPLACE_SLUG,
+      externalSellerId: mlUserIdForRow,
+      sellerCompanyIdCandidate: resolvedSellerCompanyId,
+      mlNickname,
+      tokenExpiresAt: expiresAt,
+    });
+
+    if (!accResult.ok || !accResult.accountId) {
+      console.error("[ml/callback] step_failed: marketplace_account_upsert", {
+        errorId,
+        message: accResult.error?.message ?? accResult.error,
+      });
+      sendRedirect(res, buildMlIntegrationRedirect(frontendBase, "ml_error=save"), 302);
+      return;
+    }
+
+    const q = new URLSearchParams({
+      ml: "connected",
+      connected: "1",
+      ml_account: accResult.accountId,
+    });
+    const successUrl = buildMlIntegrationRedirect(frontendBase, q.toString());
     console.log("[ml/callback] redirect sucesso → integração ML", {
       errorId,
       host: new URL(frontendBase).hostname,
+      marketplace_account_id: accResult.accountId,
     });
     sendRedirect(res, successUrl, 302);
     return;

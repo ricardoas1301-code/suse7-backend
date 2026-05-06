@@ -13,12 +13,12 @@ const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-
 /** @type {{ key: string; label: string; job_type: string | null }[]} */
 const CHECKLIST_DEFS = [
   { key: "ml_connect", label: "Conectando conta Mercado Livre", job_type: null },
-  { key: "sales_history", label: "Importando histórico de vendas", job_type: "ml_initial_sales_history" },
-  { key: "listings", label: "Importando anúncios", job_type: "ml_initial_listings" },
-  { key: "fees", label: "Consolidando taxas financeiras", job_type: "ml_initial_fees" },
-  { key: "products", label: "Importando produtos/SKUs", job_type: "ml_initial_products" },
-  { key: "customers", label: "Importando clientes", job_type: "ml_initial_customers" },
-  { key: "monitoring", label: "Webhook e monitoramento contínuo", job_type: "ml_enable_webhook_monitoring" },
+  { key: "sales_history", label: "Vendas", job_type: "ml_initial_sales_history" },
+  { key: "listings", label: "Anúncios", job_type: "ml_initial_listings" },
+  { key: "fees", label: "Taxas", job_type: "ml_initial_fees" },
+  { key: "products", label: "Produtos/SKU", job_type: "ml_initial_products" },
+  { key: "customers", label: "Clientes 360", job_type: "ml_initial_customers" },
+  { key: "monitoring", label: "Webhook/monitoramento", job_type: "ml_enable_webhook_monitoring" },
 ];
 
 /**
@@ -126,16 +126,24 @@ export default async function handleMarketplaceAccountSyncStatus(req, res, path)
       .filter((x) => x.job_type != null)
       .map((x) => String(x.status || ""));
 
+    const hasEngagedInitialSync = rows.length > 0;
+
     const anyError = typedStatuses.some((s) => s === "error");
-    const anyRunning = typedStatuses.some((s) => s === "running" || s === "pending");
     const allDone =
       typedStatuses.length > 0 && typedStatuses.every((s) => s === "done");
 
     let overall = "idle";
-    if (typedStatuses.length === 0) overall = "no_jobs";
-    else if (anyError) overall = "error";
-    else if (allDone) overall = "done";
-    else overall = "running";
+    if (!hasEngagedInitialSync) {
+      overall = "awaiting_start";
+    } else if (typedStatuses.length === 0) {
+      overall = "no_jobs";
+    } else if (anyError) {
+      overall = "error";
+    } else if (allDone) {
+      overall = "done";
+    } else {
+      overall = "running";
+    }
 
     const background_note =
       overall === "running"
@@ -147,10 +155,11 @@ export default async function handleMarketplaceAccountSyncStatus(req, res, path)
       marketplace_account_id: accountId,
       marketplace: String(account.marketplace || ML_MARKETPLACE_SLUG),
       overall,
+      initial_sync_engaged: hasEngagedInitialSync,
       background_note,
-      title: "Estamos preparando sua conta Mercado Livre",
+      title: "Conta Mercado Livre conectada",
       description:
-        "Vamos importar seu histórico de vendas, anúncios, taxas financeiras, produtos e clientes. Esse processo pode demorar um pouco na primeira vez. Depois disso, as atualizações serão automáticas.",
+        "Conta Mercado Livre conectada com sucesso. Agora vamos sincronizar seus dados para preparar o Suse7.",
       checklist,
     });
   } catch (e) {
