@@ -295,7 +295,12 @@ export default async function handler(req, res) {
       const mod = await import("../src/handlers/ml/listingPricingScenarios.js");
       return await mod.default(req, res);
     }
-    if (path === "/api/ml/webhook") {
+    if (
+      path === "/api/ml/webhook" ||
+      path === "/ml/webhook" ||
+      path === "/api/ml/webhooks" ||
+      path === "/ml/webhooks"
+    ) {
       const mod = await import("../src/handlers/ml/mlWebhookRoutes.js");
       return await mod.default(req, res);
     }
