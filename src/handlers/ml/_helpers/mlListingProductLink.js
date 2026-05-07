@@ -710,6 +710,32 @@ export async function batchEnsureProductsForListings(supabase, userId, entries, 
           productIdByNorm.set(nk, ins.id);
         }
       }
+      // Compat schema/runtime: se INSERT retornar normalized_sku nulo, reidrata por SKU enviado no chunk.
+      const missingFromInsert = chunk
+        .map((row) => normalizeSkuForDbLookup(String(row.sku || "")))
+        .filter((nk) => nk && !productIdByNorm.has(nk));
+      if (missingFromInsert.length > 0) {
+        const recoverMap = new Map(normToInputSku);
+        for (const row of chunk) {
+          const n = normalizeSkuForDbLookup(String(row.sku || ""));
+          if (n && !recoverMap.has(n)) recoverMap.set(n, String(row.sku ?? ""));
+        }
+        const { productIdByNorm: recovered, error: recErr } = await hydrateProductIdByNormForSkus(
+          supabase,
+          userId,
+          [...new Set(missingFromInsert)],
+          recoverMap,
+          log,
+          { skipLookupLog: false }
+        );
+        if (recErr) {
+          out.errors.push({ stage: "batch_insert_post_ok_recover_lookup", error: recErr });
+        } else {
+          for (const [nk, pid] of recovered) {
+            if (nk && pid) productIdByNorm.set(nk, pid);
+          }
+        }
+      }
       out.products_created += (inserted || []).length;
     }
   }

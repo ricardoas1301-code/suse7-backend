@@ -45,32 +45,70 @@ export default async function handleSalesSummary(req, res) {
   }
 
   const { user, supabase } = auth;
+  const marketplace =
+    req.query?.marketplace != null && String(req.query.marketplace).trim() !== ""
+      ? String(req.query.marketplace).trim()
+      : null;
 
   try {
-    const { data, error } = await supabase
-      .from("sales")
-      .select("sale_amount_brl, net_total_brl, quantity")
+    const orderIdsQuery = supabase
+      .from("sales_orders")
+      .select("id")
       .eq("user_id", user.id);
-
-    if (error) {
-      console.error("[Suse7][API][sales-summary] failed", {
-        message: error?.message,
-        code: error?.code,
-        details: error?.details,
+    if (marketplace) orderIdsQuery.eq("marketplace", marketplace);
+    const { data: orderRows, error: orderErr } = await orderIdsQuery;
+    if (orderErr) {
+      console.error("[Suse7][API][sales-summary] orders_failed", {
+        message: orderErr?.message,
+        code: orderErr?.code,
+        details: orderErr?.details,
       });
       return res.status(200).json(emptySummary());
     }
 
-    const rows = Array.isArray(data) ? data : [];
+    const orderIds = Array.isArray(orderRows) ? orderRows.map((r) => r.id).filter(Boolean) : [];
+    if (orderIds.length === 0) return res.status(200).json(emptySummary());
+
+    const { data: itemRows, error: itemErr } = await supabase
+      .from("sales_order_items")
+      .select("sales_order_id, quantity, gross_amount, net_amount, fee_amount, shipping_share_amount")
+      .eq("user_id", user.id)
+      .in("sales_order_id", orderIds);
+    if (itemErr) {
+      console.error("[Suse7][API][sales-summary] items_failed", {
+        message: itemErr?.message,
+        code: itemErr?.code,
+        details: itemErr?.details,
+      });
+      return res.status(200).json(emptySummary());
+    }
+
+    const rows = Array.isArray(itemRows) ? itemRows : [];
     let gross = 0;
     let net = 0;
     let units = 0;
+    let fees = 0;
+    let shippingFees = 0;
+    /** @type {Set<string>} */
+    const uniqueOrders = new Set();
     for (const row of rows) {
-      gross += Number(String(row?.sale_amount_brl ?? "0").replace(",", ".")) || 0;
-      net += Number(String(row?.net_total_brl ?? "0").replace(",", ".")) || 0;
-      units += Number.parseInt(String(row?.quantity ?? "1"), 10) || 0;
+      const g = Number(String(row?.gross_amount ?? "0").replace(",", ".")) || 0;
+      const n =
+        row?.net_amount != null
+          ? Number(String(row?.net_amount).replace(",", ".")) || 0
+          : g;
+      const q = Number.parseInt(String(row?.quantity ?? "1"), 10) || 0;
+      const f = Number(String(row?.fee_amount ?? "0").replace(",", ".")) || 0;
+      const s = Number(String(row?.shipping_share_amount ?? "0").replace(",", ".")) || 0;
+      gross += g;
+      net += n;
+      units += q;
+      fees += f;
+      shippingFees += s;
+      if (row?.sales_order_id) uniqueOrders.add(String(row.sales_order_id));
     }
-    const salesCount = rows.length;
+
+    const salesCount = uniqueOrders.size;
     const avgTicket = salesCount > 0 ? net / salesCount : 0;
 
     return res.status(200).json({
@@ -85,14 +123,15 @@ export default async function handleSalesSummary(req, res) {
         total_units: units,
         average_ticket_brl: toMoneyString(avgTicket),
         avg_ticket_brl: toMoneyString(avgTicket),
-        fees_total_brl: "0.00",
-        total_fees_brl: "0.00",
-        total_shipping_fees_brl: "0.00",
+        fees_total_brl: toMoneyString(fees),
+        total_fees_brl: toMoneyString(fees),
+        total_shipping_fees_brl: toMoneyString(shippingFees),
         total_refunds_brl: "0.00",
-        loss_orders_count: 0,
+        loss_orders_count: net < 0 ? salesCount : 0,
         orders_count: salesCount,
       },
       truncated_scan: false,
+      source_table: "sales_order_items",
     });
   } catch (error) {
     console.error("[Suse7][API][sales-summary] failed", {

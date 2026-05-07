@@ -54,8 +54,9 @@ function resultToOrderId(entry) {
  * @param {string} sellerId — deve ser o id numérico do vendedor (ex.: users/me.id)
  * @param {number} offset
  * @param {number} limit — até 50 é seguro na maioria dos sites
+ * @param {{ dateFrom?: string | null; dateTo?: string | null }} [options]
  */
-export async function searchSellerOrdersPage(accessToken, sellerId, offset, limit) {
+export async function searchSellerOrdersPage(accessToken, sellerId, offset, limit, options = {}) {
   const qs = new URLSearchParams({
     seller: String(sellerId).trim(),
     offset: String(offset),
@@ -64,6 +65,16 @@ export async function searchSellerOrdersPage(accessToken, sellerId, offset, limi
   if (process.env.ML_ORDERS_SEARCH_NO_SORT !== "1") {
     qs.set("sort", "date_desc");
   }
+  const dateFrom =
+    options?.dateFrom != null && String(options.dateFrom).trim() !== ""
+      ? String(options.dateFrom).trim()
+      : null;
+  const dateTo =
+    options?.dateTo != null && String(options.dateTo).trim() !== ""
+      ? String(options.dateTo).trim()
+      : null;
+  if (dateFrom) qs.set("order.date_created.from", dateFrom);
+  if (dateTo) qs.set("order.date_created.to", dateTo);
 
   const url = `${ML_API}/orders/search?${qs.toString()}`;
 
@@ -73,6 +84,8 @@ export async function searchSellerOrdersPage(accessToken, sellerId, offset, limi
     offset,
     limit,
     sort: process.env.ML_ORDERS_SEARCH_NO_SORT === "1" ? "(omit)" : "date_desc",
+    date_from: dateFrom,
+    date_to: dateTo,
   });
 
   const res = await fetch(url, {

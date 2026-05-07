@@ -11,6 +11,7 @@
 
 import { normalizeAdTitles } from "../../utils/normalizeAdTitles.js";
 import { normalizeProductPayload } from "../../domain/ProductDomainService.js";
+import { normalizeSkuForDbLookup } from "../../domain/productCatalogCompleteness.js";
 
 // ----------------------------------------------------------------------
 // Helper: converte string decimal para número (evita float impreciso)
@@ -93,11 +94,15 @@ export function buildProductInsertPayload(product, userId) {
   const adTitles = normalizeAdTitles(p.ad_titles);
 
   const skuBaseRaw = p.sku_base != null ? String(p.sku_base).trim() : "";
+  const skuLiteral = p.sku != null ? String(p.sku).trim() || null : null;
+  const normalizedSku = skuLiteral ? normalizeSkuForDbLookup(skuLiteral) : null;
+
   const insert = {
     user_id: userId,
     product_name: String(p.product_name ?? "").trim() || null,
     format: validFormat,
-    sku: p.sku != null ? String(p.sku).trim() || null : null,
+    sku: skuLiteral,
+    normalized_sku: normalizedSku,
     sku_base: skuBaseRaw !== "" ? skuBaseRaw : null,
     gtin: p.gtin != null ? String(p.gtin).trim() || null : null,
     ncm: p.ncm != null ? String(p.ncm).trim() || null : null,

@@ -25,6 +25,10 @@ import { runMlInitialProductsSyncJobTurn } from "../../handlers/ml/_helpers/mlIn
 import { runMlInitialFeesSyncTurn } from "./mlFeesSyncService.js";
 
 const PAGE_LIMIT = 50;
+const ML_INITIAL_ORDERS_LOOKBACK_DAYS = Math.min(
+  3650,
+  Math.max(1, parseInt(process.env.ML_INITIAL_ORDERS_LOOKBACK_DAYS || "90", 10) || 90)
+);
 
 const JOB_PRIORITY = Object.fromEntries(ML_INITIAL_SYNC_JOB_TYPES_ORDERED.map((t, i) => [t, i + 1]));
 
@@ -95,6 +99,13 @@ async function advanceMlSalesWatermark(supabase, accountId, detailMaxCreated, no
  * @param {number} limit
  */
 async function fetchJobsPool(supabase, limit = 160) {
+  console.info("[ML_ONBOARDING_SYNC_WORKER_QUERY]", {
+    table: "marketplace_account_sync_jobs",
+    status_filter: ["pending", "running"],
+    marketplace_filter: ML_MARKETPLACE_SLUG,
+    order_by: "created_at asc",
+    limit,
+  });
   const { data, error } = await supabase
     .from("marketplace_account_sync_jobs")
     .select("*")
@@ -297,9 +308,24 @@ async function processMlInitialSalesHistoryBatch(supabase, job, opts) {
     marketplace_account_id: accountId,
     cursor,
   });
+  console.info("[ML_SALES_SYNC_START]", {
+    job_id: jRow.id,
+    marketplace_account_id: accountId,
+    seller_id: sellerId,
+    cursor,
+  });
 
   const sellerCompanyFromAcc =
     accountRow.seller_company_id != null ? String(accountRow.seller_company_id) : null;
+  const rangeTo = new Date().toISOString();
+  const rangeFrom = new Date(Date.now() - ML_INITIAL_ORDERS_LOOKBACK_DAYS * 24 * 60 * 60 * 1000).toISOString();
+  console.info("[ML_ORDERS_FETCH_RANGE]", {
+    job_id: jRow.id,
+    marketplace_account_id: accountId,
+    date_from: rangeFrom,
+    date_to: rangeTo,
+    lookback_days: ML_INITIAL_ORDERS_LOOKBACK_DAYS,
+  });
 
   let processedTotal = Number(jRow.progress_current ?? 0) || 0;
   let progressTotal = jRow.progress_total != null ? Number(jRow.progress_total) : null;
@@ -314,13 +340,29 @@ async function processMlInitialSalesHistoryBatch(supabase, job, opts) {
   };
 
   while (Date.now() < deadlineMs) {
-    const page = await searchSellerOrdersPage(accessToken, sellerId, cursor.search_offset, PAGE_LIMIT, {});
+    console.info("[ML_ORDERS_FETCH_START]", {
+      job_id: jRow.id,
+      marketplace_account_id: accountId,
+      seller_id: sellerId,
+      offset: cursor.search_offset,
+    });
+    const page = await searchSellerOrdersPage(accessToken, sellerId, cursor.search_offset, PAGE_LIMIT, {
+      dateFrom: rangeFrom,
+      dateTo: rangeTo,
+    });
 
     if (progressTotal == null && page.paging?.total != null) {
       progressTotal = Number(page.paging.total);
     }
 
     const orderIds = page.orderIds || [];
+    console.info("[ML_ORDERS_FETCH_DONE]", {
+      job_id: jRow.id,
+      marketplace_account_id: accountId,
+      fetched: orderIds.length,
+      paging_total: page.paging?.total ?? null,
+      offset: cursor.search_offset,
+    });
 
     console.info("[ML_INITIAL_SALES_SYNC_BATCH]", {
       job_id: jRow.id,
@@ -342,6 +384,11 @@ async function processMlInitialSalesHistoryBatch(supabase, job, opts) {
         job_id: jRow.id,
         marketplace_account_id: accountId,
         processedTotal,
+      });
+      console.info("[ML_SALES_SYNC_FINISHED]", {
+        job_id: jRow.id,
+        marketplace_account_id: accountId,
+        processed_total: processedTotal,
       });
       return { stopped: true, done: true };
     }
@@ -368,6 +415,12 @@ async function processMlInitialSalesHistoryBatch(supabase, job, opts) {
       } catch (e) {
         const msg = e?.message ? String(e.message) : String(e);
         console.error("[ML_INITIAL_SALES_SYNC_ERROR]", { job_id: jRow.id, order_id: oid, msg });
+        console.error("[ML_SALES_SYNC_FAILED]", {
+          job_id: jRow.id,
+          marketplace_account_id: accountId,
+          order_id: oid,
+          message: msg,
+        });
         summaryStub.errors.push(`${oid}: ${msg}`);
         cursor.idx_in_page += 1;
         processedTotal += 1;
@@ -396,6 +449,12 @@ async function processMlInitialSalesHistoryBatch(supabase, job, opts) {
       } catch (e) {
         const msg = e?.message ? String(e.message) : String(e);
         console.error("[ML_INITIAL_SALES_SYNC_ERROR]", { job_id: jRow.id, order_id: oid, msg });
+        console.error("[ML_SALES_SYNC_FAILED]", {
+          job_id: jRow.id,
+          marketplace_account_id: accountId,
+          order_id: oid,
+          message: msg,
+        });
         summaryStub.errors.push(`${oid}: ${msg}`);
       }
 
@@ -422,6 +481,12 @@ async function processMlInitialSalesHistoryBatch(supabase, job, opts) {
         last_batch_orders: slice.length,
         errors_sample: summaryStub.errors.slice(-12),
       },
+    });
+    console.info("[ML_ORDERS_UPSERT_DONE]", {
+      job_id: jRow.id,
+      marketplace_account_id: accountId,
+      batch_size: slice.length,
+      processed_total: processedTotal,
     });
 
     jRow = {
@@ -587,25 +652,50 @@ async function processWebhookMonitoringJob(supabase, job) {
  */
 async function dispatchJobChunk(supabase, job, runtime) {
   const t = String(job.job_type || "");
+  console.info("[ML_ONBOARDING_SYNC_STEP_START]", {
+    job_id: job.id ?? null,
+    marketplace_account_id: job.marketplace_account_id ?? null,
+    job_type: t,
+    timestamp: new Date().toISOString(),
+  });
+
+  const done = () => {
+    console.info("[ML_ONBOARDING_SYNC_STEP_DONE]", {
+      job_id: job.id ?? null,
+      marketplace_account_id: job.marketplace_account_id ?? null,
+      job_type: t,
+      timestamp: new Date().toISOString(),
+    });
+  };
+
   if (t === "ml_initial_sales_history") {
-    return processMlInitialSalesHistoryBatch(supabase, job, runtime);
+    const out = await processMlInitialSalesHistoryBatch(supabase, job, runtime);
+    if (out?.done) done();
+    return out;
   }
   if (t === "ml_initial_listings") {
-    return runMlInitialListingsSyncJobTurn(supabase, job, { deadlineMs: runtime.deadlineMs });
+    const out = await runMlInitialListingsSyncJobTurn(supabase, job, { deadlineMs: runtime.deadlineMs });
+    if (out?.done) done();
+    return out;
   }
   if (t === "ml_initial_products") {
-    return runMlInitialProductsSyncJobTurn(supabase, job, { deadlineMs: runtime.deadlineMs });
+    const out = await runMlInitialProductsSyncJobTurn(supabase, job, { deadlineMs: runtime.deadlineMs });
+    if (out?.done) done();
+    return out;
   }
   if (t === "ml_initial_fees") {
     await processFeesJob(supabase, job, runtime);
+    done();
     return { stopped: true, done: true };
   }
   if (t === "ml_initial_customers") {
     await processCustomersJob(supabase, job);
+    done();
     return { stopped: true, done: true };
   }
   if (t === "ml_enable_webhook_monitoring") {
     await processWebhookMonitoringJob(supabase, job);
+    done();
     return { stopped: true, done: true };
   }
 
@@ -648,8 +738,41 @@ export async function runMarketplaceAccountSyncWorker(supabase, opts = {}) {
   /** @type {Record<string, unknown>[] } */
   const chunks = [];
 
+  console.info("[ML_ONBOARDING_SYNC_JOB_DISPATCHED]", {
+    event: "worker_start",
+    budget_ms: budgetMs,
+    max_chunks: maxChunks,
+    batch_details: batchDetails,
+    timestamp: new Date().toISOString(),
+  });
+  console.info("[ML_ONBOARDING_SYNC_WORKER_ENTRY]", {
+    limit: maxChunks,
+    budget_ms: budgetMs,
+    batch_details: batchDetails,
+    build_fingerprint: {
+      vercel_git_commit: process.env.VERCEL_GIT_COMMIT ?? null,
+      vercel_deployment_id: process.env.VERCEL_DEPLOYMENT_ID ?? null,
+    },
+  });
+
   for (let i = 0; i < maxChunks; i++) {
     const rows = await fetchJobsPool(supabase, 160);
+    const countsByType = rows.reduce((acc, r) => {
+      const t = String(r.job_type || "unknown");
+      const s = String(r.status || "unknown");
+      if (!acc[t]) acc[t] = { pending: 0, running: 0, done: 0, error: 0, other: 0, total: 0 };
+      if (s === "pending" || s === "running" || s === "done" || s === "error") acc[t][s] += 1;
+      else acc[t].other += 1;
+      acc[t].total += 1;
+      return acc;
+    }, {});
+    console.info("[ML_ONBOARDING_SYNC_WORKER_ENTRY]", {
+      iteration: i,
+      pending_pool_total: rows.filter((r) => String(r.status || "") === "pending").length,
+      running_pool_total: rows.filter((r) => String(r.status || "") === "running").length,
+      counts_by_type: countsByType,
+      marketplace_account_ids: [...new Set(rows.map((r) => String(r.marketplace_account_id || "")).filter(Boolean))].slice(0, 20),
+    });
     const accountIds = [
       ...new Set(rows.map((r) => String(r.marketplace_account_id || "")).filter(Boolean)),
     ];
@@ -677,7 +800,21 @@ export async function runMarketplaceAccountSyncWorker(supabase, opts = {}) {
     });
 
     const job = sorted[0];
-    if (!job) break;
+    if (!job) {
+      console.info("[ML_ONBOARDING_SYNC_JOB_PICKED]", {
+        picked: false,
+        reason: "no_eligible_jobs",
+        iteration: i,
+      });
+      break;
+    }
+    console.info("[ML_ONBOARDING_SYNC_JOB_PICKED]", {
+      picked: true,
+      job_id: job.id ?? null,
+      job_type: job.job_type ?? null,
+      marketplace_account_id: job.marketplace_account_id ?? null,
+      iteration: i,
+    });
 
     const deadlineMs = Date.now() + budgetMs;
     const out = await dispatchJobChunk(supabase, job, { deadlineMs, batchDetails });
@@ -698,6 +835,19 @@ export async function runMarketplaceAccountSyncWorker(supabase, opts = {}) {
     if (!out?.stopped && multiTurnTypes.has(String(job.job_type || ""))) {
       break;
     }
+  }
+
+  const hasErrorChunk = chunks.some((c) => c?.error);
+  if (hasErrorChunk) {
+    console.error("[ML_ONBOARDING_SYNC_FAILED]", {
+      chunks_processed: chunks.length,
+      timestamp: new Date().toISOString(),
+    });
+  } else {
+    console.info("[ML_ONBOARDING_SYNC_FINISHED]", {
+      chunks_processed: chunks.length,
+      timestamp: new Date().toISOString(),
+    });
   }
 
   return { ok: true, chunks_processed: chunks.length, chunks };
