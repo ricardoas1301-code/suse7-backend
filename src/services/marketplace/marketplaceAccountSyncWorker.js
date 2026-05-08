@@ -31,6 +31,18 @@ const ML_INITIAL_ORDERS_LOOKBACK_DAYS = Math.min(
 );
 
 const JOB_PRIORITY = Object.fromEntries(ML_INITIAL_SYNC_JOB_TYPES_ORDERED.map((t, i) => [t, i + 1]));
+const ORDER_FETCH_TIMEOUT_MS = Math.min(
+  120000,
+  Math.max(5000, parseInt(process.env.ML_INITIAL_SALES_ORDER_FETCH_TIMEOUT_MS || "25000", 10) || 25000)
+);
+const ORDER_PROCESS_TIMEOUT_MS = Math.min(
+  180000,
+  Math.max(5000, parseInt(process.env.ML_INITIAL_SALES_ORDER_PROCESS_TIMEOUT_MS || "45000", 10) || 45000)
+);
+const RUNNING_STALE_TIMEOUT_MS = Math.min(
+  24 * 60 * 60 * 1000,
+  Math.max(60 * 1000, parseInt(process.env.ML_INITIAL_SYNC_RUNNING_STALE_TIMEOUT_MS || "900000", 10) || 900000)
+);
 
 /** @param {string} jobType */
 function jobRank(jobType) {
@@ -116,6 +128,75 @@ async function fetchJobsPool(supabase, limit = 160) {
 
   if (error) throw error;
   return data ?? [];
+}
+
+/**
+ * @param {Promise<unknown>} promise
+ * @param {number} timeoutMs
+ * @param {string} label
+ */
+async function withTimeout(promise, timeoutMs, label) {
+  /** @type {NodeJS.Timeout | null} */
+  let timer = null;
+  try {
+    const timeout = new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`${label}_timeout_${timeoutMs}ms`)), timeoutMs);
+    });
+    return await Promise.race([promise, timeout]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+/**
+ * Move jobs running "órfãos" para erro para não ficar infinito.
+ * @param {import("@supabase/supabase-js").SupabaseClient} supabase
+ */
+async function markStaleRunningJobsAsError(supabase) {
+  const cutoffIso = new Date(Date.now() - RUNNING_STALE_TIMEOUT_MS).toISOString();
+  const { data: rows, error } = await supabase
+    .from("marketplace_account_sync_jobs")
+    .select("id,job_type,marketplace_account_id,updated_at")
+    .eq("marketplace", ML_MARKETPLACE_SLUG)
+    .eq("status", "running")
+    .lt("updated_at", cutoffIso)
+    .limit(100);
+  if (error) {
+    console.warn("[ML_INITIAL_SYNC_STALE_RUNNING_SCAN_WARN]", { message: error.message });
+    return 0;
+  }
+  const staleRows = Array.isArray(rows) ? rows : [];
+  let moved = 0;
+  for (const row of staleRows) {
+    const nowIso = new Date().toISOString();
+    const msg = `stale_running_timeout>${RUNNING_STALE_TIMEOUT_MS}ms`;
+    const { error: updErr } = await supabase
+      .from("marketplace_account_sync_jobs")
+      .update({
+        status: "error",
+        finished_at: nowIso,
+        updated_at: nowIso,
+        error_message: msg,
+      })
+      .eq("id", row.id)
+      .eq("status", "running");
+    if (updErr) {
+      console.warn("[ML_INITIAL_SYNC_STALE_RUNNING_UPDATE_WARN]", {
+        job_id: row.id,
+        message: updErr.message,
+      });
+      continue;
+    }
+    moved += 1;
+    console.warn("[ML_INITIAL_SYNC_STALE_RUNNING_MARKED_ERROR]", {
+      job_id: row.id,
+      job_type: row.job_type ?? null,
+      marketplace_account_id: row.marketplace_account_id ?? null,
+      updated_at: row.updated_at ?? null,
+      stale_timeout_ms: RUNNING_STALE_TIMEOUT_MS,
+    });
+  }
+  return moved;
 }
 
 /**
@@ -308,6 +389,12 @@ async function processMlInitialSalesHistoryBatch(supabase, job, opts) {
     marketplace_account_id: accountId,
     cursor,
   });
+  console.info("[ML_INITIAL_SALES_HISTORY_START]", {
+    job_id: jRow.id,
+    marketplace_account_id: accountId,
+    seller_id: sellerId,
+    cursor,
+  });
   console.info("[ML_SALES_SYNC_START]", {
     job_id: jRow.id,
     marketplace_account_id: accountId,
@@ -338,6 +425,18 @@ async function processMlInitialSalesHistoryBatch(supabase, job, opts) {
     skipped_count: 0,
     errors: [],
   };
+  let partialErrors = 0;
+  const safePatchProgress = async (patch, reason) => {
+    try {
+      await patchMarketplaceSyncJob(supabase, String(jRow.id), patch);
+    } catch (e) {
+      console.warn("[ML_INITIAL_SALES_SYNC_PROGRESS_PATCH_WARN]", {
+        job_id: jRow.id,
+        reason,
+        message: e?.message ?? String(e),
+      });
+    }
+  };
 
   while (Date.now() < deadlineMs) {
     console.info("[ML_ORDERS_FETCH_START]", {
@@ -363,6 +462,13 @@ async function processMlInitialSalesHistoryBatch(supabase, job, opts) {
       paging_total: page.paging?.total ?? null,
       offset: cursor.search_offset,
     });
+    console.info("[ML_INITIAL_SALES_HISTORY_FETCH_DONE]", {
+      job_id: jRow.id,
+      marketplace_account_id: accountId,
+      fetched: orderIds.length,
+      paging_total: page.paging?.total ?? null,
+      offset: cursor.search_offset,
+    });
 
     console.info("[ML_INITIAL_SALES_SYNC_BATCH]", {
       job_id: jRow.id,
@@ -374,11 +480,22 @@ async function processMlInitialSalesHistoryBatch(supabase, job, opts) {
     });
 
     if (orderIds.length === 0) {
+      const partialSummaryMsg =
+        partialErrors > 0 ? `completed_with_partial_errors:${partialErrors}` : null;
       await completeMarketplaceSyncJob(supabase, String(jRow.id), {
         progress_total: progressTotal ?? processedTotal,
         progress_current: processedTotal,
         last_cursor: null,
         last_synced_at: new Date().toISOString(),
+        error_message: partialSummaryMsg,
+        metadata: {
+          ...(typeof jRow.metadata === "object" && jRow.metadata && !Array.isArray(jRow.metadata)
+            ? /** @type {Record<string, unknown>} */ (jRow.metadata)
+            : {}),
+          phase: "sales",
+          errors_count: partialErrors,
+          errors_sample: summaryStub.errors.slice(-20),
+        },
       });
       console.info("[ML_INITIAL_SALES_SYNC_DONE]", {
         job_id: jRow.id,
@@ -389,6 +506,12 @@ async function processMlInitialSalesHistoryBatch(supabase, job, opts) {
         job_id: jRow.id,
         marketplace_account_id: accountId,
         processed_total: processedTotal,
+      });
+      console.info("[ML_INITIAL_SALES_HISTORY_FINISHED]", {
+        job_id: jRow.id,
+        marketplace_account_id: accountId,
+        processed_total: processedTotal,
+        reason: "orders_page_empty",
       });
       return { stopped: true, done: true };
     }
@@ -409,9 +532,19 @@ async function processMlInitialSalesHistoryBatch(supabase, job, opts) {
     let batchMaxCreated = null;
 
     for (const oid of slice) {
+      const orderIndex = processedTotal + 1;
+      console.info("[S7][ml-sales-sync-order-step]", {
+        syncRunId: jRow.id,
+        marketplaceAccountId: accountId,
+        sellerCompanyId: sellerCompanyFromAcc,
+        externalOrderId: String(oid),
+        index: orderIndex,
+        total: progressTotal,
+        step: "fetch order",
+      });
       let detail;
       try {
-        detail = await fetchOrderById(accessToken, oid);
+        detail = await withTimeout(fetchOrderById(accessToken, oid), ORDER_FETCH_TIMEOUT_MS, "fetch_order");
       } catch (e) {
         const msg = e?.message ? String(e.message) : String(e);
         console.error("[ML_INITIAL_SALES_SYNC_ERROR]", { job_id: jRow.id, order_id: oid, msg });
@@ -422,8 +555,27 @@ async function processMlInitialSalesHistoryBatch(supabase, job, opts) {
           message: msg,
         });
         summaryStub.errors.push(`${oid}: ${msg}`);
+        partialErrors += 1;
         cursor.idx_in_page += 1;
         processedTotal += 1;
+        const metaBase =
+          typeof jRow.metadata === "object" && jRow.metadata && !Array.isArray(jRow.metadata)
+            ? /** @type {Record<string, unknown>} */ (jRow.metadata)
+            : {};
+        await safePatchProgress({
+          progress_total: progressTotal,
+          progress_current: processedTotal,
+          last_cursor: serializeSalesCursor(cursor),
+          last_synced_at: new Date().toISOString(),
+          metadata: {
+            ...metaBase,
+            phase: "sales",
+            errors_count: partialErrors,
+            last_error_order_id: String(oid),
+            last_error_message: msg.slice(0, 220),
+            errors_sample: summaryStub.errors.slice(-20),
+          },
+        }, "after_fetch_error");
         continue;
       }
 
@@ -436,15 +588,33 @@ async function processMlInitialSalesHistoryBatch(supabase, job, opts) {
       }
 
       try {
-        await applyMlOrderDetailToMarketplaceSales(
-          supabase,
-          userId,
-          accountId,
-          sellerCompanyFromAcc,
-          detail,
-          nowIso,
-          summaryStub,
-          accessToken
+        console.info("[S7][ml-sales-sync-order-step]", {
+          syncRunId: jRow.id,
+          marketplaceAccountId: accountId,
+          sellerCompanyId: sellerCompanyFromAcc,
+          externalOrderId: String(oid),
+          index: orderIndex,
+          total: progressTotal,
+          step: "persist order/items/customer/snapshot/metrics",
+        });
+        await withTimeout(
+          applyMlOrderDetailToMarketplaceSales(
+            supabase,
+            userId,
+            accountId,
+            sellerCompanyFromAcc,
+            detail,
+            nowIso,
+            summaryStub,
+            accessToken,
+            {
+              syncRunId: String(jRow.id),
+              orderIndex,
+              total: progressTotal,
+            }
+          ),
+          ORDER_PROCESS_TIMEOUT_MS,
+          "process_order"
         );
       } catch (e) {
         const msg = e?.message ? String(e.message) : String(e);
@@ -456,10 +626,38 @@ async function processMlInitialSalesHistoryBatch(supabase, job, opts) {
           message: msg,
         });
         summaryStub.errors.push(`${oid}: ${msg}`);
+        partialErrors += 1;
       }
 
       cursor.idx_in_page += 1;
       processedTotal += 1;
+      const perOrderMetaBase =
+        typeof jRow.metadata === "object" && jRow.metadata && !Array.isArray(jRow.metadata)
+          ? /** @type {Record<string, unknown>} */ (jRow.metadata)
+          : {};
+      await safePatchProgress({
+        progress_total: progressTotal,
+        progress_current: processedTotal,
+        last_cursor: serializeSalesCursor(cursor),
+        last_synced_at: new Date().toISOString(),
+        metadata: {
+          ...perOrderMetaBase,
+          phase: "sales",
+          errors_count: partialErrors,
+          last_order_id: String(oid),
+          last_order_index: orderIndex,
+          errors_sample: summaryStub.errors.slice(-20),
+        },
+      }, "after_order_processed");
+      console.info("[S7][ml-sales-sync-order-step]", {
+        syncRunId: jRow.id,
+        marketplaceAccountId: accountId,
+        sellerCompanyId: sellerCompanyFromAcc,
+        externalOrderId: String(oid),
+        index: orderIndex,
+        total: progressTotal,
+        step: "update progress",
+      });
     }
 
     if (batchMaxCreated) {
@@ -471,18 +669,26 @@ async function processMlInitialSalesHistoryBatch(supabase, job, opts) {
         ? /** @type {Record<string, unknown>} */ (jRow.metadata)
         : {};
 
-    await patchMarketplaceSyncJob(supabase, String(jRow.id), {
+    await safePatchProgress({
       last_cursor: serializeSalesCursor(cursor),
       progress_total: progressTotal,
       progress_current: processedTotal,
       last_synced_at: nowIso,
       metadata: {
         ...metaBase,
+        phase: "sales",
+        errors_count: partialErrors,
         last_batch_orders: slice.length,
         errors_sample: summaryStub.errors.slice(-12),
       },
-    });
+    }, "after_batch");
     console.info("[ML_ORDERS_UPSERT_DONE]", {
+      job_id: jRow.id,
+      marketplace_account_id: accountId,
+      batch_size: slice.length,
+      processed_total: processedTotal,
+    });
+    console.info("[ML_INITIAL_SALES_HISTORY_UPSERT_DONE]", {
       job_id: jRow.id,
       marketplace_account_id: accountId,
       batch_size: slice.length,
@@ -754,6 +960,14 @@ export async function runMarketplaceAccountSyncWorker(supabase, opts = {}) {
       vercel_deployment_id: process.env.VERCEL_DEPLOYMENT_ID ?? null,
     },
   });
+
+  const staleMoved = await markStaleRunningJobsAsError(supabase);
+  if (staleMoved > 0) {
+    console.warn("[ML_INITIAL_SYNC_STALE_RUNNING_SWEEP_DONE]", {
+      moved_to_error: staleMoved,
+      stale_timeout_ms: RUNNING_STALE_TIMEOUT_MS,
+    });
+  }
 
   for (let i = 0; i < maxChunks; i++) {
     const rows = await fetchJobsPool(supabase, 160);

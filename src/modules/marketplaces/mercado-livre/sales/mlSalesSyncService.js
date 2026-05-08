@@ -61,12 +61,25 @@ export async function applyMlOrderDetailToMarketplaceSales(
   orderDetail,
   nowIso,
   summary,
-  accessToken
+  accessToken,
+  traceCtx = {}
 ) {
   void accessToken;
   void nowIso;
 
   const extOrderId = orderDetail?.id != null ? String(orderDetail.id) : null;
+  const logStep = (step, extra = {}) => {
+    console.info("[S7][ml-sales-sync-order-step]", {
+      syncRunId: traceCtx.syncRunId ?? null,
+      marketplaceAccountId,
+      sellerCompanyId,
+      externalOrderId: extOrderId,
+      index: traceCtx.orderIndex ?? null,
+      total: traceCtx.total ?? null,
+      step,
+      ...extra,
+    });
+  };
   if (!extOrderId) {
     summary.errors.push("order_without_id");
     summary.skipped_count += 1;
@@ -92,21 +105,27 @@ export async function applyMlOrderDetailToMarketplaceSales(
     });
   }
 
+  logStep("persist order");
   const out = await persistMercadoLibreOrder(supabase, userId, orderDetail, {
     marketplace: ML_MARKETPLACE_SLUG,
     marketplaceAccountId: marketplaceAccountId || null,
     sellerCompanyId: sellerCompanyId || null,
+    traceCtx,
     log: (msg, extra) => {
       console.log("[Suse7][API][ml-sales-apply]", msg, extra ?? {});
     },
   });
+  logStep("persist items");
 
+  logStep("persist customer");
   await applyOrderScopeColumns(
     supabase,
     out?.salesOrderId ?? existing?.id ?? null,
     marketplaceAccountId,
     sellerCompanyId
   );
+  logStep("snapshot");
+  logStep("metrics");
 
   summary.synced_count += 1;
   if (existing?.id) summary.updated_count += 1;

@@ -20,6 +20,10 @@ const CHECKLIST_DEFS = [
   { key: "customers", label: "Clientes 360", job_type: "ml_initial_customers" },
   { key: "monitoring", label: "Webhook/monitoramento", job_type: "ml_enable_webhook_monitoring" },
 ];
+const STALE_PROGRESS_MS = Math.min(
+  24 * 60 * 60 * 1000,
+  Math.max(30 * 1000, parseInt(process.env.ML_SYNC_STATUS_STALE_MS || "90000", 10) || 90000)
+);
 
 /**
  * @param {Record<string, unknown>[]} rows
@@ -131,6 +135,21 @@ export default async function handleMarketplaceAccountSyncStatus(req, res, path)
     const anyError = typedStatuses.some((s) => s === "error");
     const allDone =
       typedStatuses.length > 0 && typedStatuses.every((s) => s === "done");
+    const doneRows = rows.filter((r) => String(r.status || "") === "done");
+    const hasPartialWarnings = doneRows.some((r) => {
+      const m = r?.metadata && typeof r.metadata === "object" ? r.metadata : {};
+      const c = Number(m?.errors_count ?? 0);
+      return Number.isFinite(c) && c > 0;
+    });
+    const runningRows = rows.filter((r) => String(r.status || "") === "running");
+    const latestRunningTs = runningRows
+      .map((r) => Date.parse(String(r.updated_at ?? r.created_at ?? "")))
+      .filter((n) => Number.isFinite(n))
+      .sort((a, b) => b - a)[0];
+    const staleRunning =
+      runningRows.length > 0 &&
+      Number.isFinite(latestRunningTs) &&
+      Date.now() - Number(latestRunningTs) > STALE_PROGRESS_MS;
 
     let overall = "idle";
     if (!hasEngagedInitialSync) {
@@ -139,6 +158,8 @@ export default async function handleMarketplaceAccountSyncStatus(req, res, path)
       overall = "no_jobs";
     } else if (anyError) {
       overall = "error";
+    } else if (allDone && hasPartialWarnings) {
+      overall = "completed_with_errors";
     } else if (allDone) {
       overall = "done";
     } else {
@@ -149,14 +170,21 @@ export default async function handleMarketplaceAccountSyncStatus(req, res, path)
       overall === "running"
         ? "Estamos terminando sua importação em segundo plano."
         : null;
+    const stalled_warning =
+      overall === "running" && staleRunning
+        ? "A sincronização está demorando mais que o normal. Estamos tentando continuar em segundo plano."
+        : null;
 
     return res.status(200).json({
       ok: true,
       marketplace_account_id: accountId,
       marketplace: String(account.marketplace || ML_MARKETPLACE_SLUG),
       overall,
+      stalled: Boolean(staleRunning),
+      stale_threshold_ms: STALE_PROGRESS_MS,
       initial_sync_engaged: hasEngagedInitialSync,
       background_note,
+      stalled_warning,
       title: "Conta Mercado Livre conectada",
       description:
         "Conta Mercado Livre conectada com sucesso. Agora vamos sincronizar seus dados para preparar o Suse7.",

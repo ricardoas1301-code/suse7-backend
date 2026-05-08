@@ -314,6 +314,19 @@ export function mapMlOrderItemToRow(
  */
 export async function persistMercadoLibreOrder(supabase, userId, order, opts = {}) {
   const log = opts.log || (() => {});
+  const traceCtx = opts.traceCtx && typeof opts.traceCtx === "object" ? opts.traceCtx : {};
+  const logStep = (step, extra = {}) => {
+    console.info("[S7][ml-sales-sync-order-step]", {
+      syncRunId: traceCtx.syncRunId ?? null,
+      marketplaceAccountId: opts.marketplaceAccountId ?? null,
+      sellerCompanyId: opts.sellerCompanyId ?? null,
+      externalOrderId: order?.id != null ? String(order.id) : null,
+      index: traceCtx.orderIndex ?? null,
+      total: traceCtx.total ?? null,
+      step,
+      ...extra,
+    });
+  };
   /** @type {{ remaining: number } | null | undefined} */
   const pricingDebug = opts.pricingDebug;
   const marketplace = opts.marketplace || ML_MARKETPLACE_SLUG;
@@ -338,6 +351,7 @@ export async function persistMercadoLibreOrder(supabase, userId, order, opts = {
   if (marketplaceAccountId) {
     existingQuery = existingQuery.eq("marketplace_account_id", marketplaceAccountId);
   }
+  logStep("prefetch order");
   const { data: existingOrder, error: exErr } = await existingQuery.maybeSingle();
 
   if (exErr) {
@@ -358,6 +372,7 @@ export async function persistMercadoLibreOrder(supabase, userId, order, opts = {
   let salesOrderId;
 
   if (existingOrder?.id) {
+    logStep("persist order");
     const { error: updErr } = await supabase
       .from("sales_orders")
       .update(orderRow)
@@ -369,6 +384,7 @@ export async function persistMercadoLibreOrder(supabase, userId, order, opts = {
     }
     salesOrderId = existingOrder.id;
   } else {
+    logStep("persist order");
     const { data: inserted, error: insErr } = await supabase
       .from("sales_orders")
       .insert(orderRow)
@@ -382,6 +398,7 @@ export async function persistMercadoLibreOrder(supabase, userId, order, opts = {
     salesOrderId = inserted.id;
   }
 
+  logStep("persist items");
   const { error: delI } = await supabase.from("sales_order_items").delete().eq("sales_order_id", salesOrderId);
   if (delI) log("delete_order_items_warn", { delI, salesOrderId });
 
@@ -421,12 +438,14 @@ export async function persistMercadoLibreOrder(supabase, userId, order, opts = {
     if (insErr) throw insErr;
   }
 
+  logStep("snapshot");
   const { error: snapErr } = await supabase.from("order_raw_snapshots").insert({
     sales_order_id: salesOrderId,
     payload: { order, imported_at: nowIso, marketplace },
   });
   if (snapErr) log("order_snapshot_warn", { snapErr, salesOrderId });
 
+  logStep("metrics");
   return { salesOrderId, external_order_id: orderRow.external_order_id };
 }
 
