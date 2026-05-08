@@ -1,5 +1,11 @@
 {
   "version": 2,
+  "crons": [
+    {
+      "path": "/api/jobs/marketplace-account-sync?limit=1",
+      "schedule": "* * * * *"
+    }
+  ],
   "rewrites": [
     { "source": "/api/:path*", "destination": "/api?__path=:path*" }
   ]

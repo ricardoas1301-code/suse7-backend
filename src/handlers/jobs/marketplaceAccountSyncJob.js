@@ -39,9 +39,25 @@ export async function handleJobsMarketplaceAccountSync(req, res) {
     return res.status(405).json({ ok: false, error: "Método não permitido" });
   }
 
-  const jobSecret = config.jobSecret;
-  if (jobSecret && req.headers["x-job-secret"] !== jobSecret) {
-    return res.status(401).json({ ok: false, error: "Token de job inválido" });
+  const jobSecret = config.jobSecret != null ? String(config.jobSecret).trim() : "";
+  const cronSecret = config.cronSecret != null ? String(config.cronSecret).trim() : "";
+  const headerSecret =
+    req.headers["x-job-secret"] != null ? String(req.headers["x-job-secret"]).trim() : "";
+  const authHeader = req.headers["authorization"] != null ? String(req.headers["authorization"]) : "";
+  const bearerToken = authHeader.toLowerCase().startsWith("bearer ")
+    ? authHeader.slice(7).trim()
+    : "";
+  const cronSecretQuery =
+    req.query?.cron_secret != null ? String(req.query.cron_secret).trim() : "";
+  const hasJobSecretAuth = jobSecret !== "" && headerSecret === jobSecret;
+  const hasCronAuth =
+    cronSecret !== "" &&
+    (bearerToken === cronSecret || cronSecretQuery === cronSecret);
+
+  if (jobSecret || cronSecret) {
+    if (!hasJobSecretAuth && !hasCronAuth) {
+      return res.status(401).json({ ok: false, error: "Token de job inválido" });
+    }
   }
 
   console.log("[MARKETPLACE_SYNC_JOB_ENV]", {
@@ -86,6 +102,7 @@ export async function handleJobsMarketplaceAccountSync(req, res) {
       ok: true,
       ...(Object.keys(workerOpts).length ? { requested_limit_chunks: workerOpts.maxChunks } : {}),
       ...out,
+      auth_mode: hasJobSecretAuth ? "x-job-secret" : hasCronAuth ? "cron-secret" : "none",
       hint: "Agende este endpoint em cron (ex.: Vercel/GitHub Actions) com X-Job-Secret.",
     });
   } catch (e) {

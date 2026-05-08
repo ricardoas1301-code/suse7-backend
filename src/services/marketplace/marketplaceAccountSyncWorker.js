@@ -43,6 +43,21 @@ const RUNNING_STALE_TIMEOUT_MS = Math.min(
   24 * 60 * 60 * 1000,
   Math.max(60 * 1000, parseInt(process.env.ML_INITIAL_SYNC_RUNNING_STALE_TIMEOUT_MS || "900000", 10) || 900000)
 );
+/**
+ * @param {string} event
+ * @param {Record<string, unknown>} payload
+ */
+function logS7Drain(event, payload) {
+  console.info(`[S7][${event}]`, payload);
+}
+
+/**
+ * @param {string} tag
+ * @param {Record<string, unknown>} payload
+ */
+function logS7Worker(tag, payload) {
+  console.info(`[S7][${tag}]`, payload);
+}
 
 /** @param {string} jobType */
 function jobRank(jobType) {
@@ -188,6 +203,18 @@ async function markStaleRunningJobsAsError(supabase) {
       continue;
     }
     moved += 1;
+    logS7Drain("marketplace-sync-drain-stale-recovered", {
+      jobId: row.id ?? null,
+      jobType: row.job_type ?? null,
+      marketplaceAccountId: row.marketplace_account_id ?? null,
+      sellerCompanyId: null,
+      status: "error",
+      progress_current: null,
+      progress_total: null,
+      cursor: null,
+      elapsedMs: 0,
+      stale_timeout_ms: RUNNING_STALE_TIMEOUT_MS,
+    });
     console.warn("[ML_INITIAL_SYNC_STALE_RUNNING_MARKED_ERROR]", {
       job_id: row.id,
       job_type: row.job_type ?? null,
@@ -278,11 +305,24 @@ function prerequisiteAllows(job, statusMap) {
 function sortEligibleJobs(rows, statusMap) {
   const filtered = rows.filter((j) => prerequisiteAllows(j, statusMap));
   filtered.sort((a, b) => {
+    const sa = String(a.status || "").toLowerCase();
+    const sb = String(b.status || "").toLowerCase();
+    const ua = new Date(/** @type {string} */ (a.updated_at || a.created_at || 0)).getTime();
+    const ub = new Date(/** @type {string} */ (b.updated_at || b.created_at || 0)).getTime();
+    const staleA = sa === "running" && Number.isFinite(ua) ? Date.now() - ua > RUNNING_STALE_TIMEOUT_MS / 2 : false;
+    const staleB = sb === "running" && Number.isFinite(ub) ? Date.now() - ub > RUNNING_STALE_TIMEOUT_MS / 2 : false;
+    const statusRank = (status, stale) => {
+      if (status === "running" && stale) return 0;
+      if (status === "running") return 1;
+      if (status === "pending") return 2;
+      return 9;
+    };
+    const rsA = statusRank(sa, staleA);
+    const rsB = statusRank(sb, staleB);
+    if (rsA !== rsB) return rsA - rsB;
     const pa = jobRank(String(a.job_type || ""));
     const pb = jobRank(String(b.job_type || ""));
     if (pa !== pb) return pa - pb;
-    const ua = new Date(/** @type {string} */ (a.updated_at || a.created_at || 0)).getTime();
-    const ub = new Date(/** @type {string} */ (b.updated_at || b.created_at || 0)).getTime();
     return ua - ub;
   });
   return filtered;
@@ -649,6 +689,17 @@ async function processMlInitialSalesHistoryBatch(supabase, job, opts) {
           errors_sample: summaryStub.errors.slice(-20),
         },
       }, "after_order_processed");
+      logS7Drain("marketplace-sync-drain-job-progress", {
+        jobId: jRow.id ?? null,
+        jobType: jRow.job_type ?? null,
+        marketplaceAccountId: accountId,
+        sellerCompanyId: sellerCompanyFromAcc,
+        status: "running",
+        progress_current: processedTotal,
+        progress_total: progressTotal ?? null,
+        cursor: serializeSalesCursor(cursor),
+        elapsedMs: 0,
+      });
       console.info("[S7][ml-sales-sync-order-step]", {
         syncRunId: jRow.id,
         marketplaceAccountId: accountId,
@@ -951,6 +1002,20 @@ export async function runMarketplaceAccountSyncWorker(supabase, opts = {}) {
     batch_details: batchDetails,
     timestamp: new Date().toISOString(),
   });
+  logS7Drain("marketplace-sync-drain-start", {
+    jobId: null,
+    jobType: null,
+    marketplaceAccountId: null,
+    sellerCompanyId: null,
+    status: "running",
+    progress_current: null,
+    progress_total: null,
+    cursor: null,
+    elapsedMs: 0,
+    budgetMs,
+    maxChunks,
+    batchDetails,
+  });
   console.info("[ML_ONBOARDING_SYNC_WORKER_ENTRY]", {
     limit: maxChunks,
     budget_ms: budgetMs,
@@ -970,6 +1035,7 @@ export async function runMarketplaceAccountSyncWorker(supabase, opts = {}) {
   }
 
   for (let i = 0; i < maxChunks; i++) {
+    const iterStart = Date.now();
     const rows = await fetchJobsPool(supabase, 160);
     const countsByType = rows.reduce((acc, r) => {
       const t = String(r.job_type || "unknown");
@@ -1015,6 +1081,18 @@ export async function runMarketplaceAccountSyncWorker(supabase, opts = {}) {
 
     const job = sorted[0];
     if (!job) {
+      logS7Drain("marketplace-sync-drain-no-jobs", {
+        jobId: null,
+        jobType: null,
+        marketplaceAccountId: null,
+        sellerCompanyId: null,
+        status: "idle",
+        progress_current: null,
+        progress_total: null,
+        cursor: null,
+        elapsedMs: Date.now() - iterStart,
+        iteration: i,
+      });
       console.info("[ML_ONBOARDING_SYNC_JOB_PICKED]", {
         picked: false,
         reason: "no_eligible_jobs",
@@ -1022,6 +1100,18 @@ export async function runMarketplaceAccountSyncWorker(supabase, opts = {}) {
       });
       break;
     }
+    logS7Drain("marketplace-sync-drain-job-picked", {
+      jobId: job.id ?? null,
+      jobType: job.job_type ?? null,
+      marketplaceAccountId: job.marketplace_account_id ?? null,
+      sellerCompanyId: job.seller_company_id ?? null,
+      status: job.status ?? null,
+      progress_current: job.progress_current ?? null,
+      progress_total: job.progress_total ?? null,
+      cursor: job.last_cursor ?? null,
+      elapsedMs: Date.now() - iterStart,
+      iteration: i,
+    });
     console.info("[ML_ONBOARDING_SYNC_JOB_PICKED]", {
       picked: true,
       job_id: job.id ?? null,
@@ -1032,6 +1122,18 @@ export async function runMarketplaceAccountSyncWorker(supabase, opts = {}) {
 
     const deadlineMs = Date.now() + budgetMs;
     const out = await dispatchJobChunk(supabase, job, { deadlineMs, batchDetails });
+    logS7Drain("marketplace-sync-drain-job-finished", {
+      jobId: job.id ?? null,
+      jobType: job.job_type ?? null,
+      marketplaceAccountId: job.marketplace_account_id ?? null,
+      sellerCompanyId: job.seller_company_id ?? null,
+      status: out?.done ? "done" : out?.stopped ? "stopped" : "running",
+      progress_current: out?.progress_current ?? null,
+      progress_total: out?.progress_total ?? null,
+      cursor: out?.last_cursor ?? null,
+      elapsedMs: Date.now() - iterStart,
+      iteration: i,
+    });
 
     chunks.push({
       job_id: job.id,
@@ -1053,6 +1155,18 @@ export async function runMarketplaceAccountSyncWorker(supabase, opts = {}) {
 
   const hasErrorChunk = chunks.some((c) => c?.error);
   if (hasErrorChunk) {
+    logS7Drain("marketplace-sync-drain-error", {
+      jobId: null,
+      jobType: null,
+      marketplaceAccountId: null,
+      sellerCompanyId: null,
+      status: "error",
+      progress_current: null,
+      progress_total: null,
+      cursor: null,
+      elapsedMs: 0,
+      chunks_processed: chunks.length,
+    });
     console.error("[ML_ONBOARDING_SYNC_FAILED]", {
       chunks_processed: chunks.length,
       timestamp: new Date().toISOString(),

@@ -24,6 +24,10 @@ const STALE_PROGRESS_MS = Math.min(
   24 * 60 * 60 * 1000,
   Math.max(30 * 1000, parseInt(process.env.ML_SYNC_STATUS_STALE_MS || "90000", 10) || 90000)
 );
+const PENDING_QUEUE_WARNING_MS = Math.min(
+  24 * 60 * 60 * 1000,
+  Math.max(30 * 1000, parseInt(process.env.ML_SYNC_PENDING_QUEUE_WARNING_MS || "120000", 10) || 120000)
+);
 
 /**
  * @param {Record<string, unknown>[]} rows
@@ -142,6 +146,7 @@ export default async function handleMarketplaceAccountSyncStatus(req, res, path)
       return Number.isFinite(c) && c > 0;
     });
     const runningRows = rows.filter((r) => String(r.status || "") === "running");
+    const pendingRows = rows.filter((r) => String(r.status || "") === "pending");
     const latestRunningTs = runningRows
       .map((r) => Date.parse(String(r.updated_at ?? r.created_at ?? "")))
       .filter((n) => Number.isFinite(n))
@@ -150,6 +155,14 @@ export default async function handleMarketplaceAccountSyncStatus(req, res, path)
       runningRows.length > 0 &&
       Number.isFinite(latestRunningTs) &&
       Date.now() - Number(latestRunningTs) > STALE_PROGRESS_MS;
+    const oldestPendingTs = pendingRows
+      .map((r) => Date.parse(String(r.updated_at ?? r.created_at ?? "")))
+      .filter((n) => Number.isFinite(n))
+      .sort((a, b) => a - b)[0];
+    const queuedTooLong =
+      pendingRows.length > 0 &&
+      Number.isFinite(oldestPendingTs) &&
+      Date.now() - Number(oldestPendingTs) > PENDING_QUEUE_WARNING_MS;
 
     let overall = "idle";
     if (!hasEngagedInitialSync) {
@@ -174,6 +187,10 @@ export default async function handleMarketplaceAccountSyncStatus(req, res, path)
       overall === "running" && staleRunning
         ? "A sincronização está demorando mais que o normal. Estamos tentando continuar em segundo plano."
         : null;
+    const pending_queue_warning =
+      (overall === "running" || overall === "awaiting_start") && queuedTooLong
+        ? "Sincronização enfileirada. Estamos aguardando o processamento em segundo plano."
+        : null;
 
     return res.status(200).json({
       ok: true,
@@ -182,9 +199,12 @@ export default async function handleMarketplaceAccountSyncStatus(req, res, path)
       overall,
       stalled: Boolean(staleRunning),
       stale_threshold_ms: STALE_PROGRESS_MS,
+      pending_queued_too_long: Boolean(queuedTooLong),
+      pending_warning_threshold_ms: PENDING_QUEUE_WARNING_MS,
       initial_sync_engaged: hasEngagedInitialSync,
       background_note,
       stalled_warning,
+      pending_queue_warning,
       title: "Conta Mercado Livre conectada",
       description:
         "Conta Mercado Livre conectada com sucesso. Agora vamos sincronizar seus dados para preparar o Suse7.",
