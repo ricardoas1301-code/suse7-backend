@@ -4,6 +4,7 @@
 
 import { requireAuthUser } from "../ml/_helpers/requireAuthUser.js";
 import { ML_MARKETPLACE_SLUG } from "../ml/_helpers/mlMarketplace.js";
+import { config } from "../../infra/config.js";
 import {
   ML_INITIAL_SYNC_JOB_TYPES_ORDERED,
 } from "../../services/marketplace/createMlInitialSyncJobs.js";
@@ -191,6 +192,40 @@ export default async function handleMarketplaceAccountSyncStatus(req, res, path)
       (overall === "running" || overall === "awaiting_start") && queuedTooLong
         ? "Sincronização enfileirada. Estamos aguardando o processamento em segundo plano."
         : null;
+
+    // Fallback serverless (Hobby sem cron por minuto):
+    // quando detectar fila estagnada/pendente por muito tempo, tenta acordar 1 ciclo do drain.
+    const shouldNudgeDrain =
+      overall === "running" &&
+      (staleRunning || queuedTooLong || pendingRows.length > 0);
+    const host = req.headers?.host != null ? String(req.headers.host) : "";
+    const protoHeader = req.headers?.["x-forwarded-proto"] != null ? String(req.headers["x-forwarded-proto"]) : "";
+    const proto = protoHeader.includes("https") ? "https" : "http";
+    const dispatchUrl = host ? `${proto}://${host}/api/jobs/marketplace-account-sync?limit=1` : null;
+    if (shouldNudgeDrain && dispatchUrl && (config.jobSecret || config.cronSecret)) {
+      const headers = {};
+      if (config.jobSecret) headers["x-job-secret"] = config.jobSecret;
+      else if (config.cronSecret) headers.Authorization = `Bearer ${config.cronSecret}`;
+      Promise.resolve()
+        .then(async () => {
+          try {
+            await fetch(dispatchUrl, { method: "POST", headers });
+            console.info("[S7][marketplace-sync-drain-nudge]", {
+              marketplace_account_id: accountId,
+              overall,
+              staleRunning,
+              queuedTooLong,
+              pending_count: pendingRows.length,
+            });
+          } catch (nudgeErr) {
+            console.warn("[S7][marketplace-sync-drain-nudge-warn]", {
+              marketplace_account_id: accountId,
+              message: nudgeErr?.message ?? String(nudgeErr),
+            });
+          }
+        })
+        .catch(() => {});
+    }
 
     return res.status(200).json({
       ok: true,
