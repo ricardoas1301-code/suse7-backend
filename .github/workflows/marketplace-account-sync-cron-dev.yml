@@ -1,4 +1,4 @@
-name: Marketplace Account Sync Cron
+name: Marketplace Account Sync Cron (DEV)
 
 on:
   schedule:
@@ -6,41 +6,41 @@ on:
   workflow_dispatch: {}
 
 jobs:
-  run-prod:
+  run-dev:
     runs-on: ubuntu-latest
     env:
-      SYNC_JOB_URL: ${{ secrets.S7_PROD_MARKETPLACE_SYNC_JOB_URL }}
-      JOB_SECRET: ${{ secrets.S7_PROD_JOB_SECRET }}
+      SYNC_JOB_URL: ${{ secrets.S7_DEV_MARKETPLACE_SYNC_JOB_URL }}
+      JOB_SECRET: ${{ secrets.S7_DEV_JOB_SECRET }}
     steps:
-      - name: Trigger production marketplace-account-sync job
+      - name: Trigger DEV marketplace-account-sync job
         run: |
           set -euo pipefail
           if [ -z "${SYNC_JOB_URL}" ] || [ -z "${JOB_SECRET}" ]; then
-            echo "::error::Missing required GitHub Actions secrets (S7_PROD_MARKETPLACE_SYNC_JOB_URL and/or S7_PROD_JOB_SECRET)"
+            echo "::error::Missing required GitHub Actions secrets (S7_DEV_MARKETPLACE_SYNC_JOB_URL and/or S7_DEV_JOB_SECRET)"
             exit 1
           fi
-          http_code=$(curl -sS -o /tmp/marketplace-sync-prod.json -w "%{http_code}" -X POST "${SYNC_JOB_URL}" \
+          http_code=$(curl -sS -o /tmp/marketplace-sync-dev.json -w "%{http_code}" -X POST "${SYNC_JOB_URL}" \
             -H "Content-Type: application/json" \
             -H "X-Job-Secret: ${JOB_SECRET}" \
             -d '{"limit":5}')
-          echo "PROD HTTP status: ${http_code}"
+          echo "DEV HTTP status: ${http_code}"
           if command -v jq >/dev/null 2>&1; then
-            echo "PROD response summary (sem URL/secret):"
-            if ! jq -e . /tmp/marketplace-sync-prod.json >/dev/null 2>&1; then
+            echo "DEV response summary (sem URL/secret):"
+            if ! jq -e . /tmp/marketplace-sync-dev.json >/dev/null 2>&1; then
               echo "(resposta não é JSON válido — primeiros 400 chars)"
-              head -c 400 /tmp/marketplace-sync-prod.json || true
+              head -c 400 /tmp/marketplace-sync-dev.json || true
               echo
             else
               jq -c \
                 '{ok, chunks_processed, chunks_len: (.chunks | length?), incremental_sales_poll: (.incremental_sales_poll | if . == null then null elif (type == "object") then {skipped, accounts_attempted, orders_fetched, orders_persisted, error: .error} else . end)}' \
-                /tmp/marketplace-sync-prod.json
+                /tmp/marketplace-sync-dev.json
             fi
           else
-            echo "PROD response (primeiros 500 chars):"
-            head -c 500 /tmp/marketplace-sync-prod.json || true
+            echo "DEV response (primeiros 500 chars, sem garantir formato JSON):"
+            head -c 500 /tmp/marketplace-sync-dev.json || true
             echo
           fi
           if [ "${http_code}" -lt 200 ] || [ "${http_code}" -ge 300 ]; then
-            echo "::error::Falha PROD: HTTP ${http_code} (esperado 2xx)"
+            echo "::error::Falha DEV: HTTP ${http_code} (esperado 2xx)"
             exit 1
           fi
