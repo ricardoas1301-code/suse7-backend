@@ -5,6 +5,7 @@
 
 import { createClient } from "@supabase/supabase-js";
 import { ML_MARKETPLACE_SLUG } from "./mlMarketplace.js";
+import { notifyMarketplaceAccountDisconnected } from "../../../domain/notifications/producers/notifyMarketplaceAccountDisconnected.js";
 
 /**
  * @param {string} userId
@@ -70,6 +71,13 @@ export async function getValidMLToken(userId) {
   if (!refreshTok) {
     const msg = "refresh_token ausente no banco; reconecte o Mercado Livre em Integrações.";
     console.error("[ML_AUTH] refresh_failed:", msg);
+    void notifyMarketplaceAccountDisconnected({
+      supabase,
+      userId,
+      marketplace: ML_MARKETPLACE_SLUG,
+      reason: "refresh_token_missing",
+      source: "ml_token_refresh",
+    });
     throw new Error(msg);
   }
 
@@ -115,6 +123,13 @@ export async function getValidMLToken(userId) {
       error: refreshData.error ?? null,
       body_preview: raw?.slice?.(0, 500) ?? null,
     });
+    void notifyMarketplaceAccountDisconnected({
+      supabase,
+      userId,
+      marketplace: ML_MARKETPLACE_SLUG,
+      reason: `oauth_refresh_failed:${desc.slice(0, 120)}`,
+      source: "ml_oauth_refresh",
+    });
     throw new Error(`Falha ao renovar token: ${desc}`);
   }
 
@@ -155,6 +170,13 @@ export async function getValidMLToken(userId) {
       message: updErr.message,
       code: updErr.code,
     });
+    void notifyMarketplaceAccountDisconnected({
+      supabase,
+      userId,
+      marketplace: ML_MARKETPLACE_SLUG,
+      reason: `token_persist_failed:${updErr.message?.slice?.(0, 80) ?? "unknown"}`,
+      source: "ml_token_persist",
+    });
     throw new Error(`Token renovado no ML mas falha ao salvar: ${updErr.message}`);
   }
 
@@ -163,6 +185,19 @@ export async function getValidMLToken(userId) {
     expires_at: newExpiresAt,
     refresh_rotated: newRefresh !== refreshTok,
   });
+
+  const acctSyncIso = new Date().toISOString();
+  const { error: acctExpErr } = await supabase
+    .from("marketplace_accounts")
+    .update({ token_expires_at: newExpiresAt, updated_at: acctSyncIso })
+    .eq("user_id", userId)
+    .eq("marketplace", ML_MARKETPLACE_SLUG);
+  if (acctExpErr) {
+    console.warn("[ML_AUTH] marketplace_accounts_token_expires_sync_failed", {
+      user_id: userId,
+      message: acctExpErr.message,
+    });
+  }
 
   return accessNew;
 }
