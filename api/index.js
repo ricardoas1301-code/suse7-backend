@@ -270,6 +270,24 @@ export default async function handler(req, res) {
     }
 
     // ------------------------------
+    // Billing — cedo no router (path + pathNorm + rawUrl; evita 404 se divergir normalização)
+    // ------------------------------
+    if (
+      pathNorm.startsWith("/api/billing") ||
+      path.startsWith("/api/billing") ||
+      /(?:^|[?&])__path=(?:api%2F|api%2f)?billing/i.test(String(rawUrl || "")) ||
+      /(?:^|[?&])__path=billing\//i.test(String(rawUrl || "")) ||
+      /\/api\/billing/i.test(String(rawUrl || ""))
+    ) {
+      const billingPath =
+        String(pathNorm && pathNorm !== "/" ? pathNorm : path || "")
+          .replace(/\/+$/, "")
+          .replace(/\/{2,}/g, "/") || "/";
+      const mod = await import("../src/billing/routes/billingRoutes.js");
+      return mod.handleBillingRoutes(req, res, billingPath);
+    }
+
+    // ------------------------------
     // Rotas (lazy import — FASE 2)
     // ------------------------------
     if (path === "/api/user/preferences") {
@@ -523,15 +541,6 @@ export default async function handler(req, res) {
     ) {
       const mod = await import("../src/handlers/competition/index.js");
       return mod.default(req, res, path);
-    }
-
-    if (
-      pathNorm.startsWith("/api/billing") ||
-      /(?:^|[?&])__path=(?:api%2F|api%2f)?billing/i.test(String(rawUrl || "")) ||
-      /(?:^|[?&])__path=billing\//i.test(String(rawUrl || ""))
-    ) {
-      const mod = await import("../src/billing/routes/billingRoutes.js");
-      return mod.handleBillingRoutes(req, res, pathNorm);
     }
 
     // ------------------------------

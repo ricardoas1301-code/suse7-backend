@@ -13,6 +13,19 @@ import { canUserAccessPlanFeatures } from "../services/billingAccessService.js";
 import { handleAsaasWebhookRequest } from "../services/billingWebhookService.js";
 import { logBillingError } from "../billingLog.js";
 
+/** Path canônico para match de rotas (decode + slashes + case). */
+function normalizeBillingRoutePath(input) {
+  let s = String(input ?? "").trim();
+  if (!s) return "/";
+  try {
+    s = decodeURIComponent(s);
+  } catch {
+    /* manter */
+  }
+  s = s.replace(/\/{2,}/g, "/").replace(/\/+$/, "") || "/";
+  return s.toLowerCase();
+}
+
 /**
  * @param {import("http").IncomingMessage} req
  * @param {import("http").ServerResponse} res
@@ -21,8 +34,14 @@ import { logBillingError } from "../billingLog.js";
 export async function handleBillingRoutes(req, res, path) {
   const traceId = getTraceId(req);
   const method = String(req.method || "GET").toUpperCase();
+  const pathNorm = normalizeBillingRoutePath(path);
 
-  if (path === "/api/billing/ping") {
+  // TEMP — remover após validar roteamento billing em DEV/prod
+  console.log("[S7 BILLING ROUTER]", JSON.stringify({ pathNorm, method }));
+
+  if (pathNorm === "/api/billing/ping") {
+    // TEMP — remover após validar roteamento billing em DEV/prod
+    console.log("[S7 BILLING ROUTER MATCHED]", JSON.stringify({ route: "ping" }));
     if (method !== "GET") {
       return fail(res, { code: "METHOD_NOT_ALLOWED", message: "Use GET" }, 405, traceId);
     }
@@ -38,7 +57,7 @@ export async function handleBillingRoutes(req, res, path) {
     });
   }
 
-  if (path === "/api/billing/webhooks/asaas") {
+  if (pathNorm === "/api/billing/webhooks/asaas") {
     if (method !== "POST") {
       return fail(res, { code: "METHOD_NOT_ALLOWED", message: "Use POST" }, 405, traceId);
     }
@@ -53,7 +72,7 @@ export async function handleBillingRoutes(req, res, path) {
     return ok(res, r.body, r.status);
   }
 
-  if (path === "/api/billing/checkout") {
+  if (pathNorm === "/api/billing/checkout") {
     if (method !== "POST") {
       return fail(res, { code: "METHOD_NOT_ALLOWED", message: "Use POST" }, 405, traceId);
     }
@@ -170,7 +189,7 @@ export async function handleBillingRoutes(req, res, path) {
     }
   }
 
-  if (path === "/api/billing/subscription/status") {
+  if (pathNorm === "/api/billing/subscription/status") {
     if (method !== "GET") {
       return fail(res, { code: "METHOD_NOT_ALLOWED", message: "Use GET" }, 405, traceId);
     }
