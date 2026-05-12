@@ -11,12 +11,14 @@
 // ==================================================
 
 import { applyCors } from "../src/middlewares/cors.js";
+import handleMlWebhookRoute from "../src/handlers/ml/mlWebhookRoutes.js";
 
 const DEBUG_ML_FIELD_MAP_PATH = "/api/debug/marketplaces/mercado-livre/listings/field-map";
 const DEBUG_ML_COVER_COMPARE_PATH = "/api/debug/ml/listing-cover-compare";
 const DEBUG_ML_LISTINGS_COVER_CONTEXT_PATH = "/api/debug/ml/listings-cover-context";
 console.log("[S7 API Router] boot — rotas diagnóstico ML:", DEBUG_ML_FIELD_MAP_PATH, DEBUG_ML_COVER_COMPARE_PATH, DEBUG_ML_LISTINGS_COVER_CONTEXT_PATH);
 console.log("[S7 API Router] boot — ML OAuth diag: GET /api/ml/oauth-config");
+console.log("[S7 API Router] boot — billing: GET /api/billing/ping · GET /api/billing/subscription/status · POST /api/billing/checkout · POST /api/billing/webhooks/asaas");
 
 /**
  * Resolve rota lógica para o router único (/api + __path no Vercel).
@@ -124,6 +126,49 @@ export default async function handler(req, res) {
   try {
     const baseUrl = `http://${req.headers?.host || "localhost"}`;
     const rawUrl = req.url || "/api";
+    const methodUpper = String(req.method || "GET").toUpperCase();
+
+    // ------------------------------
+    // ML ingest webhook — PRIMEIRO (antes de qualquer outro roteamento).
+    // Vercel: rawUrl pode ser /api/ml/webhook?__path=...; evitar substring "ml/webhook" (colide com ml-webhook-events).
+    // ------------------------------
+    {
+      const rawLower = String(rawUrl || "").toLowerCase();
+      const pathResolvedEarly = resolveRouterPath(rawUrl, baseUrl);
+      const pathNormEarly =
+        String(pathResolvedEarly || "")
+          .replace(/\/+$/, "")
+          .replace(/\/{2,}/g, "/") || "/";
+      const isMlWebhookEventsJob =
+        rawLower.includes("ml-webhook-events") ||
+        rawLower.includes("jobs%2fml-webhook-events") ||
+        rawLower.includes("jobs/ml-webhook-events");
+      const pathMatchIngest =
+        pathNormEarly === "/api/ml/webhook" ||
+        pathNormEarly === "/ml/webhook" ||
+        pathNormEarly === "/api/ml/webhooks" ||
+        pathNormEarly === "/ml/webhooks";
+      const rawMatchIngest =
+        rawLower.includes("/api/ml/webhook") ||
+        rawLower.includes("/api/ml/webhooks") ||
+        rawLower.includes("/ml/webhook") ||
+        rawLower.includes("/ml/webhooks") ||
+        rawLower.includes("__path=ml%2fwebhook") ||
+        rawLower.includes("__path=ml%2Fwebhook") ||
+        rawLower.includes("__path=api%2fml%2fwebhook") ||
+        rawLower.includes("__path=api%2Fml%2Fwebhook") ||
+        rawLower.includes("__path=ml/webhook") ||
+        rawLower.includes("__path=api/ml/webhook");
+      if (!isMlWebhookEventsJob && (pathMatchIngest || rawMatchIngest)) {
+        console.info("[ml/webhook] route_matched", {
+          pathNorm: pathNormEarly,
+          pathResolved: pathResolvedEarly,
+          rawUrl,
+          method: methodUpper,
+        });
+        return await handleMlWebhookRoute(req, res);
+      }
+    }
 
     // ------------------------------
     // HOTFIX — Job ML Webhook Events
@@ -161,9 +206,13 @@ export default async function handler(req, res) {
 
     const url = new URL(rawUrl, baseUrl);
     const path = resolveRouterPath(rawUrl, baseUrl);
+    const pathNorm = String(path || "")
+      .replace(/\/+$/, "")
+      .replace(/\/{2,}/g, "/") || "/";
 
     console.log("[S7 API Router] resolved path", {
       path,
+      pathNorm,
       rawUrl,
       method: req.method,
       router_version: "ml-webhook-job-top-route-v1",
@@ -239,6 +288,50 @@ export default async function handler(req, res) {
       const mod = await import("../src/handlers/notifications/markRead.js");
       return mod.handleNotificationsMarkRead(req, res);
     }
+    if (path === "/api/notifications/contacts" && (req.method === "GET" || req.method === "POST")) {
+      const mod = await import("../src/handlers/notifications/notificationContacts.js");
+      return mod.handleNotificationContacts(req, res);
+    }
+    if (/^\/api\/notifications\/contacts\/[^/]+$/.test(path)) {
+      const mod = await import("../src/handlers/notifications/notificationContacts.js");
+      return mod.handleNotificationContactById(req, res, path);
+    }
+    if (path === "/api/notifications/routing-rules" && (req.method === "GET" || req.method === "PUT")) {
+      const mod = await import("../src/handlers/notifications/notificationRoutingRules.js");
+      return mod.handleNotificationRoutingRules(req, res);
+    }
+    if (path === "/api/notifications/debug/resolve" && req.method === "GET") {
+      const mod = await import("../src/handlers/notifications/debugResolve.js");
+      return mod.handleNotificationsDebugResolve(req, res);
+    }
+    if (path === "/api/notifications/routing-summary" && req.method === "GET") {
+      const mod = await import("../src/handlers/notifications/notificationRoutingSummary.js");
+      return mod.handleNotificationRoutingSummary(req, res);
+    }
+    if (path === "/api/notifications/debug/simulate" && req.method === "POST") {
+      const mod = await import("../src/handlers/notifications/notificationDebugSimulate.js");
+      return mod.handleNotificationDebugSimulate(req, res);
+    }
+    if (/^\/api\/notifications\/deliveries\/[^/]+\/retry$/.test(path) && req.method === "POST") {
+      const mod = await import("../src/handlers/notifications/notificationDeliveryRetry.js");
+      return mod.handleNotificationDeliveryRetry(req, res, path);
+    }
+    if (/^\/api\/notifications\/deliveries\/[^/]+\/cancel$/.test(path) && req.method === "POST") {
+      const mod = await import("../src/handlers/notifications/notificationDeliveryCancel.js");
+      return mod.handleNotificationDeliveryCancel(req, res, path);
+    }
+    if (path === "/api/notifications/deliveries" && req.method === "GET") {
+      const mod = await import("../src/handlers/notifications/notificationDeliveriesList.js");
+      return mod.handleNotificationDeliveriesList(req, res);
+    }
+    if (path === "/api/notifications/events" && req.method === "GET") {
+      const mod = await import("../src/handlers/notifications/notificationEventsList.js");
+      return mod.handleNotificationEventsList(req, res);
+    }
+    if (/^\/api\/notifications\/events\/[^/]+$/.test(path) && req.method === "GET") {
+      const mod = await import("../src/handlers/notifications/notificationEventDetail.js");
+      return mod.handleNotificationEventDetail(req, res, path);
+    }
     if (path === "/api/drafts/upsert") {
       const mod = await import("../src/handlers/drafts/upsert.js");
       return mod.handleDraftsUpsert(req, res);
@@ -295,13 +388,9 @@ export default async function handler(req, res) {
       const mod = await import("../src/handlers/ml/listingPricingScenarios.js");
       return await mod.default(req, res);
     }
-    if (
-      path === "/api/ml/webhook" ||
-      path === "/ml/webhook" ||
-      path === "/api/ml/webhooks" ||
-      path === "/ml/webhooks"
-    ) {
-      const mod = await import("../src/handlers/ml/mlWebhookRoutes.js");
+    /** Alias histórico: mesmo handler que `pricing-scenarios` (contrato canônico no FE). */
+    if (path === "/api/ml/listings/sale-xray-modal") {
+      const mod = await import("../src/handlers/ml/listingPricingScenarios.js");
       return await mod.default(req, res);
     }
     if (path === "/api/listings/bulk-set-sku") {
@@ -315,6 +404,10 @@ export default async function handler(req, res) {
     if (path === "/api/ml/sales-summary") {
       const mod = await import("../src/handlers/ml/salesSummary.js");
       return await mod.default(req, res);
+    }
+    if (path === "/api/sales/detail" && req.method === "GET") {
+      const mod = await import("../src/handlers/sales/detail.js");
+      return mod.default(req, res);
     }
     if (path === "/api/sales" && req.method === "GET") {
       const mod = await import("../src/handlers/sales/list.js");
@@ -370,6 +463,10 @@ export default async function handler(req, res) {
       const mod = await import("../src/handlers/jobs/stockMinCheck.js");
       return mod.handleJobsStockMinCheck(req, res);
     }
+    if (path === "/api/jobs/process-notification-deliveries") {
+      const mod = await import("../src/handlers/jobs/processNotificationDeliveriesJob.js");
+      return mod.handleJobsProcessNotificationDeliveries(req, res);
+    }
     if (path === "/api/images/seo-rename") {
       const mod = await import("../src/handlers/images/seoRename.js");
       return mod.handleImagesSeoRename(req, res);
@@ -399,6 +496,10 @@ export default async function handler(req, res) {
       const mod = await import("../src/handlers/marketplace/accounts.js");
       return mod.default(req, res);
     }
+    if (path === "/api/marketplace/import-intelligence" && req.method === "GET") {
+      const mod = await import("../src/handlers/marketplace/importIntelligenceSummary.js");
+      return mod.default(req, res);
+    }
     if (path === "/api/customers" && req.method === "GET") {
       const mod = await import("../src/handlers/customers/list.js");
       return mod.default(req, res);
@@ -422,6 +523,15 @@ export default async function handler(req, res) {
     ) {
       const mod = await import("../src/handlers/competition/index.js");
       return mod.default(req, res, path);
+    }
+
+    if (
+      pathNorm.startsWith("/api/billing") ||
+      /(?:^|[?&])__path=(?:api%2F|api%2f)?billing/i.test(String(rawUrl || "")) ||
+      /(?:^|[?&])__path=billing\//i.test(String(rawUrl || ""))
+    ) {
+      const mod = await import("../src/billing/routes/billingRoutes.js");
+      return mod.handleBillingRoutes(req, res, pathNorm);
     }
 
     // ------------------------------

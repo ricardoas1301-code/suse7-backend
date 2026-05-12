@@ -27,6 +27,7 @@ export const config = {
   mlClientSecret: getEnv("ML_CLIENT_SECRET"),
   mlRedirectUri: getEnv("ML_REDIRECT_URI"),
   jobSecret: getEnv("JOB_SECRET") || getEnv("ML_WEBHOOK_JOB_SECRET"),
+  cronSecret: getEnv("CRON_SECRET"),
   /**
    * Dev Center — única variável oficial de acesso (lista de e-mails, minúsculas após trim).
    * Não existe SUSE7_DEV_CENTER_ALLOWED_USER_IDS; autorização é sempre por e-mail do JWT.
@@ -38,5 +39,12 @@ export const config = {
     .split(",")
     .map((s) => s.trim().toLowerCase())
     .filter(Boolean),
+
+  /** @see src/billing — gateway neutro (default: asaas). */
+  billingProviderDefault: getEnv("BILLING_PROVIDER_DEFAULT", { defaultValue: "asaas" }).trim().toLowerCase() || "asaas",
+  asaasEnv: getEnv("ASAAS_ENV", { defaultValue: "sandbox" }).trim(),
+  asaasApiBaseUrl: getEnv("ASAAS_API_BASE_URL", { defaultValue: "" }).trim(),
+  asaasApiKey: getEnv("ASAAS_API_KEY", { defaultValue: "" }).trim(),
+  asaasWebhookToken: getEnv("ASAAS_WEBHOOK_TOKEN", { defaultValue: "" }).trim(),
 };
 
