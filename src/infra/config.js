@@ -27,11 +27,13 @@ export const config = {
   mlClientSecret: getEnv("ML_CLIENT_SECRET"),
   mlRedirectUri: getEnv("ML_REDIRECT_URI"),
   /**
-   * Cron/job HTTP (X-Job-Secret). Ordem: JOB_SECRET → ML_WEBHOOK_JOB_SECRET → S7_* (espelho GitHub Actions).
+   * Cron/job HTTP (X-Job-Secret). Ordem: JOB_SECRET → DEV_JOB_SECRET → ML_WEBHOOK_JOB_SECRET → S7_* (espelho GitHub Actions).
+   * GitHub Actions DEV: secrets.DEV_JOB_SECRET (fallback legado S7_DEV_JOB_SECRET).
    * GitHub Actions PROD: secrets.S7_PROD_JOB_SECRET no header X-Job-Secret.
    */
   jobSecret:
     getEnv("JOB_SECRET") ||
+    getEnv("DEV_JOB_SECRET") ||
     getEnv("ML_WEBHOOK_JOB_SECRET") ||
     getEnv("S7_PROD_JOB_SECRET") ||
     getEnv("S7_DEV_JOB_SECRET"),
