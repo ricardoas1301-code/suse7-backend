@@ -1,21 +1,28 @@
 // ======================================================================
 // POST|GET /api/jobs/marketplace-account-sync — processa marketplace_account_sync_jobs
-// Proteção: X-Job-Secret === JOB_SECRET (quando JOB_SECRET está definido).
+// Proteção: X-Job-Secret === JOB_SECRET (ou S7_PROD_JOB_SECRET / S7_DEV_JOB_SECRET / ML_WEBHOOK_JOB_SECRET).
+// Alternativa legada: Authorization: Bearer === CRON_SECRET ou query cron_secret.
 //
-// Env opcional:
-// - ML_MARKETPLACE_SYNC_BUDGET_MS (default 55000)
-// - ML_INITIAL_SALES_BATCH_DETAILS (default 14)
-// - ML_MARKETPLACE_SYNC_JOB_MAX_CHUNKS (default 8)
+// Concorrência / escala (serverless — cada POST é um “tick” do worker):
+// - GLOBAL_SYNC_CONCURRENCY — máx. contas distintas em paralelo por onda (default 16)
+// - MARKETPLACE_SYNC_CONCURRENCY_MERCADO_LIVRE — teto específico ML (default = global)
+// - MARKETPLACE_SYNC_MAX_PARALLEL_ACCOUNTS — override explícito do min(global, ml)
+// - MARKETPLACE_SYNC_CONCURRENCY_PER_ACCOUNT — reservado (hoje 1 job inicial por conta)
+// - MARKETPLACE_SYNC_MAX_JOBS_PER_DRAIN — máx. dispatches por HTTP (default 24)
+// - MARKETPLACE_SYNC_FETCH_POOL_LIMIT — linhas lidas do pool Supabase por tick (default 400)
+// - MARKETPLACE_SYNC_DRAIN_TIMEBOX_MS / ML_MARKETPLACE_SYNC_BUDGET_MS — budget por invocação
+// - ML_INITIAL_SALES_BATCH_SIZE / ML_INITIAL_SALES_BATCH_DETAILS / MARKETPLACE_SYNC_SALES_PROGRESS_HEARTBEAT_EVERY
+// - ML_REQUEST_TIMEOUT_MS, ML_REQUEST_MAX_RETRIES, ML_SYNC_MAX_CONCURRENT_REQUESTS_PER_ACCOUNT
+// Body/query limit → MARKETPLACE_SYNC_MAX_JOBS_PER_DRAIN (compatível com maxChunks antigo)
+//
+// Infra: Vercel Hobby não mantém processo contínuo — use cron/agendador externo + este endpoint,
+// ou migre para worker dedicado (Railway/Render/Fly/Cloud Run). Ver sql/marketplace_account_sync_jobs_queue_phase2.sql.
 // ======================================================================
 
 import { createClient } from "@supabase/supabase-js";
 import { config } from "../../infra/config.js";
 import { runMarketplaceAccountSyncWorker } from "../../services/marketplace/marketplaceAccountSyncWorker.js";
 
-/**
- * Host do projeto Supabase efetivo (sem keys/tokens).
- * Usa SUPABASE_URL do ambiente; fallback para config carregada pelo servidor.
- */
 function resolveSupabaseHostForLog() {
   const raw =
     (typeof process.env.SUPABASE_URL === "string" && process.env.SUPABASE_URL.trim() !== ""
@@ -32,13 +39,8 @@ function resolveSupabaseHostForLog() {
 
 /**
  * @param {import("http").IncomingMessage} req
- * @param {import("http").ServerResponse} res
  */
-export async function handleJobsMarketplaceAccountSync(req, res) {
-  if (req.method !== "POST" && req.method !== "GET") {
-    return res.status(405).json({ ok: false, error: "Método não permitido" });
-  }
-
+function evaluateMarketplaceAccountSyncJobAuth(req) {
   const jobSecret = config.jobSecret != null ? String(config.jobSecret).trim() : "";
   const cronSecret = config.cronSecret != null ? String(config.cronSecret).trim() : "";
   const headerSecret =
@@ -49,15 +51,100 @@ export async function handleJobsMarketplaceAccountSync(req, res) {
     : "";
   const cronSecretQuery =
     req.query?.cron_secret != null ? String(req.query.cron_secret).trim() : "";
-  const hasJobSecretAuth = jobSecret !== "" && headerSecret === jobSecret;
-  const hasCronAuth =
-    cronSecret !== "" &&
-    (bearerToken === cronSecret || cronSecretQuery === cronSecret);
 
-  if (jobSecret || cronSecret) {
-    if (!hasJobSecretAuth && !hasCronAuth) {
-      return res.status(401).json({ ok: false, error: "Token de job inválido" });
+  const jobSecretConfigured = jobSecret !== "";
+  const cronSecretConfigured = cronSecret !== "";
+  const hasJobSecretAuth = jobSecretConfigured && headerSecret === jobSecret;
+  const hasCronAuth =
+    cronSecretConfigured && (bearerToken === cronSecret || cronSecretQuery === cronSecret);
+
+  if (!jobSecretConfigured && !cronSecretConfigured) {
+    return { allow: true, mode: "none", reason: null };
+  }
+  if (hasJobSecretAuth) {
+    return { allow: true, mode: "x-job-secret", reason: null };
+  }
+  if (hasCronAuth) {
+    return { allow: true, mode: "cron-secret", reason: null };
+  }
+
+  let reason = "invalid_job_secret";
+  if (jobSecretConfigured && !headerSecret) {
+    reason = "missing_job_secret_header";
+  } else if (jobSecretConfigured && headerSecret) {
+    reason = "invalid_job_secret";
+  } else if (cronSecretConfigured && !bearerToken && !cronSecretQuery) {
+    reason = "missing_cron_secret";
+  } else if (cronSecretConfigured) {
+    reason = "invalid_cron_secret";
+  }
+
+  return {
+    allow: false,
+    mode: null,
+    reason,
+    jobSecretConfigured,
+    cronSecretConfigured,
+    headerPresent: headerSecret !== "",
+    bearerPresent: bearerToken !== "",
+    cronQueryPresent: cronSecretQuery !== "",
+  };
+}
+
+function authFailureMessage(reason) {
+  if (reason === "missing_job_secret_header") return "Missing job secret header";
+  if (reason === "invalid_job_secret") return "Invalid job secret";
+  if (reason === "missing_cron_secret") return "Missing cron secret";
+  if (reason === "invalid_cron_secret") return "Invalid cron secret";
+  return "Job authentication failed";
+}
+
+/**
+ * @param {import("http").IncomingMessage} req
+ * @param {import("http").ServerResponse} res
+ */
+export async function handleJobsMarketplaceAccountSync(req, res) {
+  if (req.method !== "POST" && req.method !== "GET") {
+    return res.status(405).json({ ok: false, error: "Método não permitido" });
+  }
+
+  console.info("[marketplace-account-sync-job] auth_check_start", {
+    method: req.method,
+    job_secret_configured: Boolean(config.jobSecret && String(config.jobSecret).trim()),
+    cron_secret_configured: Boolean(config.cronSecret && String(config.cronSecret).trim()),
+  });
+
+  const auth = evaluateMarketplaceAccountSyncJobAuth(req);
+  if (!auth.allow) {
+    const reason = auth.reason ?? "invalid_job_secret";
+    if (reason === "missing_job_secret_header" || reason === "missing_cron_secret") {
+      console.warn("[marketplace-account-sync-job] auth_failed_missing_header", {
+        reason,
+        job_secret_configured: auth.jobSecretConfigured === true,
+        cron_secret_configured: auth.cronSecretConfigured === true,
+        x_job_secret_header: auth.headerPresent ? "present" : "missing",
+        authorization_bearer: auth.bearerPresent ? "present" : "missing",
+        cron_secret_query: auth.cronQueryPresent ? "present" : "missing",
+      });
+    } else {
+      console.warn("[marketplace-account-sync-job] auth_failed_invalid_secret", {
+        reason,
+        job_secret_configured: auth.jobSecretConfigured === true,
+        cron_secret_configured: auth.cronSecretConfigured === true,
+        x_job_secret_header: auth.headerPresent ? "present" : "missing",
+        authorization_bearer: auth.bearerPresent ? "present" : "missing",
+        cron_secret_query: auth.cronQueryPresent ? "present" : "missing",
+      });
     }
+    return res.status(401).json({
+      ok: false,
+      error: authFailureMessage(reason),
+      reason,
+    });
+  }
+
+  if (auth.mode && auth.mode !== "none") {
+    console.info("[marketplace-account-sync-job] auth_ok", { auth_mode: auth.mode });
   }
 
   console.log("[MARKETPLACE_SYNC_JOB_ENV]", {
@@ -102,7 +189,7 @@ export async function handleJobsMarketplaceAccountSync(req, res) {
       ok: true,
       ...(Object.keys(workerOpts).length ? { requested_limit_chunks: workerOpts.maxChunks } : {}),
       ...out,
-      auth_mode: hasJobSecretAuth ? "x-job-secret" : hasCronAuth ? "cron-secret" : "none",
+      auth_mode: auth.mode === "none" ? "none" : auth.mode,
       hint: "Agende este endpoint em cron (ex.: Vercel/GitHub Actions) com X-Job-Secret.",
     });
   } catch (e) {

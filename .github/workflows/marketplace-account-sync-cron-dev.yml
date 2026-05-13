@@ -1,5 +1,8 @@
 name: Marketplace Account Sync Cron (DEV)
 
+# Contrato: POST S7_DEV_MARKETPLACE_SYNC_JOB_URL + header X-Job-Secret (S7_DEV_JOB_SECRET).
+# Vercel DEV: JOB_SECRET ou S7_DEV_JOB_SECRET com o mesmo valor.
+
 on:
   schedule:
     - cron: "*/1 * * * *"

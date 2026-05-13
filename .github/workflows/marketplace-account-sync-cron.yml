@@ -1,5 +1,12 @@
 name: Marketplace Account Sync Cron
 
+# Contrato de autenticação (PROD):
+# - POST secrets.S7_PROD_MARKETPLACE_SYNC_JOB_URL (ex.: https://suse7-backend.vercel.app/api/jobs/marketplace-account-sync)
+# - Header: X-Job-Secret: secrets.S7_PROD_JOB_SECRET
+# - Body JSON opcional: {"limit":5}
+# - Vercel Production: JOB_SECRET ou S7_PROD_JOB_SECRET com o mesmo valor (nunca commitar).
+# - Resposta 401: campo reason (missing_job_secret_header | invalid_job_secret | …) sem expor o secret.
+
 on:
   schedule:
     - cron: "*/1 * * * *"

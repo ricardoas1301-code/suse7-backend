@@ -26,7 +26,15 @@ export const config = {
   mlClientId: getEnv("ML_CLIENT_ID"),
   mlClientSecret: getEnv("ML_CLIENT_SECRET"),
   mlRedirectUri: getEnv("ML_REDIRECT_URI"),
-  jobSecret: getEnv("JOB_SECRET") || getEnv("ML_WEBHOOK_JOB_SECRET"),
+  /**
+   * Cron/job HTTP (X-Job-Secret). Ordem: JOB_SECRET → ML_WEBHOOK_JOB_SECRET → S7_* (espelho GitHub Actions).
+   * GitHub Actions PROD: secrets.S7_PROD_JOB_SECRET no header X-Job-Secret.
+   */
+  jobSecret:
+    getEnv("JOB_SECRET") ||
+    getEnv("ML_WEBHOOK_JOB_SECRET") ||
+    getEnv("S7_PROD_JOB_SECRET") ||
+    getEnv("S7_DEV_JOB_SECRET"),
   cronSecret: getEnv("CRON_SECRET"),
   /**
    * Dev Center — única variável oficial de acesso (lista de e-mails, minúsculas após trim).
