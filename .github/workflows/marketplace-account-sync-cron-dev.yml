@@ -4,10 +4,7 @@ name: Marketplace Account Sync Cron (DEV)
 #   POST secrets.DEV_MARKETPLACE_SYNC_JOB_URL
 #   Header X-Job-Secret: secrets.DEV_JOB_SECRET
 #   Body: {"limit":5}
-# Vercel DEV: JOB_SECRET ou S7_DEV_JOB_SECRET (mesmo valor do GitHub).
-#
-# TODO(legacy-secrets): remover fallbacks S7_DEV_* / JOB_SECRET / MARKETPLACE_SYNC_JOB_URL
-# após alinhar todos os repos e ambientes ao par DEV_*.
+# Vercel DEV: DEV_JOB_SECRET ou JOB_SECRET com o mesmo valor do GitHub.
 
 on:
   schedule:
@@ -18,12 +15,8 @@ jobs:
   run-dev:
     runs-on: ubuntu-latest
     env:
-      DEV_MARKETPLACE_SYNC_JOB_URL: ${{ secrets.DEV_MARKETPLACE_SYNC_JOB_URL }}
-      DEV_JOB_SECRET: ${{ secrets.DEV_JOB_SECRET }}
-      S7_DEV_MARKETPLACE_SYNC_JOB_URL: ${{ secrets.S7_DEV_MARKETPLACE_SYNC_JOB_URL }}
-      S7_DEV_JOB_SECRET: ${{ secrets.S7_DEV_JOB_SECRET }}
-      MARKETPLACE_SYNC_JOB_URL: ${{ secrets.MARKETPLACE_SYNC_JOB_URL }}
-      JOB_SECRET: ${{ secrets.JOB_SECRET }}
+      SYNC_JOB_URL: ${{ secrets.DEV_MARKETPLACE_SYNC_JOB_URL }}
+      JOB_SECRET: ${{ secrets.DEV_JOB_SECRET }}
     steps:
       - name: Trigger DEV marketplace-account-sync job
         run: |
@@ -31,43 +24,20 @@ jobs:
 
           echo "[marketplace-sync-dev] workflow_boot event=schedule_or_dispatch"
 
-          SYNC_JOB_URL="${DEV_MARKETPLACE_SYNC_JOB_URL:-}"
-          JOB_SECRET_VALUE="${DEV_JOB_SECRET:-}"
-          URL_SOURCE="DEV_MARKETPLACE_SYNC_JOB_URL"
-          SECRET_SOURCE="DEV_JOB_SECRET"
-
-          if [ -z "${SYNC_JOB_URL}" ]; then
-            SYNC_JOB_URL="${S7_DEV_MARKETPLACE_SYNC_JOB_URL:-}"
-            URL_SOURCE="S7_DEV_MARKETPLACE_SYNC_JOB_URL"
-          fi
-          if [ -z "${SYNC_JOB_URL}" ]; then
-            SYNC_JOB_URL="${MARKETPLACE_SYNC_JOB_URL:-}"
-            URL_SOURCE="MARKETPLACE_SYNC_JOB_URL"
-          fi
-
-          if [ -z "${JOB_SECRET_VALUE}" ]; then
-            JOB_SECRET_VALUE="${S7_DEV_JOB_SECRET:-}"
-            SECRET_SOURCE="S7_DEV_JOB_SECRET"
-          fi
-          if [ -z "${JOB_SECRET_VALUE}" ]; then
-            JOB_SECRET_VALUE="${JOB_SECRET:-}"
-            SECRET_SOURCE="JOB_SECRET"
-          fi
-
           if [ -n "${SYNC_JOB_URL}" ]; then
-            echo "[marketplace-sync-dev] url_present=true source=${URL_SOURCE}"
+            echo "[marketplace-sync-dev] url_present=true source=DEV_MARKETPLACE_SYNC_JOB_URL"
           else
             echo "[marketplace-sync-dev] url_present=false"
           fi
 
-          if [ -n "${JOB_SECRET_VALUE}" ]; then
-            echo "[marketplace-sync-dev] secret_present=true source=${SECRET_SOURCE}"
+          if [ -n "${JOB_SECRET}" ]; then
+            echo "[marketplace-sync-dev] secret_present=true source=DEV_JOB_SECRET"
           else
             echo "[marketplace-sync-dev] secret_present=false"
           fi
 
-          if [ -z "${SYNC_JOB_URL}" ] || [ -z "${JOB_SECRET_VALUE}" ]; then
-            echo "::error::Missing DEV marketplace sync secrets. Configure DEV_MARKETPLACE_SYNC_JOB_URL + DEV_JOB_SECRET (preferred). Legacy fallbacks: S7_DEV_* or MARKETPLACE_SYNC_JOB_URL + JOB_SECRET."
+          if [ -z "${SYNC_JOB_URL}" ] || [ -z "${JOB_SECRET}" ]; then
+            echo "::error::Missing required GitHub Actions secrets (DEV_MARKETPLACE_SYNC_JOB_URL and/or DEV_JOB_SECRET)"
             exit 1
           fi
 
@@ -76,7 +46,7 @@ jobs:
 
           http_code=$(curl -sS -o /tmp/marketplace-sync-dev.json -w "%{http_code}" -X POST "${SYNC_JOB_URL}" \
             -H "Content-Type: application/json" \
-            -H "X-Job-Secret: ${JOB_SECRET_VALUE}" \
+            -H "X-Job-Secret: ${JOB_SECRET}" \
             -d '{"limit":5}')
 
           echo "[marketplace-sync-dev] request_http_status=${http_code}"
