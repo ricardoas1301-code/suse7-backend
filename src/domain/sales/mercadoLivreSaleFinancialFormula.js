@@ -1,12 +1,14 @@
 import Decimal from "decimal.js";
 import {
   coalesceMercadoLibreItemForMoneyExtract,
+  extractMercadoLivrePositiveAdjustmentsFromSaleFeeDetails,
   extractSaleFee,
   toFiniteNumber,
 } from "../../handlers/ml/_helpers/mlItemMoneyExtract.js";
 import {
   formatMercadoLivreListingTypeLabel,
   mercadoLivreFeeFromPercentOfGross,
+  ML_FINANCIAL_SNAPSHOT_VERSION,
 } from "./mercadoLivreSaleRevenueRules.js";
 
 /** @param {unknown} v */
@@ -147,7 +149,7 @@ function flattenDiscountDetails(discountsPayload) {
     for (const row of discountsPayload) walkCoupon(row);
   } else if (discountsPayload && typeof discountsPayload === "object") {
     const root = /** @type {Record<string, unknown>} */ (discountsPayload);
-    const arr = root.results ?? root.discounts ?? root.coupons ?? root.items;
+    const arr = root.details ?? root.results ?? root.discounts ?? root.coupons ?? root.items;
     if (Array.isArray(arr)) {
       for (const row of arr) walkCoupon(row);
     } else {
@@ -159,13 +161,67 @@ function flattenDiscountDetails(discountsPayload) {
 }
 
 /**
- * Ajustes positivos e subsídio de tarifa (funding_mode sale_fee).
- * @param {unknown} discountsPayload
+ * @param {Record<string, unknown> | null | undefined} line
  * @param {string | null | undefined} externalOrderItemId
  */
-export function resolveMercadoLivreDiscountsFinancials(discountsPayload, externalOrderItemId = null) {
-  const want = externalOrderItemId != null ? String(externalOrderItemId).trim() : "";
+function collectDiscountLineMatchKeys(line, externalOrderItemId = null) {
+  /** @type {string[]} */
+  const keys = [];
+  const push = (v) => {
+    const s = v != null ? String(v).trim() : "";
+    if (s && !keys.includes(s)) keys.push(s);
+  };
+
+  push(externalOrderItemId);
+  if (!line || typeof line !== "object") return keys;
+
+  push(line.id);
+  push(line.order_item_id);
+  push(line.item_id);
+  const item = line.item && typeof line.item === "object" ? /** @type {Record<string, unknown>} */ (line.item) : null;
+  if (item) push(item.id);
+
+  return keys;
+}
+
+/**
+ * @param {Record<string, unknown>} discountItem
+ * @param {string[]} matchKeys
+ * @param {number} orderLineCount
+ */
+function discountItemMatchesLine(discountItem, matchKeys, orderLineCount) {
+  if (matchKeys.length === 0) return true;
+
+  const listingId = discountItem.id != null ? String(discountItem.id).trim() : "";
+  const orderItemId = discountItem.order_item_id != null ? String(discountItem.order_item_id).trim() : "";
+  const elementId = discountItem.element_id != null ? String(discountItem.element_id).trim() : "";
+
+  if (orderItemId && matchKeys.includes(orderItemId)) return true;
+  if (listingId && matchKeys.includes(listingId)) return true;
+  if (elementId && matchKeys.includes(elementId)) return true;
+  if (orderLineCount <= 1) return true;
+
+  return false;
+}
+
+/**
+ * Ajustes positivos e subsídio de tarifa (funding_mode sale_fee).
+ * API ML: GET /orders/:id/discounts → { details: [{ supplier, items: [{ amounts: { total } }] }] }
+ *
+ * @param {unknown} discountsPayload
+ * @param {string | null | undefined} externalOrderItemId
+ * @param {Record<string, unknown> | null | undefined} line
+ * @param {number} [orderLineCount]
+ */
+export function resolveMercadoLivreDiscountsFinancials(
+  discountsPayload,
+  externalOrderItemId = null,
+  line = null,
+  orderLineCount = 1,
+) {
+  const matchKeys = collectDiscountLineMatchKeys(line, externalOrderItemId);
   const details = flattenDiscountDetails(discountsPayload);
+  const lineCount = orderLineCount > 0 ? Math.trunc(orderLineCount) : 1;
 
   /** @type {Record<string, unknown>[]} */
   const matched = [];
@@ -177,20 +233,37 @@ export function resolveMercadoLivreDiscountsFinancials(discountsPayload, externa
       d.supplier && typeof d.supplier === "object" ? /** @type {Record<string, unknown>} */ (d.supplier) : {};
     const funding = String(supplier.funding_mode ?? d.funding_mode ?? "").trim().toLowerCase();
 
-    if (want) {
-      const lineRef =
-        d.order_item_id != null
-          ? String(d.order_item_id).trim()
-          : d.item_id != null
-            ? String(d.item_id).trim()
-            : "";
-      if (lineRef && lineRef !== want) continue;
+    const discountItems = Array.isArray(d.items) ? d.items : [];
+    if (discountItems.length > 0) {
+      for (const rawItem of discountItems) {
+        if (!rawItem || typeof rawItem !== "object") continue;
+        const it = /** @type {Record<string, unknown>} */ (rawItem);
+        if (!discountItemMatchesLine(it, matchKeys, lineCount)) continue;
+
+        const amounts =
+          it.amounts && typeof it.amounts === "object" ? /** @type {Record<string, unknown>} */ (it.amounts) : {};
+        const amt = parseMlMoney(amounts.total ?? amounts.seller ?? it.amount ?? d.amount);
+        if (amt == null || amt <= 0) continue;
+
+        matched.push({
+          funding_mode: funding || null,
+          amount: amt,
+          item_id: it.id != null ? String(it.id) : null,
+          source: "items.amounts.total",
+        });
+
+        if (funding === "sale_fee") {
+          saleFeeSubsidyDec = saleFeeSubsidyDec.plus(amt);
+          hasSaleFeeSubsidy = true;
+        }
+      }
+      continue;
     }
 
-    const amt = parseMlMoney(d.amount ?? d.value ?? d.coupon_amount);
+    const amt = parseMlMoney(d.amount ?? d.value ?? d.coupon_amount ?? d.total);
     if (amt == null || amt <= 0) continue;
 
-    matched.push({ funding_mode: funding || null, amount: amt });
+    matched.push({ funding_mode: funding || null, amount: amt, source: "detail.amount" });
 
     if (funding === "sale_fee") {
       saleFeeSubsidyDec = saleFeeSubsidyDec.plus(amt);
@@ -198,7 +271,6 @@ export function resolveMercadoLivreDiscountsFinancials(discountsPayload, externa
     }
   }
 
-  /** Cashback/cupom que não é sale_fee — crédito ao seller */
   let positiveOnlyDec = new Decimal(0);
   for (const row of matched) {
     const funding = String(row.funding_mode ?? "").toLowerCase();
@@ -217,6 +289,94 @@ export function resolveMercadoLivreDiscountsFinancials(discountsPayload, externa
     sale_fee_subsidy_brl: hasSaleFeeSubsidy ? moneyDecimal(saleFeeSubsidyDec) : null,
     positive_adjustments_brl: positiveDec != null ? moneyDecimal(positiveDec) : null,
   };
+}
+
+/**
+ * @param {Decimal} grossDec
+ * @param {string | null} listingTypeId
+ * @param {number} qty
+ * @param {number | null} unit
+ */
+function resolveListingPercentFeeGross(grossDec, listingTypeId, qty, unit) {
+  const id = String(listingTypeId ?? "").toLowerCase();
+  const hints = [];
+  if (id.includes("gold_pro") || id.includes("gold_premium")) hints.push(16.5);
+  if (id.includes("gold_special")) hints.push(13.5);
+
+  for (const hintPct of hints) {
+    const fromHint = mercadoLivreFeeFromPercentOfGross(grossDec, hintPct, {
+      qty,
+      unitPriceDec: unit != null ? new Decimal(unit) : null,
+    });
+    if (fromHint != null && isFeePlausibleForListing(fromHint, grossDec, listingTypeId)) {
+      return fromHint;
+    }
+  }
+  return null;
+}
+
+/**
+ * @param {{
+ *   feeGrossDec: Decimal | null;
+ *   feeNetDec: Decimal | null;
+ *   positiveDec: Decimal | null;
+ *   grossDec: Decimal;
+ *   listingTypeId: string | null;
+ *   line: Record<string, unknown>;
+ *   qty: number;
+ *   unit: number | null;
+ * }} ctx
+ */
+function applyMercadoLivreFeeGrossNetSplit(ctx) {
+  let { feeGrossDec, feeNetDec, positiveDec, grossDec, listingTypeId, line, qty, unit } = ctx;
+
+  if (positiveDec != null && positiveDec.gt(0) && feeGrossDec != null) {
+    const hintGross = resolveListingPercentFeeGross(grossDec, listingTypeId, qty, unit);
+    if (hintGross != null && feeGrossDec.minus(hintGross).abs().lte(0.03)) {
+      feeNetDec = feeGrossDec.minus(positiveDec);
+      if (feeNetDec.lte(0)) feeNetDec = feeGrossDec;
+      return { feeGrossDec, feeNetDec, positiveDec, positiveSource: "discounts_sale_fee_subsidy" };
+    }
+
+    const impliedGross = feeGrossDec.plus(positiveDec);
+    if (
+      isFeePlausibleForListing(impliedGross, grossDec, listingTypeId) &&
+      !isFeePlausibleForListing(feeGrossDec, grossDec, listingTypeId)
+    ) {
+      feeNetDec = feeGrossDec;
+      feeGrossDec = impliedGross;
+      return { feeGrossDec, feeNetDec, positiveDec, positiveSource: "discounts_sale_fee_subsidy" };
+    }
+  }
+
+  if (positiveDec == null && feeGrossDec != null) {
+    const fromDetails = extractMercadoLivrePositiveAdjustmentsFromSaleFeeDetails(line.sale_fee_details);
+    if (fromDetails != null && fromDetails > 0) {
+      positiveDec = new Decimal(fromDetails);
+      const impliedGross = feeGrossDec.plus(positiveDec);
+      if (isFeePlausibleForListing(impliedGross, grossDec, listingTypeId)) {
+        feeNetDec = feeGrossDec;
+        feeGrossDec = impliedGross;
+        return { feeGrossDec, feeNetDec, positiveDec, positiveSource: "line.sale_fee_details" };
+      }
+      positiveDec = null;
+    }
+  }
+
+  if (positiveDec == null && feeGrossDec != null) {
+    const hintGross = resolveListingPercentFeeGross(grossDec, listingTypeId, qty, unit);
+    if (hintGross != null && hintGross.gt(feeGrossDec)) {
+      const gap = hintGross.minus(feeGrossDec);
+      if (gap.gt(0) && isFeePlausibleForListing(hintGross, grossDec, listingTypeId)) {
+        positiveDec = gap;
+        feeNetDec = feeGrossDec;
+        feeGrossDec = hintGross;
+        return { feeGrossDec, feeNetDec, positiveDec, positiveSource: "listing_percent_gap" };
+      }
+    }
+  }
+
+  return { feeGrossDec, feeNetDec, positiveDec, positiveSource: positiveDec != null ? "discounts_or_line" : null };
 }
 
 /**
@@ -384,7 +544,13 @@ export function resolveMercadoLivreFinancialFormula(ctx) {
   const shipResolved = resolveMercadoLivreShippingSellerCost(shipmentSnapshot, grossDec);
   const shipDec = shipResolved.amount != null ? new Decimal(shipResolved.amount) : null;
 
-  const discountFin = resolveMercadoLivreDiscountsFinancials(discountsSnapshot, externalOrderItemId);
+  const orderLineCount = Array.isArray(order.order_items) ? order.order_items.length : 1;
+  const discountFin = resolveMercadoLivreDiscountsFinancials(
+    discountsSnapshot,
+    externalOrderItemId,
+    line,
+    orderLineCount,
+  );
   const saleFeeSubsidyDec =
     discountFin.sale_fee_subsidy_brl != null ? new Decimal(discountFin.sale_fee_subsidy_brl) : null;
   let positiveDec =
@@ -395,9 +561,26 @@ export function resolveMercadoLivreFinancialFormula(ctx) {
       ? resolveMercadoLivreSaleFeeGross(order, line, grossDec, qty, unit, listingTypeId, saleFeeSubsidyDec)
       : { fee: null, source: null, feeCandidates: [] };
 
-  const feeGrossDec = feeResolved.fee;
+  let feeGrossDec = feeResolved.fee;
   let feeNetDec = feeGrossDec;
-  if (feeGrossDec != null && saleFeeSubsidyDec != null && saleFeeSubsidyDec.gt(0)) {
+  let positiveSource = null;
+
+  if (grossDec != null && feeGrossDec != null) {
+    const split = applyMercadoLivreFeeGrossNetSplit({
+      feeGrossDec,
+      feeNetDec,
+      positiveDec,
+      grossDec,
+      listingTypeId,
+      line,
+      qty,
+      unit,
+    });
+    feeGrossDec = split.feeGrossDec;
+    feeNetDec = split.feeNetDec;
+    positiveDec = split.positiveDec;
+    positiveSource = split.positiveSource;
+  } else if (feeGrossDec != null && saleFeeSubsidyDec != null && saleFeeSubsidyDec.gt(0)) {
     feeNetDec = feeGrossDec.minus(saleFeeSubsidyDec);
     if (feeNetDec.lte(0)) feeNetDec = feeGrossDec;
   }
@@ -440,8 +623,17 @@ export function resolveMercadoLivreFinancialFormula(ctx) {
     shipping_candidates: shipResolved.candidates,
     selected_shipping: shipDec != null ? { source: shipResolved.source, amount: moneyDecimal(shipDec) } : null,
     discounts_details: discountFin.details,
+    discounts_payload_shape:
+      discountsSnapshot && typeof discountsSnapshot === "object"
+        ? {
+            has_details: Array.isArray(/** @type {Record<string, unknown>} */ (discountsSnapshot).details),
+            details_count: Array.isArray(/** @type {Record<string, unknown>} */ (discountsSnapshot).details)
+              ? /** @type {unknown[]} */ (/** @type {Record<string, unknown>} */ (discountsSnapshot).details).length
+              : 0,
+          }
+        : null,
     selected_positive_adjustments:
-      positiveDec != null ? { amount: moneyDecimal(positiveDec), source: "discounts_or_line" } : null,
+      positiveDec != null ? { amount: moneyDecimal(positiveDec), source: positiveSource ?? "discounts_or_line" } : null,
     final_net: moneyDecimal(netDec),
     snapshot_complete: snapshotComplete,
     missing_fields: missingFields,
@@ -457,14 +649,14 @@ export function resolveMercadoLivreFinancialFormula(ctx) {
     shipping_amount_brl: moneyDecimal(shipDec),
     positive_adjustments_brl: positiveDec != null ? moneyDecimal(positiveDec) : null,
     net_received_amount_brl: snapshotComplete ? moneyDecimal(netDec) : null,
+    snapshot_version: snapshotComplete ? ML_FINANCIAL_SNAPSHOT_VERSION : null,
     snapshot_complete: snapshotComplete,
     formula_debug: formulaDebug,
     _sources: {
       gross: grossDec != null ? "line.total_or_unit_x_qty" : null,
       fee_gross: feeResolved.source,
-      fee_net:
-        saleFeeSubsidyDec != null && saleFeeSubsidyDec.gt(0) ? "fee_gross_minus_sale_fee_subsidy" : feeResolved.source,
-      positive_adjustments: positiveDec != null ? "discounts_or_line" : null,
+      fee_net: feeNetDec != null && feeGrossDec != null && feeNetDec.lt(feeGrossDec) ? "fee_gross_minus_subsidy" : feeResolved.source,
+      positive_adjustments: positiveSource,
       shipping: shipResolved.source,
       net: snapshotComplete ? "computed" : null,
     },

@@ -9,10 +9,13 @@ import {
   resolveMercadoLivreFinancialFormula,
   resolveMercadoLivreShippingSellerCost,
 } from "../../domain/sales/mercadoLivreSaleFinancialFormula.js";
-import { formatMercadoLivreListingTypeLabel } from "../../domain/sales/mercadoLivreSaleRevenueRules.js";
+import {
+  formatMercadoLivreListingTypeLabel,
+  ML_FINANCIAL_SNAPSHOT_VERSION,
+} from "../../domain/sales/mercadoLivreSaleRevenueRules.js";
 
 export const ML_FINANCIAL_ENRICHMENT_SOURCE = "mercado_livre_financial_enrichment_v1";
-export const ML_FINANCIAL_SNAPSHOT_VERSION = "ml_financial_v2";
+export { ML_FINANCIAL_SNAPSHOT_VERSION };
 
 /** @param {unknown} v */
 function parseMlMoney(v) {
@@ -343,6 +346,7 @@ function toItemFinancialContract(revenue, meta) {
 
   return {
     source: ML_FINANCIAL_ENRICHMENT_SOURCE,
+    snapshot_version: ML_FINANCIAL_SNAPSHOT_VERSION,
     gross_sale_amount_brl: revenue.gross_sale_amount_brl ?? null,
     marketplace_fee_amount_brl: revenue.marketplace_fee_amount_brl ?? null,
     marketplace_fee_net_amount_brl: revenue.marketplace_fee_net_amount_brl ?? null,
@@ -455,7 +459,34 @@ async function persistFinancialEnrichmentToDatabase(supabase, userId, salesOrder
     }
 
     const { error: upErr } = await supabase.from("sales_order_items").update(patch).eq("id", row.id).eq("user_id", userId);
+
+    const { data: afterRow, error: readErr } = await supabase
+      .from("sales_order_items")
+      .select("id, fee_amount, shipping_share_amount, net_amount, raw_json")
+      .eq("user_id", userId)
+      .eq("id", row.id)
+      .maybeSingle();
+
+    const finAfter =
+      afterRow?.raw_json &&
+      typeof afterRow.raw_json === "object" &&
+      /** @type {Record<string, unknown>} */ (afterRow.raw_json)._s7_financial &&
+      typeof /** @type {Record<string, unknown>} */ (afterRow.raw_json)._s7_financial === "object"
+        ? /** @type {Record<string, unknown>} */ (/** @type {Record<string, unknown>} */ (afterRow.raw_json)._s7_financial)
+        : null;
+
+    console.log("[sales/detail] ml_financial_v2_persist_result", {
+      item_id: row.id,
+      update_error: upErr?.message ?? null,
+      read_error: readErr?.message ?? null,
+      snapshot_version_written: finAfter?.snapshot_version ?? null,
+      fee_amount_written: afterRow?.fee_amount ?? null,
+      positive_adjustments_written: finAfter?.positive_adjustments_brl ?? null,
+      raw_json_has_s7_financial_after_update: Boolean(finAfter),
+    });
+
     if (upErr) throw upErr;
+    if (readErr) throw readErr;
 
     linesIndex[String(row.id)] = contract;
     for (const key of collectDbItemMatchKeys(row, orderExternalId)) {

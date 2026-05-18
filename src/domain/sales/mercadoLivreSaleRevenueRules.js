@@ -1,5 +1,7 @@
 import Decimal from "decimal.js";
 
+export const ML_FINANCIAL_SNAPSHOT_VERSION = "ml_financial_v2";
+
 /**
  * Faixa percentual esperada de tarifa ML por tipo de anúncio (validação de candidatos fracos).
  * @param {string | null | undefined} listingTypeId
