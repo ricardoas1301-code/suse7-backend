@@ -2,6 +2,9 @@ import Decimal from "decimal.js";
 
 export const ML_FINANCIAL_SNAPSHOT_VERSION = "ml_financial_v2";
 
+/** Arredondamento da tarifa % × preço alinhado ao painel Mercado Livre (ex.: 27×11,5%→3,10; 73×16,5%→12,04). */
+export const ML_MARKETPLACE_FEE_DECIMAL_ROUNDING = Decimal.ROUND_HALF_DOWN;
+
 /**
  * Faixa percentual esperada de tarifa ML por tipo de anúncio (validação de candidatos fracos).
  * @param {string | null | undefined} listingTypeId
@@ -83,11 +86,11 @@ export function mercadoLivreFeeFromPercentOfGross(grossDec, percent, opts = {}) 
   const qty = opts.qty != null && opts.qty > 1 ? Math.trunc(opts.qty) : 1;
   const unit = opts.unitPriceDec;
   if (qty > 1 && unit != null && unit.gt(0)) {
-    const perUnit = unit.mul(p).div(100).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
+    const perUnit = unit.mul(p).div(100).toDecimalPlaces(2, ML_MARKETPLACE_FEE_DECIMAL_ROUNDING);
     return perUnit.mul(qty);
   }
 
-  return grossDec.mul(p).div(100).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
+  return grossDec.mul(p).div(100).toDecimalPlaces(2, ML_MARKETPLACE_FEE_DECIMAL_ROUNDING);
 }
 
 /** @param {unknown} listingTypeId */

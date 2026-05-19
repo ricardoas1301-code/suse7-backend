@@ -10,6 +10,10 @@ import {
 } from "../../handlers/ml/_helpers/mlItemMoneyExtract.js";
 import { findMercadoLivreOrderLine, toNum } from "../../handlers/sales/_vendasSalesRows.js";
 import {
+  buildMercadoLivreMarketplaceFeeContract,
+  marketplaceFeeFromFinancialSnapshot,
+} from "./mercadoLivreMarketplaceFee.js";
+import {
   formatMercadoLivreListingTypeLabel,
   mercadoLivreFeeFromPercentOfGross,
   validateMercadoLivreFeeCandidate,
@@ -74,7 +78,7 @@ function lineHasSaleFinancialSignals(line) {
  * @param {Record<string, unknown>} item
  * @param {Record<string, unknown> | null | undefined} order
  */
-function resolveEffectiveMercadoLivreSaleLine(item, order) {
+export function resolveEffectiveMercadoLivreSaleLine(item, order) {
   const itemLine =
     item.raw_json && typeof item.raw_json === "object" ? /** @type {Record<string, unknown>} */ (item.raw_json) : null;
   const orderRaw =
@@ -96,7 +100,7 @@ function resolveEffectiveMercadoLivreSaleLine(item, order) {
  * @param {Record<string, unknown> | null | undefined} line
  * @param {Record<string, unknown> | null | undefined} listing
  */
-function resolveListingTypeId(line, listing) {
+export function resolveListingTypeId(line, listing) {
   if (line?.listing_type_id != null) return String(line.listing_type_id).trim();
   const itemObj = line?.item && typeof line.item === "object" ? /** @type {Record<string, unknown>} */ (line.item) : null;
   if (itemObj?.listing_type_id != null) return String(itemObj.listing_type_id).trim();
@@ -110,7 +114,7 @@ function resolveListingTypeId(line, listing) {
  * @param {Record<string, unknown>} item
  * @param {Record<string, unknown> | null | undefined} line
  */
-function resolveSaleQuantity(item, line) {
+export function resolveSaleQuantity(item, line) {
   const fromLine = line?.quantity != null ? toQty(line.quantity) : null;
   const fromItem = toQty(item.quantity);
   if (fromLine != null && fromLine > 1) return fromLine;
@@ -121,7 +125,7 @@ function resolveSaleQuantity(item, line) {
  * @param {Record<string, unknown>} item
  * @param {Record<string, unknown> | null | undefined} line
  */
-function resolveSaleUnitPriceBrl(item, line) {
+export function resolveSaleUnitPriceBrl(item, line) {
   const fromDb = toDecimal(item.unit_price);
   if (fromDb != null) return fromDb;
 
@@ -145,7 +149,7 @@ function resolveSaleUnitPriceBrl(item, line) {
  * @param {Record<string, unknown>} item
  * @param {Record<string, unknown> | null | undefined} line
  */
-function resolveSaleGrossBrl(item, line) {
+export function resolveSaleGrossBrl(item, line) {
   const qty = resolveSaleQuantity(item, line);
   const unit = resolveSaleUnitPriceBrl(item, line);
   const unitTotal = unit != null && qty > 0 ? unit.mul(qty) : null;
@@ -701,17 +705,30 @@ export function resolveMercadoLivreSaleRevenueSnapshot(item, order, listing = nu
     persistedSnap?.net_received_amount_brl
   ) {
     const listingTypeId = resolveListingTypeId(line, listing);
+    const marketplaceFee = buildMercadoLivreMarketplaceFeeContract({
+      sale_price_brl: String(persistedSnap.gross_sale_amount_brl),
+      listing_type_id: listingTypeId,
+      line: line && typeof line === "object" ? line : null,
+      listing,
+      qty: resolveSaleQuantity(item, line),
+      unit_price_brl: resolveSaleUnitPriceBrl(item, line)?.toFixed(2) ?? null,
+    });
+    const feeAmount = marketplaceFee?.amount_brl ?? String(persistedSnap.marketplace_fee_amount_brl);
+    const feePercent =
+      marketplaceFee?.percentage ??
+      (persistedSnap.marketplace_fee_percent != null ? String(persistedSnap.marketplace_fee_percent) : null);
     return {
       gross_sale_amount_brl: String(persistedSnap.gross_sale_amount_brl),
-      marketplace_fee_amount_brl: String(persistedSnap.marketplace_fee_amount_brl),
+      marketplace_fee: marketplaceFee,
+      marketplace_fee_amount_brl: feeAmount,
       marketplace_fee_net_amount_brl:
         persistedSnap.marketplace_fee_net_amount_brl != null
           ? String(persistedSnap.marketplace_fee_net_amount_brl)
           : null,
-      marketplace_fee_percent:
-        persistedSnap.marketplace_fee_percent != null ? String(persistedSnap.marketplace_fee_percent) : null,
+      marketplace_fee_percent: feePercent,
       listing_type_id: listingTypeId,
-      listing_type_label: formatMercadoLivreListingTypeLabel(listingTypeId),
+      listing_type_label:
+        marketplaceFee?.listing_type_label ?? formatMercadoLivreListingTypeLabel(listingTypeId),
       shipping_amount_brl:
         persistedSnap.shipping_amount_brl != null ? String(persistedSnap.shipping_amount_brl) : null,
       positive_adjustments_brl:
@@ -739,22 +756,40 @@ export function resolveMercadoLivreSaleRevenueSnapshot(item, order, listing = nu
   const { gross: grossDec, source: grossSource } = resolveSaleGrossBrl(item, line);
   const listingTypeId = resolveListingTypeId(line, listing);
 
+  const grossStr = moneyDecimal(grossDec);
+  const qty = resolveSaleQuantity(item, line);
+  const unitPrice = resolveSaleUnitPriceBrl(item, line);
+  const marketplaceFee =
+    grossStr != null
+      ? buildMercadoLivreMarketplaceFeeContract({
+          sale_price_brl: grossStr,
+          listing_type_id: listingTypeId,
+          line: line && typeof line === "object" ? line : null,
+          listing,
+          qty,
+          unit_price_brl: unitPrice != null ? unitPrice.toFixed(2) : null,
+        })
+      : null;
+
   const feeResult = resolveSaleFeeBrl(item, line, grossDec, listingTypeId, listing, order);
-  const feeDec = feeResult.fee;
-  const feeSource = feeResult.source;
+  const feeDec =
+    marketplaceFee?.amount_brl != null ? new Decimal(marketplaceFee.amount_brl) : feeResult.fee;
+  const feeSource = marketplaceFee?.percent_source ?? feeResult.source;
 
   const shipResult = resolveSaleShippingBrl(item, line, orderRaw, grossDec, order);
   const shipDec = shipResult.ship;
   const shipSource = shipResult.source;
 
-  let feePercentStr = null;
-  if (feeResult.feePercentHint != null) {
-    feePercentStr = new Decimal(feeResult.feePercentHint).toDecimalPlaces(2, Decimal.ROUND_HALF_UP).toFixed(2);
-  } else if (feeDec != null && grossDec != null && !grossDec.isZero()) {
-    feePercentStr = feeDec.div(grossDec).mul(100).toDecimalPlaces(2, Decimal.ROUND_HALF_UP).toFixed(2);
-  }
+  const feePercentStr =
+    marketplaceFee?.percentage ??
+    (feeResult.feePercentHint != null
+      ? new Decimal(feeResult.feePercentHint).toDecimalPlaces(2, Decimal.ROUND_HALF_UP).toFixed(2)
+      : feeDec != null && grossDec != null && !grossDec.isZero()
+        ? feeDec.div(grossDec).mul(100).toDecimalPlaces(2, Decimal.ROUND_HALF_UP).toFixed(2)
+        : null);
 
-  const listingTypeLabel = formatMercadoLivreListingTypeLabel(listingTypeId);
+  const listingTypeLabel =
+    marketplaceFee?.listing_type_label ?? formatMercadoLivreListingTypeLabel(listingTypeId);
 
   let positiveAdjDec = null;
   let positiveSource = null;
@@ -813,6 +848,7 @@ export function resolveMercadoLivreSaleRevenueSnapshot(item, order, listing = nu
 
   return {
     gross_sale_amount_brl: moneyDecimal(grossDec),
+    marketplace_fee: marketplaceFee,
     marketplace_fee_amount_brl: moneyDecimal(feeDec),
     marketplace_fee_percent: feePercentStr,
     listing_type_id: listingTypeId,
@@ -857,6 +893,7 @@ export function buildSaleDetailMarketplaceRevenue(item, order, listing = null) {
 
   return {
     marketplace_revenue: marketplaceRevenue,
+    marketplace_fee: marketplaceRevenue.marketplace_fee ?? null,
     gross_amount: marketplaceRevenue.gross_sale_amount_brl,
     sale_price: marketplaceRevenue.gross_sale_amount_brl,
     marketplace_fee_amount: marketplaceRevenue.marketplace_fee_amount_brl,
@@ -864,7 +901,8 @@ export function buildSaleDetailMarketplaceRevenue(item, order, listing = null) {
     marketplace_fee_net_amount_brl: marketplaceRevenue.marketplace_fee_net_amount_brl ?? null,
     marketplace_fee_percent: marketplaceRevenue.marketplace_fee_percent,
     listing_type_label: marketplaceRevenue.listing_type_label,
-    marketplace_fee_tier_label: marketplaceRevenue.listing_type_label,
+    marketplace_fee_tier_label:
+      marketplaceRevenue.marketplace_fee?.listing_type_label ?? marketplaceRevenue.listing_type_label,
     shipping_cost_amount: marketplaceRevenue.shipping_amount_brl,
     shipping_cost: marketplaceRevenue.shipping_amount_brl,
     positive_adjustments_brl: marketplaceRevenue.positive_adjustments_brl,

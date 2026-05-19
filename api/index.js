@@ -18,7 +18,7 @@ const DEBUG_ML_COVER_COMPARE_PATH = "/api/debug/ml/listing-cover-compare";
 const DEBUG_ML_LISTINGS_COVER_CONTEXT_PATH = "/api/debug/ml/listings-cover-context";
 console.log("[S7 API Router] boot — rotas diagnóstico ML:", DEBUG_ML_FIELD_MAP_PATH, DEBUG_ML_COVER_COMPARE_PATH, DEBUG_ML_LISTINGS_COVER_CONTEXT_PATH);
 console.log("[S7 API Router] boot — ML OAuth diag: GET /api/ml/oauth-config");
-console.log("[S7 API Router] boot — billing: GET /api/billing/ping · GET /api/billing/plans · GET /api/billing/subscription/status · POST /api/billing/checkout · POST /api/billing/webhooks/asaas");
+console.log("[S7 API Router] boot — billing: GET /api/billing/ping · GET /api/billing/plans · POST /api/billing/checkout/card · POST /api/billing/checkout/start · POST /api/billing/webhooks/asaas");
 
 /**
  * Resolve rota lógica para o router único (/api + __path no Vercel).
@@ -441,6 +441,14 @@ export default async function handler(req, res) {
     if (path === "/api/sales/summary" && req.method === "GET") {
       const mod = await import("../src/handlers/sales/summary.js");
       return mod.default(req, res);
+    }
+    if (
+      (path === "/api/dev/sales/refresh-financial-contracts" ||
+        /^\/api\/dev\/sales\/[^/]+\/refresh-financial-contract$/.test(path)) &&
+      req.method === "POST"
+    ) {
+      const mod = await import("../src/handlers/sales/saleFinancialContractRefresh.js");
+      return mod.handleSaleFinancialContractRefresh(req, res, path);
     }
     if (path === "/api/pricing/simulate") {
       const mod = await import("../src/handlers/pricing/simulate.js");
