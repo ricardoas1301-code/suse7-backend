@@ -709,9 +709,14 @@ export function resolveMercadoLivreSaleRevenueSnapshot(item, order, listing = nu
       sale_price_brl: String(persistedSnap.gross_sale_amount_brl),
       listing_type_id: listingTypeId,
       line: line && typeof line === "object" ? line : null,
+      order,
+      item,
       listing,
       qty: resolveSaleQuantity(item, line),
       unit_price_brl: resolveSaleUnitPriceBrl(item, line)?.toFixed(2) ?? null,
+      discounts_snapshot: orderRaw?._s7_discounts ?? orderRaw?.discounts ?? null,
+      external_order_item_id:
+        item.external_listing_id != null ? String(item.external_listing_id) : null,
     });
     const feeAmount = marketplaceFee?.amount_brl ?? String(persistedSnap.marketplace_fee_amount_brl);
     const feePercent =
@@ -765,16 +770,21 @@ export function resolveMercadoLivreSaleRevenueSnapshot(item, order, listing = nu
           sale_price_brl: grossStr,
           listing_type_id: listingTypeId,
           line: line && typeof line === "object" ? line : null,
+          order,
+          item,
           listing,
           qty,
           unit_price_brl: unitPrice != null ? unitPrice.toFixed(2) : null,
+          discounts_snapshot: orderRaw?._s7_discounts ?? orderRaw?.discounts ?? null,
+          external_order_item_id:
+            item.external_listing_id != null ? String(item.external_listing_id) : null,
         })
       : null;
 
   const feeResult = resolveSaleFeeBrl(item, line, grossDec, listingTypeId, listing, order);
   const feeDec =
     marketplaceFee?.amount_brl != null ? new Decimal(marketplaceFee.amount_brl) : feeResult.fee;
-  const feeSource = marketplaceFee?.percent_source ?? feeResult.source;
+  const feeSource = marketplaceFee?.percentage_source ?? marketplaceFee?.percent_source ?? feeResult.source;
 
   const shipResult = resolveSaleShippingBrl(item, line, orderRaw, grossDec, order);
   const shipDec = shipResult.ship;

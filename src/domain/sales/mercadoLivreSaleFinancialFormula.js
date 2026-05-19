@@ -6,6 +6,10 @@ import {
   toFiniteNumber,
 } from "../../handlers/ml/_helpers/mlItemMoneyExtract.js";
 import {
+  buildMercadoLivreMarketplaceFeeContract,
+  normalizeMercadoLivreListingType,
+} from "./mercadoLivreMarketplaceFee.js";
+import {
   formatMercadoLivreListingTypeLabel,
   mercadoLivreFeeFromPercentOfGross,
   ML_FINANCIAL_SNAPSHOT_VERSION,
@@ -298,10 +302,8 @@ export function resolveMercadoLivreDiscountsFinancials(
  * @param {number | null} unit
  */
 function resolveListingPercentFeeGross(grossDec, listingTypeId, qty, unit) {
-  const id = String(listingTypeId ?? "").toLowerCase();
-  const hints = [];
-  if (id.includes("gold_pro") || id.includes("gold_premium")) hints.push(16.5);
-  if (id.includes("gold_special")) hints.push(13.5);
+  const norm = normalizeMercadoLivreListingType(listingTypeId);
+  const hints = norm.default_percent ? [Number(norm.default_percent)] : [];
 
   for (const hintPct of hints) {
     const fromHint = mercadoLivreFeeFromPercentOfGross(grossDec, hintPct, {
@@ -327,7 +329,7 @@ function resolveListingPercentFeeGross(grossDec, listingTypeId, qty, unit) {
  *   unit: number | null;
  * }} ctx
  */
-function applyMercadoLivreFeeGrossNetSplit(ctx) {
+export function applyMercadoLivreFeeGrossNetSplit(ctx) {
   let { feeGrossDec, feeNetDec, positiveDec, grossDec, listingTypeId, line, qty, unit } = ctx;
 
   if (positiveDec != null && positiveDec.gt(0) && feeGrossDec != null) {
@@ -363,19 +365,6 @@ function applyMercadoLivreFeeGrossNetSplit(ctx) {
     }
   }
 
-  if (positiveDec == null && feeGrossDec != null) {
-    const hintGross = resolveListingPercentFeeGross(grossDec, listingTypeId, qty, unit);
-    if (hintGross != null && hintGross.gt(feeGrossDec)) {
-      const gap = hintGross.minus(feeGrossDec);
-      if (gap.gt(0) && isFeePlausibleForListing(hintGross, grossDec, listingTypeId)) {
-        positiveDec = gap;
-        feeNetDec = feeGrossDec;
-        feeGrossDec = hintGross;
-        return { feeGrossDec, feeNetDec, positiveDec, positiveSource: "listing_percent_gap" };
-      }
-    }
-  }
-
   return { feeGrossDec, feeNetDec, positiveDec, positiveSource: positiveDec != null ? "discounts_or_line" : null };
 }
 
@@ -390,7 +379,7 @@ function applyMercadoLivreFeeGrossNetSplit(ctx) {
  * @param {string | null} listingTypeId
  * @param {Decimal | null} saleFeeSubsidyDec
  */
-function resolveMercadoLivreSaleFeeGross(order, line, grossDec, qty, unit, listingTypeId, saleFeeSubsidyDec) {
+export function resolveMercadoLivreSaleFeeGross(order, line, grossDec, qty, unit, listingTypeId, saleFeeSubsidyDec) {
   /** @type {Array<{ source: string; amount: string | null; percent: number | null; valid: boolean }>} */
   const feeCandidates = [];
 
@@ -492,24 +481,6 @@ function resolveMercadoLivreSaleFeeGross(order, line, grossDec, qty, unit, listi
     }
   }
 
-  const id = String(listingTypeId ?? "").toLowerCase();
-  const percentHints = [];
-  if (id.includes("gold_pro") || id.includes("gold_premium")) percentHints.push(16.5);
-  if (id.includes("gold_special")) percentHints.push(13.5);
-
-  for (const hintPct of percentHints) {
-    const fromHint = mercadoLivreFeeFromPercentOfGross(grossDec, hintPct, {
-      qty,
-      unitPriceDec: unit != null ? new Decimal(unit) : null,
-    });
-    if (fromHint == null) continue;
-
-    const pickedHint = pushCandidate(`listing_percent_${hintPct}`, fromHint);
-    if (pickedHint) {
-      return { fee: pickedHint, source: `listing_percent_${hintPct}`, feeCandidates };
-    }
-  }
-
   return { fee: null, source: null, feeCandidates };
 }
 
@@ -556,12 +527,35 @@ export function resolveMercadoLivreFinancialFormula(ctx) {
   let positiveDec =
     discountFin.positive_adjustments_brl != null ? new Decimal(discountFin.positive_adjustments_brl) : null;
 
-  const feeResolved =
+  const grossStr = moneyDecimal(grossDec);
+  const marketplaceFeeContract =
+    grossStr != null
+      ? buildMercadoLivreMarketplaceFeeContract({
+          sale_price_brl: grossStr,
+          listing_type_id: listingTypeId,
+          line,
+          order,
+          qty,
+          unit_price_brl: unit != null ? new Decimal(unit).toFixed(2) : null,
+          discounts_snapshot,
+          external_order_item_id: externalOrderItemId,
+        })
+      : null;
+
+  let feeResolved =
     grossDec != null
       ? resolveMercadoLivreSaleFeeGross(order, line, grossDec, qty, unit, listingTypeId, saleFeeSubsidyDec)
       : { fee: null, source: null, feeCandidates: [] };
 
-  let feeGrossDec = feeResolved.fee;
+  let feeGrossDec =
+    marketplaceFeeContract?.amount_brl != null ? new Decimal(marketplaceFeeContract.amount_brl) : feeResolved.fee;
+  if (marketplaceFeeContract?.amount_brl != null) {
+    feeResolved = {
+      fee: feeGrossDec,
+      source: marketplaceFeeContract.percentage_source ?? marketplaceFeeContract.percent_source ?? "marketplace_fee_contract",
+      feeCandidates: feeResolved.feeCandidates,
+    };
+  }
   let feeNetDec = feeGrossDec;
   let positiveSource = null;
 
@@ -602,9 +596,10 @@ export function resolveMercadoLivreFinancialFormula(ctx) {
   }
 
   const feePercentStr =
-    feeGrossDec != null && grossDec != null && !grossDec.isZero()
+    marketplaceFeeContract?.percentage ??
+    (feeGrossDec != null && grossDec != null && !grossDec.isZero()
       ? feeGrossDec.div(grossDec).mul(100).toDecimalPlaces(2, Decimal.ROUND_HALF_UP).toFixed(2)
-      : null;
+      : null);
 
   const missingFields = [];
   if (!grossDec) missingFields.push("gross");
@@ -641,6 +636,7 @@ export function resolveMercadoLivreFinancialFormula(ctx) {
 
   return {
     gross_sale_amount_brl: moneyDecimal(grossDec),
+    marketplace_fee: marketplaceFeeContract,
     marketplace_fee_amount_brl: moneyDecimal(feeGrossDec),
     marketplace_fee_net_amount_brl: feeNetDec != null ? moneyDecimal(feeNetDec) : null,
     marketplace_fee_percent: feePercentStr,

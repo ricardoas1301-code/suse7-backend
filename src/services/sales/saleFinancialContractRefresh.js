@@ -39,15 +39,25 @@ export function refreshMercadoLivreItemMarketplaceFeeContract(item, order = null
 
   const marketplaceFeeBefore = marketplaceFeeFromFinancialSnapshot(existingFin);
 
+  const orderRaw =
+    order?.raw_json && typeof order.raw_json === "object"
+      ? /** @type {Record<string, unknown>} */ (order.raw_json)
+      : null;
+
   const marketplaceFeeAfter =
     grossStr != null
       ? buildMercadoLivreMarketplaceFeeContract({
           sale_price_brl: grossStr,
           listing_type_id: listingTypeId,
           line: line && typeof line === "object" ? line : null,
+          order,
+          item,
           listing,
           qty,
           unit_price_brl: unit != null ? unit.toFixed(2) : null,
+          discounts_snapshot: orderRaw?._s7_discounts ?? orderRaw?.discounts ?? null,
+          external_order_item_id:
+            item.external_listing_id != null ? String(item.external_listing_id) : null,
         })
       : null;
 
@@ -81,16 +91,19 @@ export function refreshMercadoLivreItemMarketplaceFeeContract(item, order = null
 
   itemRaw._s7_financial = mergedFin;
 
-  console.log("[S7 RAYX FEE REFRESH]", {
+  console.log("[S7 RAYX REAL FEE REFRESH]", {
     sale_id: item.id ?? null,
     item_id: item.id ?? null,
-    listing_type_id: listingTypeId,
-    listing_type_label: marketplaceFeeAfter?.listing_type_label ?? null,
+    external_order_id: order?.external_order_id ?? item.external_order_id ?? null,
+    external_listing_id: item.external_listing_id ?? null,
     sale_price_brl: grossStr,
-    fee_percentage: marketplaceFeeAfter?.percentage ?? null,
+    fee_amount_brl: marketplaceFeeAfter?.amount_brl ?? null,
+    percentage: marketplaceFeeAfter?.percentage ?? null,
+    percentage_source: marketplaceFeeAfter?.percentage_source ?? marketplaceFeeAfter?.percent_source ?? null,
+    raw_percentage_source_path: marketplaceFeeAfter?.raw_percentage_source_path ?? null,
+    raw_amount_source_path: marketplaceFeeAfter?.raw_amount_source_path ?? null,
+    is_estimated: marketplaceFeeAfter?.is_estimated ?? null,
     fee_amount_before: marketplaceFeeBefore?.amount_brl ?? existingFin?.marketplace_fee_amount_brl ?? null,
-    fee_amount_after: marketplaceFeeAfter?.amount_brl ?? null,
-    percent_source: marketplaceFeeAfter?.percent_source ?? null,
   });
 
   return {
