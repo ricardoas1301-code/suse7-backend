@@ -95,5 +95,51 @@ if (wrongDefault === "48.75") {
   console.log("NOTE: 16.5% of 295.45 would be", wrongDefault, "— must not use as primary for Edson");
 }
 
+const marcioContract = buildMercadoLivreMarketplaceFeeContract({
+  sale_price_brl: "277.62",
+  listing_type_id: "gold_pro",
+  line: {
+    sale_fee: 37.48,
+    unit_price: 277.62,
+    gross_price: 299.9,
+    listing_type_id: "gold_pro",
+  },
+  unit_price_brl: "277.62",
+});
+if (marcioContract.amount_brl !== "37.48" || marcioContract.percentage !== "13.5") {
+  failed += 1;
+  console.error("FAIL Marcio promo line fee equals catalog 13.5%", marcioContract);
+} else {
+  console.log("OK Marcio", marcioContract.amount_brl, marcioContract.percentage);
+}
+
+const edsonDiscounts = {
+  details: [
+    {
+      type: "discount",
+      items: [{ id: "MLB4222135961", amounts: { total: 44.03, seller: 26.31 } }],
+      supplier: { funding_mode: "sale_fee" },
+    },
+  ],
+};
+const edsonContract = buildMercadoLivreMarketplaceFeeContract({
+  sale_price_brl: "295.45",
+  listing_type_id: "gold_pro",
+  line: {
+    sale_fee: 22.17,
+    unit_price: 295.45,
+    gross_price: 339.48,
+    listing_type_id: "gold_pro",
+  },
+  discounts_snapshot: edsonDiscounts,
+  unit_price_brl: "295.45",
+});
+if (edsonContract.amount_brl !== "39.89" || edsonContract.percentage !== "13.5") {
+  failed += 1;
+  console.error("FAIL Edson promo enrichment contract", edsonContract);
+} else {
+  console.log("OK Edson promo", edsonContract.amount_brl, edsonContract.percentage, edsonContract.percentage_source);
+}
+
 if (failed > 0) process.exit(1);
 console.log("All marketplace fee historical cases passed.");

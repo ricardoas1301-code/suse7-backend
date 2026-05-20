@@ -12,6 +12,13 @@ import {
 } from "../../domain/sales/saleDetailMarketplaceRevenue.js";
 import { ML_FINANCIAL_SNAPSHOT_VERSION } from "../../domain/sales/mercadoLivreSaleRevenueRules.js";
 import { enrichMercadoLivreSaleFinancialSnapshot } from "../marketplace/mercadoLivreSaleFinancialEnrichment.js";
+import { resolveMercadoLivreMarketplaceRebate } from "../../domain/sales/mercadoLivreMarketplaceRebate.js";
+import { toFiniteNumber } from "../../handlers/ml/_helpers/mlItemMoneyExtract.js";
+
+/** @param {unknown} v */
+function parseMlMoney(v) {
+  return toFiniteNumber(v);
+}
 
 /** @param {unknown} v */
 function pickFinSnapshot(raw) {
@@ -68,12 +75,32 @@ export function refreshMercadoLivreItemMarketplaceFeeContract(item, order = null
     if (shipRaw != null && String(shipRaw).trim() !== "") {
       netDec = netDec.minus(new Decimal(String(shipRaw).replace(",", ".")));
     }
-    const adjRaw = existingFin?.positive_adjustments_brl;
-    if (adjRaw != null && String(adjRaw).trim() !== "") {
-      netDec = netDec.plus(new Decimal(String(adjRaw).replace(",", ".")));
+    const rebateResolved = resolveMercadoLivreMarketplaceRebate({
+      feeGrossDec: new Decimal(marketplaceFeeAfter.amount_brl),
+      line: line && typeof line === "object" ? line : null,
+      logContext: {
+        sale_id: item.id != null ? String(item.id) : null,
+        item_id: item.id != null ? String(item.id) : null,
+        external_order_id: order?.external_order_id ?? item.external_order_id ?? null,
+      },
+    });
+    if (rebateResolved.marketplace_rebate?.amount_brl) {
+      netDec = netDec.plus(new Decimal(rebateResolved.marketplace_rebate.amount_brl));
     }
     netReceived = netDec.toDecimalPlaces(2, Decimal.ROUND_HALF_UP).toFixed(2);
   }
+
+  const rebateResolved = resolveMercadoLivreMarketplaceRebate({
+    feeGrossDec:
+      marketplaceFeeAfter?.amount_brl != null ? new Decimal(marketplaceFeeAfter.amount_brl) : null,
+    line: line && typeof line === "object" ? line : null,
+    logContext: {
+      sale_id: item.id != null ? String(item.id) : null,
+      item_id: item.id != null ? String(item.id) : null,
+      external_order_id: order?.external_order_id ?? item.external_order_id ?? null,
+    },
+  });
+  const marketplaceRebate = rebateResolved.marketplace_rebate;
 
   const mergedFin = {
     ...(existingFin ?? {}),
@@ -85,6 +112,8 @@ export function refreshMercadoLivreItemMarketplaceFeeContract(item, order = null
     marketplace_fee_percent: marketplaceFeeAfter?.percentage ?? null,
     listing_type_id: listingTypeId,
     listing_type_label: marketplaceFeeAfter?.listing_type_label ?? existingFin?.listing_type_label ?? null,
+    positive_adjustments_brl: marketplaceRebate?.amount_brl ?? null,
+    marketplace_rebate: marketplaceRebate,
     net_received_amount_brl: netReceived,
     updated_at: new Date().toISOString(),
   };
@@ -165,14 +194,36 @@ export async function refreshSaleFinancialContractByItemId(supabase, userId, ite
         .eq("id", itemId)
         .maybeSingle();
       if (refErr) throw refErr;
+      const finBefore = pickFinSnapshot(item.raw_json);
       const fin = pickFinSnapshot(refreshed?.raw_json);
+      const feeAfter = marketplaceFeeFromFinancialSnapshot(fin);
+      const rebateAfter =
+        fin?.marketplace_rebate && typeof fin.marketplace_rebate === "object"
+          ? /** @type {Record<string, unknown>} */ (fin.marketplace_rebate)
+          : fin?.positive_adjustments_brl
+            ? {
+                amount_brl: String(fin.positive_adjustments_brl),
+                label: "Estorno",
+                subtitle: "Descontos e bônus",
+                is_estimated: false,
+              }
+            : null;
+
       return {
         ok: true,
         sale_id: itemId,
         item_id: itemId,
+        external_order_id: order?.external_order_id ?? item.external_order_id ?? null,
+        marketplace_account_id: item.marketplace_account_id ?? order?.marketplace_account_id ?? null,
+        seller_company_id: order?.seller_company_id ?? null,
         mode: "full_ml_enrichment",
-        marketplace_fee_before: null,
-        marketplace_fee_after: marketplaceFeeFromFinancialSnapshot(fin),
+        marketplace_fee_before: marketplaceFeeFromFinancialSnapshot(finBefore),
+        marketplace_fee_after: feeAfter,
+        marketplace_rebate_after: rebateAfter,
+        shipping_after:
+          fin?.shipping_amount_brl != null ? { amount_brl: String(fin.shipping_amount_brl) } : null,
+        net_received_after:
+          fin?.net_received_amount_brl != null ? String(fin.net_received_amount_brl) : null,
       };
     }
   }

@@ -183,41 +183,67 @@ function tryCatalogRateForPromotionalSale(ctx) {
   if (unit == null || unit <= 0 || lineFee == null || lineFee <= 0) return null;
   if (grossPrice == null || grossPrice <= unit * 1.01) return null;
 
-  const subsidy = ctx.sale_fee_subsidy_brl != null ? parseMlMoney(ctx.sale_fee_subsidy_brl) : null;
+  const listingTypeId = line.listing_type_id != null ? String(line.listing_type_id) : null;
+  const norm = normalizeMercadoLivreListingType(listingTypeId);
+  const ratesOrdered =
+    norm.listing_type === "premium"
+      ? ["13.5", "16.5", "11.5"]
+      : norm.listing_type === "classic"
+        ? ["11.5", "13.5", "16.5"]
+        : [...ML_CATALOG_FEE_RATES];
+
   const unitDec = new Decimal(unit);
   const lineFeeDec = new Decimal(lineFee);
+  const exactMatchTolerance = new Decimal("0.02");
 
-  /** @type {{ rate: string; amount: Decimal; diff: Decimal } | null} */
-  let best = null;
-
-  for (const rate of ML_CATALOG_FEE_RATES) {
+  for (const rate of ratesOrdered) {
     const nominal = mercadoLivreFeeFromPercentOfGross(unitDec, rate);
     if (nominal == null) continue;
-    const diffToLine = nominal.minus(lineFeeDec).abs();
-    const diffToGross =
-      subsidy != null && subsidy > 0
-        ? nominal.minus(lineFeeDec.plus(subsidy)).abs()
-        : diffToLine.plus(999);
-    const diff = Decimal.min(diffToLine, diffToGross);
-    const tolerance = Decimal.max(new Decimal("2.50"), lineFeeDec.mul(0.2));
-    if (diff.gt(tolerance)) continue;
-    if (
-      !best ||
-      nominal.gt(best.amount) ||
-      (nominal.eq(best.amount) && diff.lt(best.diff))
-    ) {
-      best = { rate, amount: nominal, diff };
+    if (nominal.minus(lineFeeDec).abs().lte(exactMatchTolerance)) {
+      return {
+        amount_brl: moneyDecimal(lineFeeDec),
+        percentage: rate,
+        raw_amount_source_path: "line.sale_fee_promo_catalog_rate",
+        raw_percentage_source_path: `catalog_rate_${rate}`,
+      };
     }
   }
 
-  if (!best) return null;
+  /** @type {Array<{ rate: string; nominal: Decimal; netShare: Decimal; rebate: Decimal }>} */
+  const candidates = [];
+  for (const rate of ratesOrdered) {
+    const nominal = mercadoLivreFeeFromPercentOfGross(unitDec, rate);
+    if (nominal == null || nominal.lte(lineFeeDec)) continue;
 
-  return {
-    amount_brl: moneyDecimal(best.amount),
-    percentage: best.rate,
-    raw_amount_source_path: "derived:catalog_rate_times_sale_price_promo",
-    raw_percentage_source_path: `catalog_rate_${best.rate}`,
-  };
+    const netShare = lineFeeDec.div(nominal);
+    if (netShare.lt(0.35) || netShare.gt(1.01)) continue;
+
+    candidates.push({
+      rate,
+      nominal,
+      netShare,
+      rebate: nominal.minus(lineFeeDec),
+    });
+  }
+
+  if (candidates.length === 0) return null;
+
+  const minRebate = new Decimal("0.50");
+  const promoWithRebate = candidates.filter((c) => c.rebate.gte(minRebate) && c.netShare.lt(0.98));
+  const pool = promoWithRebate.length > 0 ? promoWithRebate : candidates;
+
+  for (const rate of ratesOrdered) {
+    const hit = pool.find((c) => c.rate === rate);
+    if (!hit) continue;
+    return {
+      amount_brl: moneyDecimal(hit.nominal),
+      percentage: hit.rate,
+      raw_amount_source_path: "derived:catalog_rate_times_sale_price_promo",
+      raw_percentage_source_path: `catalog_rate_${hit.rate}`,
+    };
+  }
+
+  return null;
 }
 
 /**

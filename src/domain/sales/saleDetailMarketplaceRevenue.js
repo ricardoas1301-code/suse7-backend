@@ -14,6 +14,10 @@ import {
   marketplaceFeeFromFinancialSnapshot,
 } from "./mercadoLivreMarketplaceFee.js";
 import {
+  marketplaceRebateFromFinancialSnapshot,
+  resolveMercadoLivreMarketplaceRebate,
+} from "./mercadoLivreMarketplaceRebate.js";
+import {
   formatMercadoLivreListingTypeLabel,
   mercadoLivreFeeFromPercentOfGross,
   validateMercadoLivreFeeCandidate,
@@ -722,6 +726,35 @@ export function resolveMercadoLivreSaleRevenueSnapshot(item, order, listing = nu
     const feePercent =
       marketplaceFee?.percentage ??
       (persistedSnap.marketplace_fee_percent != null ? String(persistedSnap.marketplace_fee_percent) : null);
+    const feeGrossDec = toDecimal(feeAmount);
+    const grossDec = toDecimal(persistedSnap.gross_sale_amount_brl);
+    const shipDec =
+      persistedSnap.shipping_amount_brl != null ? toDecimal(persistedSnap.shipping_amount_brl) : null;
+
+    const rebateResolved = resolveMercadoLivreMarketplaceRebate({
+      feeGrossDec,
+      line: line && typeof line === "object" ? line : null,
+      logContext: {
+        item_id: item.id != null ? String(item.id) : null,
+        external_order_id:
+          order?.external_order_id != null
+            ? String(order.external_order_id)
+            : item.external_order_id != null
+              ? String(item.external_order_id)
+              : null,
+      },
+    });
+    const explicitRebate =
+      rebateResolved.marketplace_rebate ?? marketplaceRebateFromFinancialSnapshot(persistedSnap);
+    const rebateDec =
+      explicitRebate?.amount_brl != null ? toDecimal(explicitRebate.amount_brl) : null;
+
+    let netDec = toDecimal(persistedSnap.net_received_amount_brl);
+    if (grossDec != null && feeGrossDec != null && shipDec != null) {
+      netDec = grossDec.minus(feeGrossDec).minus(shipDec);
+      if (rebateDec != null) netDec = netDec.plus(rebateDec);
+    }
+
     return {
       gross_sale_amount_brl: String(persistedSnap.gross_sale_amount_brl),
       marketplace_fee: marketplaceFee,
@@ -736,9 +769,9 @@ export function resolveMercadoLivreSaleRevenueSnapshot(item, order, listing = nu
         marketplaceFee?.listing_type_label ?? formatMercadoLivreListingTypeLabel(listingTypeId),
       shipping_amount_brl:
         persistedSnap.shipping_amount_brl != null ? String(persistedSnap.shipping_amount_brl) : null,
-      positive_adjustments_brl:
-        persistedSnap.positive_adjustments_brl != null ? String(persistedSnap.positive_adjustments_brl) : null,
-      net_received_amount_brl: String(persistedSnap.net_received_amount_brl),
+      marketplace_rebate: explicitRebate,
+      positive_adjustments_brl: rebateDec != null ? moneyDecimal(rebateDec) : null,
+      net_received_amount_brl: moneyDecimal(netDec),
       net_received_source: "s7_financial_snapshot",
       _sources: {
         gross: "s7_financial_snapshot",
@@ -801,30 +834,23 @@ export function resolveMercadoLivreSaleRevenueSnapshot(item, order, listing = nu
   const listingTypeLabel =
     marketplaceFee?.listing_type_label ?? formatMercadoLivreListingTypeLabel(listingTypeId);
 
-  let positiveAdjDec = null;
-  let positiveSource = null;
-  if (persistedSnap?.positive_adjustments_brl != null) {
-    positiveAdjDec = toDecimal(persistedSnap.positive_adjustments_brl);
-    positiveSource = "s7_financial_snapshot.positive_adjustments";
-  }
-  if (positiveAdjDec == null && orderRaw?._s7_financial) {
-    const fin = /** @type {Record<string, unknown>} */ (orderRaw._s7_financial);
-    const fromDiscounts = extractPositiveAdjustmentsFromDiscountsSnapshot(
-      fin.discounts_snapshot,
-      item.external_order_item_id != null ? String(item.external_order_item_id) : null,
-    );
-    if (fromDiscounts != null) {
-      positiveAdjDec = new Decimal(fromDiscounts);
-      positiveSource = "orders_discounts_snapshot";
-    }
-  }
-  if (positiveAdjDec == null && line) {
-    const positiveAdjNum = pickPositiveAdjustmentsFromLine(line);
-    if (positiveAdjNum != null) {
-      positiveAdjDec = new Decimal(positiveAdjNum);
-      positiveSource = "line.coupon_or_sale_fee_details";
-    }
-  }
+  const rebateResolved = resolveMercadoLivreMarketplaceRebate({
+    feeGrossDec: feeDec,
+    line: line && typeof line === "object" ? line : null,
+    logContext: {
+      item_id: item.id != null ? String(item.id) : null,
+      external_order_id:
+        order?.external_order_id != null
+          ? String(order.external_order_id)
+          : item.external_order_id != null
+            ? String(item.external_order_id)
+            : null,
+    },
+  });
+  const explicitRebate = rebateResolved.marketplace_rebate;
+  const positiveAdjDec =
+    explicitRebate?.amount_brl != null ? toDecimal(explicitRebate.amount_brl) : null;
+  const positiveSource = explicitRebate?.raw_source_path ?? null;
 
   let netDec = null;
   /** @type {"computed" | null} */
@@ -864,6 +890,7 @@ export function resolveMercadoLivreSaleRevenueSnapshot(item, order, listing = nu
     listing_type_id: listingTypeId,
     listing_type_label: listingTypeLabel,
     shipping_amount_brl: moneyDecimal(shipDec),
+    marketplace_rebate: explicitRebate,
     positive_adjustments_brl: moneyDecimal(positiveAdjDec),
     net_received_amount_brl: moneyDecimal(netDec),
     net_received_source: netSource,
@@ -916,6 +943,7 @@ export function buildSaleDetailMarketplaceRevenue(item, order, listing = null) {
     shipping_cost_amount: marketplaceRevenue.shipping_amount_brl,
     shipping_cost: marketplaceRevenue.shipping_amount_brl,
     positive_adjustments_brl: marketplaceRevenue.positive_adjustments_brl,
+    marketplace_rebate: marketplaceRevenue.marketplace_rebate ?? null,
     net_received_amount: marketplaceRevenue.net_received_amount_brl,
     net_received: marketplaceRevenue.net_received_amount_brl,
   };

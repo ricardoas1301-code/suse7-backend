@@ -9,6 +9,7 @@ import {
   buildMercadoLivreMarketplaceFeeContract,
   normalizeMercadoLivreListingType,
 } from "./mercadoLivreMarketplaceFee.js";
+import { resolveMercadoLivreMarketplaceRebate } from "./mercadoLivreMarketplaceRebate.js";
 import {
   formatMercadoLivreListingTypeLabel,
   mercadoLivreFeeFromPercentOfGross,
@@ -256,7 +257,7 @@ export function resolveMercadoLivreDiscountsFinancials(
           source: "items.amounts.total",
         });
 
-        if (funding === "sale_fee") {
+        if (funding === "sale_fee" && !isItemPriceGapMislabeledAsSaleFee(amt, line)) {
           saleFeeSubsidyDec = saleFeeSubsidyDec.plus(amt);
           hasSaleFeeSubsidy = true;
         }
@@ -269,7 +270,7 @@ export function resolveMercadoLivreDiscountsFinancials(
 
     matched.push({ funding_mode: funding || null, amount: amt, source: "detail.amount" });
 
-    if (funding === "sale_fee") {
+    if (funding === "sale_fee" && !isItemPriceGapMislabeledAsSaleFee(amt, line)) {
       saleFeeSubsidyDec = saleFeeSubsidyDec.plus(amt);
       hasSaleFeeSubsidy = true;
     }
@@ -286,13 +287,27 @@ export function resolveMercadoLivreDiscountsFinancials(
     }
   }
 
-  const positiveDec = hasSaleFeeSubsidy ? saleFeeSubsidyDec : positiveOnlyDec.gt(0) ? positiveOnlyDec : null;
+  const positiveDec = positiveOnlyDec.gt(0) ? positiveOnlyDec : null;
 
   return {
     details: matched,
     sale_fee_subsidy_brl: hasSaleFeeSubsidy ? moneyDecimal(saleFeeSubsidyDec) : null,
     positive_adjustments_brl: positiveDec != null ? moneyDecimal(positiveDec) : null,
   };
+}
+
+/**
+ * Desconto de preço do item (gross_price − unit_price) rotulado como sale_fee na API ML.
+ *
+ * @param {number} amount
+ * @param {Record<string, unknown> | null | undefined} line
+ */
+function isItemPriceGapMislabeledAsSaleFee(amount, line) {
+  if (!line || amount == null || amount <= 0) return false;
+  const unit = parseMlMoney(line.unit_price ?? line.discounted_unit_price);
+  const grossPrice = parseMlMoney(line.gross_price);
+  if (unit == null || grossPrice == null || grossPrice <= unit + 0.01) return false;
+  return Math.abs(grossPrice - unit - amount) <= 0.05;
 }
 
 /**
@@ -524,8 +539,7 @@ export function resolveMercadoLivreFinancialFormula(ctx) {
   );
   const saleFeeSubsidyDec =
     discountFin.sale_fee_subsidy_brl != null ? new Decimal(discountFin.sale_fee_subsidy_brl) : null;
-  let positiveDec =
-    discountFin.positive_adjustments_brl != null ? new Decimal(discountFin.positive_adjustments_brl) : null;
+  let positiveDec = null;
 
   const grossStr = moneyDecimal(grossDec);
   const marketplaceFeeContract =
@@ -537,7 +551,7 @@ export function resolveMercadoLivreFinancialFormula(ctx) {
           order,
           qty,
           unit_price_brl: unit != null ? new Decimal(unit).toFixed(2) : null,
-          discounts_snapshot,
+          discounts_snapshot: discountsSnapshot,
           external_order_item_id: externalOrderItemId,
         })
       : null;
@@ -579,15 +593,23 @@ export function resolveMercadoLivreFinancialFormula(ctx) {
     if (feeNetDec.lte(0)) feeNetDec = feeGrossDec;
   }
 
-  if (positiveDec == null) {
-    for (const key of ["coupon_amount", "discount_amount", "meli_discount_amount", "seller_cost_reduction_amount"]) {
-      const v = parseMlMoney(line[key]);
-      if (v != null && v > 0) {
-        positiveDec = new Decimal(v);
-        break;
-      }
-    }
+  const lineSaleFeeNet = parseMlMoney(line.sale_fee ?? line.listing_fee);
+  if (feeGrossDec != null && lineSaleFeeNet != null && lineSaleFeeNet > 0 && lineSaleFeeNet < feeGrossDec) {
+    feeNetDec = new Decimal(lineSaleFeeNet);
   }
+
+  const rebateResolve = resolveMercadoLivreMarketplaceRebate({
+    feeGrossDec,
+    line,
+    saleFeeSubsidyDec,
+    logContext: {
+      external_order_id: order.id != null ? String(order.id) : null,
+    },
+  });
+  const marketplaceRebate = rebateResolve.marketplace_rebate;
+  positiveDec =
+    marketplaceRebate?.amount_brl != null ? new Decimal(marketplaceRebate.amount_brl) : null;
+  positiveSource = marketplaceRebate?.raw_source_path ?? null;
 
   let netDec = null;
   if (grossDec != null && feeGrossDec != null && shipDec != null) {
@@ -628,7 +650,15 @@ export function resolveMercadoLivreFinancialFormula(ctx) {
           }
         : null,
     selected_positive_adjustments:
-      positiveDec != null ? { amount: moneyDecimal(positiveDec), source: positiveSource ?? "discounts_or_line" } : null,
+      positiveDec != null
+        ? { amount: moneyDecimal(positiveDec), source: positiveSource ?? "explicit_tariff_rebate" }
+        : null,
+    marketplace_rebate_resolve: {
+      decision: rebateResolve.rebate_decision,
+      reject_reason: rebateResolve.reject_reason,
+      candidate_amount: rebateResolve.rebate_candidate_amount,
+      candidate_source_path: rebateResolve.rebate_candidate_source_path,
+    },
     final_net: moneyDecimal(netDec),
     snapshot_complete: snapshotComplete,
     missing_fields: missingFields,
@@ -643,6 +673,7 @@ export function resolveMercadoLivreFinancialFormula(ctx) {
     listing_type_id: listingTypeId,
     listing_type_label: formatMercadoLivreListingTypeLabel(listingTypeId),
     shipping_amount_brl: moneyDecimal(shipDec),
+    marketplace_rebate: marketplaceRebate,
     positive_adjustments_brl: positiveDec != null ? moneyDecimal(positiveDec) : null,
     net_received_amount_brl: snapshotComplete ? moneyDecimal(netDec) : null,
     snapshot_version: snapshotComplete ? ML_FINANCIAL_SNAPSHOT_VERSION : null,

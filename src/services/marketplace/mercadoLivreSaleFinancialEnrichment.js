@@ -343,6 +343,10 @@ function toItemFinancialContract(revenue, meta) {
 
   const nowIso = new Date().toISOString();
   const snapshotComplete = revenue.snapshot_complete === true;
+  const marketplaceRebate =
+    revenue.marketplace_rebate && typeof revenue.marketplace_rebate === "object"
+      ? revenue.marketplace_rebate
+      : null;
 
   return {
     source: ML_FINANCIAL_ENRICHMENT_SOURCE,
@@ -351,10 +355,13 @@ function toItemFinancialContract(revenue, meta) {
     marketplace_fee_amount_brl: revenue.marketplace_fee_amount_brl ?? null,
     marketplace_fee_net_amount_brl: revenue.marketplace_fee_net_amount_brl ?? null,
     marketplace_fee_percent: revenue.marketplace_fee_percent ?? null,
+    marketplace_fee: revenue.marketplace_fee ?? null,
+    marketplace_rebate: marketplaceRebate,
     listing_type_id: listingTypeId,
     listing_type_label: revenue.listing_type_label ?? formatMercadoLivreListingTypeLabel(listingTypeId),
     shipping_amount_brl: revenue.shipping_amount_brl ?? null,
-    positive_adjustments_brl: revenue.positive_adjustments_brl ?? null,
+    positive_adjustments_brl:
+      marketplaceRebate?.amount_brl != null ? String(marketplaceRebate.amount_brl) : null,
     net_received_amount_brl: snapshotComplete ? (revenue.net_received_amount_brl ?? null) : null,
     snapshot_complete: snapshotComplete,
     missing_fields: revenue.formula_debug?.missing_fields ?? null,
@@ -613,6 +620,10 @@ export async function enrichMercadoLivreSaleFinancialSnapshot(supabase, userId, 
 
   /** @type {unknown} */
   let discountsSnapshot = null;
+  const logContext = opts.logContext != null ? String(opts.logContext).trim() : "";
+  const shouldLogEnrichment =
+    logContext === "rayx_fee_refresh" || process.env.S7_RAYX_ML_ENRICHMENT_LOG === "1";
+
   if (orderId) {
     try {
       discountsSnapshot = await fetchMercadoLivreOrderDiscountsById(accessToken, orderId, {
@@ -648,6 +659,40 @@ export async function enrichMercadoLivreSaleFinancialSnapshot(supabase, userId, 
       debug.selected_fee_source = "persisted_per_item";
       debug.selected_shipping_source = "persisted_per_item";
       debug.final_marketplace_revenue = sample;
+    }
+
+    if (shouldLogEnrichment) {
+      const firstLine =
+        Array.isArray(orderPayload.order_items) && orderPayload.order_items[0]
+          ? /** @type {Record<string, unknown>} */ (orderPayload.order_items[0])
+          : null;
+      console.log("[S7 RAYX ML ENRICHMENT]", {
+        log_context: logContext || null,
+        external_order_id: orderId || null,
+        sales_order_id: opts.salesOrderId ?? null,
+        marketplace_account_id: mpAcct,
+        seller_company_id: orderPayload.seller_company_id ?? null,
+        user_id: userId,
+        has_access_token: true,
+        token_owner: "marketplace_account_oauth",
+        endpoints_called: [
+          shipmentId ? "GET /shipments/:id" : null,
+          orderId ? "GET /orders/:id/discounts" : null,
+        ].filter(Boolean),
+        discounts_fetched: debug.discounts_fetched === true,
+        shipment_fetched: debug.fetched_shipment === true,
+        financial_fields_found: {
+          gross_sale_amount_brl: sample?.gross ?? null,
+          marketplace_fee_amount_brl: sample?.fee ?? null,
+          shipping_amount_brl: sample?.shipping ?? null,
+          net_received_amount_brl: sample?.net ?? null,
+          line_sale_fee: firstLine?.sale_fee ?? null,
+          line_unit_price: firstLine?.unit_price ?? null,
+          line_gross_price: firstLine?.gross_price ?? null,
+        },
+        items_persisted: persistLog.length,
+        snapshot_complete: sample?.snapshot_complete ?? null,
+      });
     }
 
     if (isEnrichmentDebugEnabled()) {
