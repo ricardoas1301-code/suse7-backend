@@ -21,6 +21,11 @@ import {
   countStaleCustomers,
   finalizeIngestionHealthSnapshot,
 } from "./customerIngestionHealthService.js";
+import { isCustomersDataQualityEnabled } from "./customerDataQualityConstants.js";
+import {
+  computeCustomerDataQualityDetail,
+  computeDataQualityOverviewForList,
+} from "./customerDataQualityService.js";
 
 const CUSTOMER_SCAN_LIMIT = 5000;
 const ORDER_HISTORY_DEFAULT = 20;
@@ -364,6 +369,9 @@ export async function buildCustomersList(supabase, userId, query) {
 
   const summary = buildSummaryFromRows(enriched);
   summary.ingestion_health = ingestionHealth;
+  summary.data_quality_overview = isCustomersDataQualityEnabled()
+    ? computeDataQualityOverviewForList(dbRows, aggMap)
+    : null;
 
   return {
     summary,
@@ -523,12 +531,19 @@ export async function buildCustomerDetail(supabase, userId, customerId, query) {
   const from = (ordersPage - 1) * ordersPageSize;
   const pagedOrders = orders.slice(from, from + ordersPageSize);
 
-  return {
+  /** @type {Record<string, unknown>} */
+  const result = {
     customer,
     metrics,
     orders: pagedOrders,
     insights: buildCustomerInsights(metrics, customer),
   };
+
+  if (isCustomersDataQualityEnabled()) {
+    result.data_quality = computeCustomerDataQualityDetail(row, agg, null);
+  }
+
+  return result;
 }
 
 /**

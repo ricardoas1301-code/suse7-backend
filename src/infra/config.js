@@ -92,5 +92,9 @@ export const config = {
   /** Fase 4A.2 — observabilidade de ingestão em GET /api/customers (summary.ingestion_health). */
   customersIngestionHealthEnabled:
     getEnv("CUSTOMERS_INGESTION_HEALTH_ENABLED", { defaultValue: "false" }).trim().toLowerCase() === "true",
+
+  /** Fase 4A.3 — qualidade de dados em GET /api/customers (summary.data_quality_overview). */
+  customersDataQualityEnabled:
+    getEnv("CUSTOMERS_DATA_QUALITY_ENABLED", { defaultValue: "false" }).trim().toLowerCase() === "true",
 };
 
