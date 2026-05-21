@@ -15,6 +15,12 @@ import {
   mapCustomerListRow,
   mapCustomerOrderRow,
 } from "./customerPresentationMapper.js";
+import { isCustomersIngestionHealthEnabled } from "./customerIngestionHealthConstants.js";
+import {
+  computeIngestionHealthCounts,
+  countStaleCustomers,
+  finalizeIngestionHealthSnapshot,
+} from "./customerIngestionHealthService.js";
 
 const CUSTOMER_SCAN_LIMIT = 5000;
 const ORDER_HISTORY_DEFAULT = 20;
@@ -273,17 +279,51 @@ function buildSummaryFromRows(rows) {
  */
 export async function buildCustomersList(supabase, userId, query) {
   const filters = parseCustomersListQuery(query);
+  const healthScope = {
+    userId,
+    marketplace: filters.marketplace,
+    marketplaceAccountId: filters.marketplaceAccountId,
+    sellerCompanyId: filters.sellerCompanyId,
+  };
 
   const dbRows = await loadMarketplaceCustomerRows(supabase, userId, filters);
   const externalIds = dbRows.map((r) => safeStr(r.external_customer_id)).filter(Boolean);
+  const healthEnabled = isCustomersIngestionHealthEnabled();
 
-  const aggMap = await computeAggregatesForScope(supabase, {
+  const aggScope = {
     userId,
     marketplace: filters.marketplace,
     marketplaceAccountId: filters.marketplaceAccountId,
     sellerCompanyId: filters.sellerCompanyId,
     externalCustomerIds: externalIds.length ? externalIds : null,
-  });
+  };
+
+  const aggMapPromise = computeAggregatesForScope(supabase, aggScope);
+  const healthCountsPromise = healthEnabled
+    ? computeIngestionHealthCounts(supabase, healthScope)
+    : null;
+
+  /** @type {Map<string, import("./customerOrderAggregateService.js").emptyAggregate>} */
+  let aggMap;
+  /** @type {ReturnType<typeof finalizeIngestionHealthSnapshot> | null} */
+  let ingestionHealth = null;
+
+  if (healthEnabled) {
+    const [map, counts] = await Promise.all([aggMapPromise, healthCountsPromise]);
+    aggMap = map;
+    const stale =
+      dbRows.length > 0 && map.size > 0 ? countStaleCustomers(dbRows, map) : 0;
+    ingestionHealth = finalizeIngestionHealthSnapshot(counts, stale);
+    console.info("[Suse7][customers-health]", {
+      status: ingestionHealth.status,
+      coverage_pct: ingestionHealth.coverage_pct,
+      pending: ingestionHealth.orders.pending_materialization,
+      stale,
+      global_available: counts.global.available,
+    });
+  } else {
+    aggMap = await aggMapPromise;
+  }
 
   /** @type {Array<Record<string, unknown>>} */
   let enriched = dbRows.map((row) => {
@@ -322,8 +362,11 @@ export async function buildCustomersList(supabase, userId, query) {
   const from = (filters.page - 1) * filters.pageSize;
   const pageRows = enriched.slice(from, from + filters.pageSize);
 
+  const summary = buildSummaryFromRows(enriched);
+  summary.ingestion_health = ingestionHealth;
+
   return {
-    summary: buildSummaryFromRows(enriched),
+    summary,
     filters: {
       ...buildFilterFacets(facetBase),
       applied: {

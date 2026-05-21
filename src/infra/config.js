@@ -53,8 +53,44 @@ export const config = {
   /** @see src/billing — gateway neutro (default: asaas). */
   billingProviderDefault: getEnv("BILLING_PROVIDER_DEFAULT", { defaultValue: "asaas" }).trim().toLowerCase() || "asaas",
   asaasEnv: getEnv("ASAAS_ENV", { defaultValue: "sandbox" }).trim(),
-  asaasApiBaseUrl: getEnv("ASAAS_API_BASE_URL", { defaultValue: "" }).trim(),
+  asaasApiBaseUrl: (() => {
+    const env = getEnv("ASAAS_ENV", { defaultValue: "sandbox" }).trim();
+    const raw = getEnv("ASAAS_API_BASE_URL", { defaultValue: "" }).trim();
+    if (raw) return raw.replace(/\/+$/, "");
+    if (env.toLowerCase() === "production" || env.toLowerCase() === "prod") {
+      return "https://api.asaas.com/v3";
+    }
+    return "https://api-sandbox.asaas.com/v3";
+  })(),
   asaasApiKey: getEnv("ASAAS_API_KEY", { defaultValue: "" }).trim(),
   asaasWebhookToken: getEnv("ASAAS_WEBHOOK_TOKEN", { defaultValue: "" }).trim(),
+
+  /** Fase 3.4 — e-mail central (mock por padrão; live via provider + API key em env). */
+  s7EmailProvider: getEnv("S7_EMAIL_PROVIDER", { defaultValue: "mock" }).trim().toLowerCase(),
+  s7EmailMode: getEnv("S7_EMAIL_MODE", { defaultValue: "mock" }).trim().toLowerCase(),
+  s7EmailFrom: getEnv("S7_EMAIL_FROM", { defaultValue: "Suse7 <notificacoes@suse7.com.br>" }).trim(),
+  /** Fase 3.4.A — whitelist sandbox (ex.: ricardoas1301@gmail.com). */
+  s7EmailSandboxWhitelist: getEnv("S7_EMAIL_SANDBOX_WHITELIST", { defaultValue: "" }).trim(),
+  resendApiKey: getEnv("RESEND_API_KEY", { defaultValue: "" }).trim(),
+  sendgridApiKey: getEnv("SENDGRID_API_KEY", { defaultValue: "" }).trim(),
+
+  /** Fase 3.5A — WhatsApp central (mock por padrão). */
+  s7WhatsAppMode: getEnv("S7_WHATSAPP_MODE", { defaultValue: "mock" }).trim().toLowerCase(),
+  s7WhatsAppProvider: getEnv("S7_WHATSAPP_PROVIDER", { defaultValue: "mock" }).trim().toLowerCase(),
+  s7WhatsAppSandboxWhitelist: getEnv("S7_WHATSAPP_SANDBOX_WHITELIST", { defaultValue: "" }).trim(),
+  zapiToken: getEnv("ZAPI_TOKEN", { defaultValue: "" }).trim(),
+  evolutionApiKey: getEnv("EVOLUTION_API_KEY", { defaultValue: "" }).trim(),
+  metaWhatsAppToken: getEnv("META_WHATSAPP_TOKEN", { defaultValue: "" }).trim(),
+  twilioAuthToken: getEnv("TWILIO_AUTH_TOKEN", { defaultValue: "" }).trim(),
+
+  internalNotificationSecret:
+    getEnv("S7_INTERNAL_NOTIFICATION_SECRET") ||
+    getEnv("JOB_SECRET") ||
+    getEnv("DEV_JOB_SECRET") ||
+    getEnv("S7_DEV_JOB_SECRET"),
+
+  /** Fase 4A.2 — observabilidade de ingestão em GET /api/customers (summary.ingestion_health). */
+  customersIngestionHealthEnabled:
+    getEnv("CUSTOMERS_INGESTION_HEALTH_ENABLED", { defaultValue: "false" }).trim().toLowerCase() === "true",
 };
 
