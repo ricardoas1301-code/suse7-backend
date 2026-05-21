@@ -545,6 +545,12 @@ export default async function handler(req, res) {
       const mod = await import("../src/handlers/customers/list.js");
       return mod.default(req, res);
     }
+    if (/^\/api\/customers\/[^/]+$/.test(path) && req.method === "GET") {
+      const m = path.match(/^\/api\/customers\/([^/]+)$/);
+      req.params = { ...(req.params || {}), customerId: m?.[1] || null };
+      const mod = await import("../src/handlers/customers/detail.js");
+      return mod.default(req, res);
+    }
     if (/^\/api\/marketplace\/accounts\/[^/]+\/start-initial-sync$/.test(path) && req.method === "POST") {
       const mod = await import("../src/handlers/marketplace/accountStartInitialSync.js");
       return mod.default(req, res, path);
