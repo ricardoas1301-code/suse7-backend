@@ -92,6 +92,7 @@ export async function processWhatsAppOutbox(supabase, options = {}) {
         ...(row.metadata && typeof row.metadata === "object" ? row.metadata : {}),
         dispatch_id: dispatchId,
         attempt: attempts,
+        seller_id: row.seller_id != null ? String(row.seller_id) : null,
       },
     });
 

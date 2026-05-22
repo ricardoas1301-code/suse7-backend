@@ -64,8 +64,13 @@ export function resolveChannelDeliveryMode(channel) {
  * @returns {boolean}
  */
 export function hasWhatsAppLiveCredentials() {
-  const provider = String(config.s7WhatsAppProvider ?? "").toLowerCase();
-  if (provider === "zapi" && config.zapiToken) return true;
+  const provider = String(
+    envFlag("S7_WHATSAPP_PROVIDER", config.s7WhatsAppProvider)
+  ).toLowerCase();
+  if (provider === "zapi") {
+    const base = envFlag("S7_ZAPI_BASE_URL", config.s7ZapiBaseUrl);
+    return Boolean(base);
+  }
   if (provider === "evolution" && config.evolutionApiKey) return true;
   if (provider === "meta" && config.metaWhatsAppToken) return true;
   if (provider === "twilio" && config.twilioAuthToken) return true;
@@ -80,6 +85,13 @@ export function enforceDeliveryModePolicy(requestedMode) {
   const tier = resolveAppTier();
 
   if (requestedMode === S7_DELIVERY_MODE.LIVE) {
+    if (tier === S7_APP_TIER.PROD) {
+      return {
+        allowed: false,
+        effectiveMode: S7_DELIVERY_MODE.MOCK,
+        reason: "PROD_LIVE_BLOCKED",
+      };
+    }
     if (tier === S7_APP_TIER.DEV && !isLiveDeliveryExplicitlyAllowed()) {
       return {
         allowed: false,
@@ -104,12 +116,11 @@ export function enforceDeliveryModePolicy(requestedMode) {
     return { allowed: true, effectiveMode: S7_DELIVERY_MODE.LIVE };
   }
 
-  if (tier === S7_APP_TIER.PROD && requestedMode === S7_DELIVERY_MODE.MOCK) {
-    const forced = hasWhatsAppLiveCredentials() ? S7_DELIVERY_MODE.LIVE : S7_DELIVERY_MODE.MOCK;
+  if (tier === S7_APP_TIER.PROD) {
     return {
       allowed: true,
-      effectiveMode: forced,
-      reason: forced === S7_DELIVERY_MODE.LIVE ? "PROD_PREFERS_LIVE" : "PROD_NO_CREDENTIALS_MOCK_FALLBACK",
+      effectiveMode: S7_DELIVERY_MODE.MOCK,
+      reason: "PROD_FORCES_MOCK",
     };
   }
 
@@ -135,6 +146,9 @@ export function resolveEffectiveDeliveryPolicy(channel) {
  * @returns {boolean}
  */
 export function isLiveDeliveryActive(channel) {
+  if (resolveAppTier() === S7_APP_TIER.PROD) return false;
   const { deliveryMode } = resolveEffectiveDeliveryPolicy(channel);
-  return deliveryMode === S7_DELIVERY_MODE.LIVE && hasWhatsAppLiveCredentials();
+  if (deliveryMode !== S7_DELIVERY_MODE.LIVE || !hasWhatsAppLiveCredentials()) return false;
+  const mode = parseDeliveryMode(envFlag("S7_WHATSAPP_MODE", config.s7WhatsAppMode));
+  return mode === S7_DELIVERY_MODE.LIVE && isLiveDeliveryExplicitlyAllowed();
 }

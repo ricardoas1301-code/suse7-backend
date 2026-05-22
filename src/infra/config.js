@@ -83,6 +83,12 @@ export const config = {
   s7WhatsAppMode: getEnv("S7_WHATSAPP_MODE", { defaultValue: "mock" }).trim().toLowerCase(),
   s7WhatsAppProvider: getEnv("S7_WHATSAPP_PROVIDER", { defaultValue: "mock" }).trim().toLowerCase(),
   s7WhatsAppSandboxWhitelist: getEnv("S7_WHATSAPP_SANDBOX_WHITELIST", { defaultValue: "" }).trim(),
+  /** Fase 3.5C.1 — Z-API live controlado (base = .../instances/{id}/token/{token}). */
+  s7ZapiBaseUrl: getEnv("S7_ZAPI_BASE_URL", { defaultValue: "" }).trim(),
+  s7ZapiToken: getEnv("S7_ZAPI_TOKEN", { defaultValue: "" }).trim() || getEnv("ZAPI_TOKEN", { defaultValue: "" }).trim(),
+  s7ProviderSmokeEnabled: getEnv("S7_PROVIDER_SMOKE_ENABLED", { defaultValue: "false" }).trim().toLowerCase(),
+  s7ProviderSmokeSeller: getEnv("S7_PROVIDER_SMOKE_SELLER", { defaultValue: "" }).trim(),
+  s7ProviderSmokePhone: getEnv("S7_PROVIDER_SMOKE_PHONE", { defaultValue: "" }).trim(),
   zapiToken: getEnv("ZAPI_TOKEN", { defaultValue: "" }).trim(),
   evolutionApiKey: getEnv("EVOLUTION_API_KEY", { defaultValue: "" }).trim(),
   metaWhatsAppToken: getEnv("META_WHATSAPP_TOKEN", { defaultValue: "" }).trim(),
