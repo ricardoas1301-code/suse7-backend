@@ -18,7 +18,7 @@ const DEBUG_ML_COVER_COMPARE_PATH = "/api/debug/ml/listing-cover-compare";
 const DEBUG_ML_LISTINGS_COVER_CONTEXT_PATH = "/api/debug/ml/listings-cover-context";
 console.log("[S7 API Router] boot — rotas diagnóstico ML:", DEBUG_ML_FIELD_MAP_PATH, DEBUG_ML_COVER_COMPARE_PATH, DEBUG_ML_LISTINGS_COVER_CONTEXT_PATH);
 console.log("[S7 API Router] boot — ML OAuth diag: GET /api/ml/oauth-config");
-console.log("[S7 API Router] boot — billing: GET /api/billing/ping · GET /api/billing/plans · POST /api/billing/checkout/card · POST /api/billing/checkout/start · POST /api/billing/webhooks/asaas");
+console.log("[S7 API Router] boot — billing: GET /api/billing/ping · GET /api/billing/plans · POST /api/billing/checkout/card · POST /api/billing/checkout/start · POST /api/billing/webhooks/asaas · POST /api/jobs/billing-renewal-engine · POST /api/jobs/billing-consistency-check · POST /api/billing/renewals/:id/pay");
 
 /**
  * Resolve rota lógica para o router único (/api + __path no Vercel).
@@ -298,6 +298,44 @@ export default async function handler(req, res) {
       const mod = await import("../src/handlers/user/preferencesReset.js");
       return mod.handleUserPreferencesReset(req, res);
     }
+    if (path === "/api/internal/notifications/email/process") {
+      const mod = await import("../src/handlers/notifications/processEmailOutboxApi.js");
+      return mod.handleProcessEmailOutbox(req, res);
+    }
+    if (path === "/api/internal/notifications/whatsapp/process") {
+      const mod = await import("../src/handlers/notifications/processWhatsAppOutboxApi.js");
+      return mod.handleProcessWhatsAppOutbox(req, res);
+    }
+    if (
+      path === "/api/notifications/inbox" ||
+      path === "/api/notifications/inbox/read-all" ||
+      /^\/api\/notifications\/inbox\/[^/]+\/read$/.test(path)
+    ) {
+      const mod = await import("../src/handlers/notifications/sellerNotificationInboxApi.js");
+      return mod.handleNotificationInboxRoutes(req, res, path);
+    }
+    if (path === "/api/notifications/categories" && req.method === "GET") {
+      const mod = await import("../src/handlers/notifications/sellerNotificationSellerApi.js");
+      return mod.handleNotificationSellerCategories(req, res);
+    }
+    if (path === "/api/notifications/preferences" && (req.method === "GET" || req.method === "PATCH")) {
+      const mod = await import("../src/handlers/notifications/sellerNotificationSellerApi.js");
+      return mod.handleNotificationSellerPreferences(req, res);
+    }
+    if (
+      path === "/api/notifications/event-delivery-rules" &&
+      (req.method === "GET" || req.method === "PATCH")
+    ) {
+      const mod = await import("../src/handlers/notifications/sellerNotificationSellerApi.js");
+      return mod.handleNotificationSellerEventDeliveryRules(req, res);
+    }
+    if (
+      (path === "/api/notifications/recipients" && (req.method === "GET" || req.method === "POST")) ||
+      /^\/api\/notifications\/recipients\/[^/]+$/.test(path)
+    ) {
+      const mod = await import("../src/handlers/notifications/sellerNotificationSellerApi.js");
+      return mod.handleNotificationSellerRecipients(req, res, path);
+    }
     if (path === "/api/notifications") {
       const mod = await import("../src/handlers/notifications/index.js");
       return mod.handleNotifications(req, res);
@@ -454,6 +492,17 @@ export default async function handler(req, res) {
       const mod = await import("../src/handlers/pricing/simulate.js");
       return mod.default(req, res);
     }
+    const pricingFinancialSettingsMatch = path.match(
+      /^\/api\/pricing\/intelligent\/([^/]+)\/financial-settings$/,
+    );
+    if (
+      pricingFinancialSettingsMatch &&
+      (req.method === "PATCH" || req.method === "GET")
+    ) {
+      req.params = { listing_id: pricingFinancialSettingsMatch[1] };
+      const mod = await import("../src/handlers/pricing/intelligentFinancialSettings.js");
+      return mod.default(req, res);
+    }
     if (path === "/api/pricing/apply") {
       const mod = await import("../src/handlers/pricing/apply.js");
       return mod.default(req, res);
@@ -507,6 +556,18 @@ export default async function handler(req, res) {
     if (path === "/api/jobs/billing-process-overdues") {
       const mod = await import("../src/handlers/jobs/billingOverduesJob.js");
       return mod.handleJobsBillingProcessOverdues(req, res);
+    }
+    if (path === "/api/jobs/billing-process-renewals") {
+      const mod = await import("../src/handlers/jobs/billingRenewalsJob.js");
+      return mod.handleJobsBillingProcessRenewals(req, res);
+    }
+    if (path === "/api/jobs/billing-renewal-engine") {
+      const mod = await import("../src/handlers/jobs/billingRenewalEngineJob.js");
+      return mod.handleJobsBillingRenewalEngine(req, res);
+    }
+    if (path === "/api/jobs/billing-consistency-check") {
+      const mod = await import("../src/handlers/jobs/billingConsistencyCheckJob.js");
+      return mod.handleJobsBillingConsistencyCheck(req, res);
     }
     if (path === "/api/images/seo-rename") {
       const mod = await import("../src/handlers/images/seoRename.js");

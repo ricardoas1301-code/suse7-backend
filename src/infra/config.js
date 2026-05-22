@@ -74,6 +74,11 @@ export const config = {
   resendApiKey: getEnv("RESEND_API_KEY", { defaultValue: "" }).trim(),
   sendgridApiKey: getEnv("SENDGRID_API_KEY", { defaultValue: "" }).trim(),
 
+  /** Tier lógico: development | staging | production (Fase 3.5C). */
+  s7AppEnv: getEnv("S7_APP_ENV", { defaultValue: "" }).trim().toLowerCase(),
+  /** Fase 3.5C — permite live em DEV/STAGING apenas quando true. */
+  s7AllowLiveDelivery: getEnv("S7_ALLOW_LIVE_DELIVERY", { defaultValue: "false" }).trim().toLowerCase(),
+
   /** Fase 3.5A — WhatsApp central (mock por padrão). */
   s7WhatsAppMode: getEnv("S7_WHATSAPP_MODE", { defaultValue: "mock" }).trim().toLowerCase(),
   s7WhatsAppProvider: getEnv("S7_WHATSAPP_PROVIDER", { defaultValue: "mock" }).trim().toLowerCase(),
