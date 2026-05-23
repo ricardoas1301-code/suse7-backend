@@ -1,7 +1,14 @@
 #!/usr/bin/env node
 // =============================================================================
-// Validação S_4.6.3 — fronteira Admin Global × Seller (runtime)
-// Uso: node scripts/validate_4a63_dev_center_boundary.mjs [--api-base=http://localhost:3001]
+// Smoke permanente — fronteira Admin Global × Seller (Dev Center Clientes)
+//
+// Valida contratos, LGPD, flags ON/OFF e bloqueio cross-domain (403 seller→admin).
+//
+// Uso:
+//   npm run smoke:dev-center-customers-boundary
+//   node scripts/smoke_dev_center_customers_boundary.mjs [--api-base=http://localhost:3001]
+//
+// Requer: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, API local ou SMOKE_API_BASE
 // =============================================================================
 
 import dotenv from "dotenv";
@@ -129,7 +136,7 @@ function maskCheckListCustomer(c) {
 }
 
 async function main() {
-  console.log("\n=== S_4.6.3 — Validação fronteira Admin × Seller ===\n");
+  console.log("\n=== Smoke Dev Center Clientes — fronteira Admin × Seller ===\n");
   console.log("API base:", apiBase);
   console.log(
     "Flags:",

@@ -8,7 +8,8 @@
   "scripts": {
     "dev": "node ./src/dev-server.js",
     "dev:vercel": "vercel dev --listen 3001",
-    "start": "node -e \"console.log('Use: npm run dev (local) or npm run dev:vercel')\""
+    "start": "node -e \"console.log('Use: npm run dev (local) or npm run dev:vercel')\"",
+    "smoke:dev-center-customers-boundary": "node ./scripts/smoke_dev_center_customers_boundary.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.87.1",

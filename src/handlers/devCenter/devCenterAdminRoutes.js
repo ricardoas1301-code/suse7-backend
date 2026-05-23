@@ -205,8 +205,7 @@ export async function handleDevCenterAdminRoutes(req, res, path, method, supabas
       return true;
     }
 
-    // S_4.6.1 — contrato oficial admin: customers[] + summary (scope admin_global).
-    // Fora do escopo: GET /api/customers (domínio seller / Clientes360).
+    // Contrato admin global: customers[] + summary (scope admin_global). Ver customersDomainBoundary.
     if (path === "/api/dev-center/customers-global") {
       const qRaw = req.query?.q != null ? String(req.query.q).trim().toLowerCase() : "";
       const { data: rows, error } = await supabase
