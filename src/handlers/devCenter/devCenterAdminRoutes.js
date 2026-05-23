@@ -12,6 +12,7 @@ import {
 import { buildDevCenterFinanceDetail, buildDevCenterFinanceList } from "./devCenterFinanceService.js";
 import { getCentralNotificationEngineSummary } from "../../domain/notifications/central/index.js";
 import { buildDevCenterCustomersGlobalSummary } from "./devCenterCustomersGlobalOpsSummaryService.js";
+import { buildDevCenterCustomersGlobalDetail } from "./devCenterCustomersGlobalDetailService.js";
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -307,16 +308,15 @@ export async function handleDevCenterAdminRoutes(req, res, path, method, supabas
         fail(res, { code: "NOT_FOUND", message: "Cliente global não encontrado" }, 404, traceId);
         return true;
       }
-      const customer = {
-        ...row,
-        document_masked: row.document_normalized ? maskDocumentForApi(row.document_normalized) : null,
-        email_masked: row.email_normalized ? maskEmailForApi(row.email_normalized) : null,
-        phone_masked: row.phone_normalized ? maskPhoneForApi(row.phone_normalized) : null,
-      };
-      delete customer.document_normalized;
-      delete customer.email_normalized;
-      delete customer.phone_normalized;
-      ok(res, { ok: true, customer });
+
+      // S_4.7.1 — contrato enriquecido: 1 query; quality/ingestion por cliente = not_available.
+      const payload = buildDevCenterCustomersGlobalDetail(row, {
+        maskDocumentForApi,
+        maskEmailForApi,
+        maskPhoneForApi,
+      });
+
+      ok(res, { ok: true, ...payload });
       return true;
     }
   } catch (e) {

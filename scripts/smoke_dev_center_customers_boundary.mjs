@@ -127,6 +127,17 @@ function isAdminSummaryShape(summary) {
   return true;
 }
 
+function isAdminDetailShape(body) {
+  if (!body || typeof body !== "object") return false;
+  if (!body.customer || typeof body.customer !== "object") return false;
+  if (!body.overview || typeof body.overview !== "object") return false;
+  if (!body.activity || typeof body.activity !== "object") return false;
+  if (!body.quality || body.quality.status !== "not_available") return false;
+  if (!body.ingestion || body.ingestion.status !== "not_available") return false;
+  if (!body.metadata || body.metadata.scope !== "admin_global") return false;
+  return true;
+}
+
 function maskCheckListCustomer(c) {
   if (!c || typeof c !== "object") return false;
   if (c.document != null && !String(c.document).includes("•") && !String(c.document).includes("*")) {
@@ -231,10 +242,15 @@ async function main() {
     const detail = await fetchApi(`/api/dev-center/customers-global/${firstId}`, adminToken);
     adminRequests.push(`GET /api/dev-center/customers-global/:id`);
     assert(detail.status === 200 && detail.body?.ok === true, "admin-global", "drawer detail 200", `${detail.ms}ms`);
+    assert(isAdminDetailShape(detail.body), "admin-global", "contrato S_4.7.1 detail enriquecido", "ok");
     const c = detail.body?.customer;
     assert(c?.document_masked != null || c?.document_masked == null, "admin-global", "detalhe sem document_normalized bruto", "masked fields only");
     assert(!("document_normalized" in (c ?? {})), "admin-global", "LGPD document_normalized ausente", "ok");
     assert(!("email_normalized" in (c ?? {})), "admin-global", "LGPD email_normalized ausente", "ok");
+    assert(!("dedupe_key" in (c ?? {})), "admin-global", "dedupe_key não exposto", "ok");
+    assert(Array.isArray(detail.body?.activity?.related_sellers), "admin-global", "activity.related_sellers array", "ok");
+    assert(detail.body?.quality?.reason === "per_customer_quality_not_computed", "admin-global", "quality not_available", "ok");
+    assert(detail.body?.ingestion?.reason === "per_customer_ingestion_not_computed", "admin-global", "ingestion not_available", "ok");
   } else {
     pass("admin-global", "drawer detail skip", "lista vazia — cenário tabela global vazia OK");
   }
