@@ -1,9 +1,9 @@
 // =============================================================================
-// Dev Center 4A.5 — métricas operacionais admin global (cross-seller, LGPD-safe)
+// Dev Center 4A.5 / S_4.6.1 — métricas operacionais admin global (cross-seller, LGPD-safe)
 //
 // Projeção read-only para GET /api/dev-center/customers-global → summary.
 // Service role admin: NÃO filtra por user_id seller; NÃO expõe PII em logs.
-// Reutiliza thresholds 4A.2/4A.3 via flags existentes, sem misturar escopo seller.
+// NÃO é consumido por GET /api/customers (domínio seller).
 // =============================================================================
 
 import { finalizeIngestionHealthSnapshot } from "../../services/customers/customerIngestionHealthService.js";

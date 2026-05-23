@@ -205,6 +205,8 @@ export async function handleDevCenterAdminRoutes(req, res, path, method, supabas
       return true;
     }
 
+    // S_4.6.1 — contrato oficial admin: customers[] + summary (scope admin_global).
+    // Fora do escopo: GET /api/customers (domínio seller / Clientes360).
     if (path === "/api/dev-center/customers-global") {
       const qRaw = req.query?.q != null ? String(req.query.q).trim().toLowerCase() : "";
       const { data: rows, error } = await supabase
@@ -216,7 +218,8 @@ export async function handleDevCenterAdminRoutes(req, res, path, method, supabas
         .limit(500);
       if (error) {
         if (String(error.code ?? "") === "42P01" || String(error.message ?? "").includes("does not exist")) {
-          ok(res, { ok: true, customers: [] });
+          const summary = await buildDevCenterCustomersGlobalSummary(supabase, { listedCount: 0, traceId });
+          ok(res, { ok: true, customers: [], summary });
           return true;
         }
         console.error("[dev-center-admin] customers-global", { message: error.message, traceId });
@@ -255,7 +258,7 @@ export async function handleDevCenterAdminRoutes(req, res, path, method, supabas
         last_purchase_global: r.last_purchase_global ?? null,
       }));
 
-      // 4A.5 — summary operacional admin global (cross-seller); não mistura escopo seller.
+      // Summary operacional admin global (cross-seller); não mistura escopo seller.
       const summary = await buildDevCenterCustomersGlobalSummary(supabase, {
         listedCount: customers.length,
         traceId,
