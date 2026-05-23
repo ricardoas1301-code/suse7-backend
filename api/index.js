@@ -602,6 +602,7 @@ export default async function handler(req, res) {
       const mod = await import("../src/handlers/marketplace/importIntelligenceSummary.js");
       return mod.default(req, res);
     }
+    // S_4.6.2 — domínio seller (JWT user scope). Não confundir com /api/dev-center/customers-global.
     if (path === "/api/customers" && req.method === "GET") {
       const mod = await import("../src/handlers/customers/list.js");
       return mod.default(req, res);
