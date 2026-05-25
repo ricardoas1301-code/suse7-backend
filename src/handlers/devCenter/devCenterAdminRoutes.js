@@ -212,7 +212,7 @@ export async function handleDevCenterAdminRoutes(req, res, path, method, supabas
       const { data: rows, error } = await supabase
         .from("s7_global_customers")
         .select(
-          "id, name, document_normalized, email_normalized, phone_normalized, total_orders_global, total_spent_global, total_sellers_related, last_purchase_global, related_sellers"
+          "id, name, document_normalized, email_normalized, phone_normalized, total_orders_global, total_spent_global, total_sellers_related, last_purchase_global"
         )
         .order("last_purchase_global", { ascending: false, nullsFirst: false })
         .limit(500);
@@ -301,7 +301,9 @@ export async function handleDevCenterAdminRoutes(req, res, path, method, supabas
       const id = detail[1];
       const { data: row, error } = await supabase
         .from("s7_global_customers")
-        .select("*")
+        .select(
+          "id, name, document_normalized, email_normalized, phone_normalized, dedupe_key, total_orders_global, total_spent_global, total_sellers_related, first_purchase_global, last_purchase_global, related_sellers, created_at, updated_at"
+        )
         .eq("id", id)
         .maybeSingle();
       if (error || !row) {

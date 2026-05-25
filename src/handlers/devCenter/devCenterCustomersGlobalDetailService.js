@@ -23,6 +23,17 @@ function dedupeStrategyFromKey(key) {
 }
 
 /**
+ * Referência externa marketplace — truncada (LGPD S_4.8.1).
+ * @param {unknown} value
+ */
+function maskExternalRefForApi(value) {
+  const s = String(value ?? "").trim();
+  if (!s) return null;
+  if (s.length <= 8) return `${s.slice(0, 2)}••••`;
+  return `${s.slice(0, 6)}…`;
+}
+
+/**
  * @param {unknown} entries
  */
 function sanitizeRelatedSellers(entries) {
@@ -37,7 +48,8 @@ function sanitizeRelatedSellers(entries) {
       marketplace: e.marketplace != null ? String(e.marketplace) : null,
       marketplace_account_id: e.marketplace_account_id != null ? String(e.marketplace_account_id) : null,
       seller_company_id: e.seller_company_id != null ? String(e.seller_company_id) : null,
-      external_customer_id: e.external_customer_id != null ? String(e.external_customer_id) : null,
+      external_customer_id:
+        e.external_customer_id != null ? maskExternalRefForApi(String(e.external_customer_id)) : null,
     });
   }
   return out;
