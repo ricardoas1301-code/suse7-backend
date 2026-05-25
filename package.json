@@ -10,7 +10,9 @@
     "dev:vercel": "vercel dev --listen 3001",
     "start": "node -e \"console.log('Use: npm run dev (local) or npm run dev:vercel')\"",
     "smoke:dev-center-customers-boundary": "node ./scripts/smoke_dev_center_customers_boundary.mjs",
-    "test:dev-center-access": "node ./scripts/test_dev_center_access_unit.mjs"
+    "test:dev-center-access": "node ./scripts/test_dev_center_access_unit.mjs",
+    "test:dev-center-customers-input": "node ./scripts/test_dev_center_customers_input_unit.mjs",
+    "smoke:dev-center-customers-hardening": "node ./scripts/smoke_dev_center_customers_hardening.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.87.1",

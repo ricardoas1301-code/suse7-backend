@@ -13,6 +13,11 @@ import { buildDevCenterFinanceDetail, buildDevCenterFinanceList } from "./devCen
 import { getCentralNotificationEngineSummary } from "../../domain/notifications/central/index.js";
 import { buildDevCenterCustomersGlobalSummary } from "./devCenterCustomersGlobalOpsSummaryService.js";
 import { buildDevCenterCustomersGlobalDetail } from "./devCenterCustomersGlobalDetailService.js";
+import {
+  normalizeCustomersGlobalSearchQuery,
+  isValidGlobalCustomerId,
+  buildFallbackAdminGlobalSummary,
+} from "./devCenterCustomersGlobalInput.js";
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -210,7 +215,7 @@ export async function handleDevCenterAdminRoutes(req, res, path, method, supabas
     // S_4.8.2 — escopo admin_global intencional: s7_global_customers é cross-seller (sem filtro user_id).
     // Isolamento seller ↔ seller permanece em /api/customers (JWT + marketplace_customers.user_id).
     if (path === "/api/dev-center/customers-global") {
-      const qRaw = req.query?.q != null ? String(req.query.q).trim().toLowerCase() : "";
+      const qRaw = normalizeCustomersGlobalSearchQuery(req.query?.q);
       const { data: rows, error } = await supabase
         .from("s7_global_customers")
         .select(
@@ -261,10 +266,19 @@ export async function handleDevCenterAdminRoutes(req, res, path, method, supabas
       }));
 
       // Summary operacional admin global (cross-seller); não mistura escopo seller.
-      const summary = await buildDevCenterCustomersGlobalSummary(supabase, {
-        listedCount: customers.length,
-        traceId,
-      });
+      let summary;
+      try {
+        summary = await buildDevCenterCustomersGlobalSummary(supabase, {
+          listedCount: customers.length,
+          traceId,
+        });
+      } catch (summaryErr) {
+        console.warn("[dev-center-admin] customers_global_summary_fallback", {
+          message: summaryErr?.message,
+          traceId,
+        });
+        summary = buildFallbackAdminGlobalSummary(customers.length);
+      }
 
       ok(res, { ok: true, customers, summary });
       return true;
@@ -299,8 +313,13 @@ export async function handleDevCenterAdminRoutes(req, res, path, method, supabas
     }
 
     const detail = path.match(/^\/api\/dev-center\/customers-global\/([^/]+)$/);
-    if (detail && UUID_RE.test(detail[1])) {
+    if (detail) {
       const id = detail[1];
+      if (!isValidGlobalCustomerId(id)) {
+        fail(res, { code: "NOT_FOUND", message: "Cliente global não encontrado" }, 404, traceId);
+        return true;
+      }
+
       const { data: row, error } = await supabase
         .from("s7_global_customers")
         .select(
@@ -308,19 +327,32 @@ export async function handleDevCenterAdminRoutes(req, res, path, method, supabas
         )
         .eq("id", id)
         .maybeSingle();
-      if (error || !row) {
+
+      if (error) {
+        console.error("[dev-center-admin] customers-global-detail", { message: error.message, traceId });
+        fail(res, { code: "DB_ERROR", message: "Erro ao carregar cliente global" }, 500, traceId);
+        return true;
+      }
+
+      if (!row) {
         fail(res, { code: "NOT_FOUND", message: "Cliente global não encontrado" }, 404, traceId);
         return true;
       }
 
-      // S_4.7.1 — contrato enriquecido: 1 query; quality/ingestion por cliente = not_available.
-      const payload = buildDevCenterCustomersGlobalDetail(row, {
-        maskDocumentForApi,
-        maskEmailForApi,
-        maskPhoneForApi,
-      });
-
-      ok(res, { ok: true, ...payload });
+      try {
+        const payload = buildDevCenterCustomersGlobalDetail(row, {
+          maskDocumentForApi,
+          maskEmailForApi,
+          maskPhoneForApi,
+        });
+        ok(res, { ok: true, ...payload });
+      } catch (buildErr) {
+        console.error("[dev-center-admin] customers-global-detail_build", {
+          message: buildErr?.message,
+          traceId,
+        });
+        fail(res, { code: "INTERNAL", message: "Erro ao montar detalhe do cliente global" }, 500, traceId);
+      }
       return true;
     }
   } catch (e) {
