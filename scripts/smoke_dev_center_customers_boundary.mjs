@@ -130,6 +130,14 @@ async function fetchApi(route, token, opts = {}) {
   return { status: res.status, body, ms: Date.now() - started };
 }
 
+/** S_4.8.3 — request sem Authorization */
+async function fetchApiNoAuth(route) {
+  const started = Date.now();
+  const res = await fetch(`${apiBase}${route}`, { method: "GET" });
+  const body = await res.json().catch(() => ({}));
+  return { status: res.status, body, ms: Date.now() - started };
+}
+
 function isAdminSummaryShape(summary) {
   if (!summary || typeof summary !== "object") return false;
   if (summary.scope !== "admin_global") return false;
@@ -199,6 +207,36 @@ async function main() {
   const adminRequests = [];
   /** @type {string[]} */
   const sellerRequests = [];
+
+  // --- BLOCO S_4.8.3: Permissões / autorização ---
+  const bootNoAuth = await fetchApiNoAuth("/api/dev-center/bootstrap");
+  assert(bootNoAuth.status === 200, "auth", "bootstrap sem JWT → 200", String(bootNoAuth.status));
+  assert(bootNoAuth.body?.allowed === false, "auth", "bootstrap sem JWT allowed=false", String(bootNoAuth.body?.allowed));
+
+  const listNoAuth = await fetchApiNoAuth("/api/dev-center/customers-global");
+  assert(listNoAuth.status === 401, "auth", "customers-global sem JWT → 401", String(listNoAuth.status));
+  assert(listNoAuth.body?.code === "UNAUTHORIZED", "auth", "sem JWT code UNAUTHORIZED", listNoAuth.body?.code ?? "?");
+
+  const invalidToken = await fetchApi("/api/dev-center/customers-global", "invalid.jwt.token");
+  assert(invalidToken.status === 401, "auth", "JWT inválido → 401", String(invalidToken.status));
+
+  const sellerForbidden = await fetchApi("/api/dev-center/customers-global", sellerToken);
+  assert(sellerForbidden.status === 403, "auth", "seller → 403", String(sellerForbidden.status));
+  assert(
+    sellerForbidden.body?.code === "FORBIDDEN",
+    "auth",
+    "seller code FORBIDDEN (não NOT_FOUND)",
+    sellerForbidden.body?.code ?? "?",
+  );
+  assert(
+    !String(sellerForbidden.body?.message ?? "").toLowerCase().includes("encontrado"),
+    "auth",
+    "403 mensagem neutra",
+    "ok",
+  );
+
+  const bootAdmin = await fetchApi("/api/dev-center/bootstrap", adminToken);
+  assert(bootAdmin.status === 200 && bootAdmin.body?.allowed === true, "auth", "admin bootstrap allowed", "ok");
 
   // --- BLOCO 1: Dev Center Global ---
   const list1 = await fetchApi("/api/dev-center/customers-global", adminToken);

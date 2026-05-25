@@ -1,12 +1,13 @@
 // ======================================================
 // Dev Center — API interna (missões, handoff, decisões, checklist, histórico)
-// Acesso: e-mail allowlist (MVP ricardo@suse7.com.br)
+// Acesso: profiles.is_admin OU e-mail em SUSE7_DEV_CENTER_ALLOWED_EMAILS (fonte: resolveDevCenterAccess)
 // ======================================================
 
 import { createClient } from "@supabase/supabase-js";
 import { config } from "../../infra/config.js";
 import { ok, fail, getTraceId } from "../../infra/http.js";
-import { isDevCenterAllowedUser } from "./devCenterAccess.js";
+import { resolveDevCenterAccess, DEV_CENTER_AUTH_MESSAGES } from "./devCenterAccess.js";
+import { handleDevCenterAdminRoutes } from "./devCenterAdminRoutes.js";
 import { insertDevHistory } from "./devCenterHistory.js";
 
 const UUID_RE =
@@ -86,7 +87,7 @@ export async function handleDevCenter(req, res, path) {
   const authHeader = req.headers.authorization;
   if (!authHeader?.startsWith("Bearer ")) {
     if (isBootstrap) return bootstrapFallback();
-    return fail(res, { code: "UNAUTHORIZED", message: "Token não informado" }, 401, traceId);
+    return fail(res, { code: "UNAUTHORIZED", message: DEV_CENTER_AUTH_MESSAGES.NO_TOKEN }, 401, traceId);
   }
   const token = authHeader.slice(7);
 
@@ -100,11 +101,22 @@ export async function handleDevCenter(req, res, path) {
   } = await supabase.auth.getUser(token);
   if (authError || !user?.id) {
     if (isBootstrap) return bootstrapFallback();
-    return fail(res, { code: "UNAUTHORIZED", message: "Token inválido" }, 401, traceId);
+    return fail(res, { code: "UNAUTHORIZED", message: DEV_CENTER_AUTH_MESSAGES.INVALID_TOKEN }, 401, traceId);
   }
 
-  const allowed = isDevCenterAllowedUser(user);
+  const access = await resolveDevCenterAccess(supabase, user);
+  const allowed = access.allowed;
   const userEmail = user.email != null ? String(user.email).trim().toLowerCase() : "";
+
+  const adminModules = [
+    { id: "dashboard", label: "Dashboard", path: "/admin/dev-center" },
+    { id: "sellers", label: "Sellers", path: "/admin/dev-center/sellers" },
+    { id: "subscriptions", label: "Assinaturas", path: "/admin/dev-center/subscriptions" },
+    { id: "finance", label: "Financeiro", path: "/admin/dev-center/finance" },
+    { id: "customers-global", label: "Clientes globais", path: "/admin/dev-center/customers-global" },
+    { id: "feature-flags", label: "Feature flags", path: "/admin/dev-center/feature-flags" },
+    { id: "missions", label: "Missões", path: "/admin/dev-center/missions" },
+  ];
 
   if (path === "/api/dev-center/bootstrap" && req.method === "GET") {
     if (!allowed) {
@@ -112,6 +124,9 @@ export async function handleDevCenter(req, res, path) {
         ok: true,
         enabled: false,
         allowed: false,
+        is_admin: access.is_admin,
+        allowlist_email: access.allowlist_email,
+        modules: [],
         user_id: user.id,
         email: userEmail || null,
         missions: [],
@@ -136,6 +151,9 @@ export async function handleDevCenter(req, res, path) {
       ok: true,
       enabled: true,
       allowed: true,
+      is_admin: access.is_admin,
+      allowlist_email: access.allowlist_email,
+      modules: adminModules,
       user_id: user.id,
       email: userEmail || null,
       missions: missions ?? [],
@@ -146,7 +164,7 @@ export async function handleDevCenter(req, res, path) {
   if (!allowed) {
     return fail(
       res,
-      { code: "FORBIDDEN", message: "Acesso ao Dev Center restrito a usuários autorizados." },
+      { code: "FORBIDDEN", message: DEV_CENTER_AUTH_MESSAGES.FORBIDDEN },
       403,
       traceId
     );
@@ -156,6 +174,11 @@ export async function handleDevCenter(req, res, path) {
   const body = parseBody(req);
 
   try {
+    const adminHandled = await handleDevCenterAdminRoutes(req, res, path, method, supabase, traceId);
+    if (adminHandled) {
+      return;
+    }
+
     if (path === "/api/dev-center/missions" && method === "GET") {
       const { data, error } = await supabase
         .from("dev_missions")
