@@ -82,6 +82,20 @@ async function pickSellerUserId(supabase) {
   return sorted[0]?.[0] ?? null;
 }
 
+/** Segundo seller distinto — S_4.8.2 isolamento cross-seller */
+async function pickSecondSellerUserId(supabase, excludeUserId) {
+  const { data } = await supabase.from("sales_orders").select("user_id").limit(5000);
+  /** @type {Map<string, number>} */
+  const counts = new Map();
+  for (const r of data ?? []) {
+    const uid = String(r.user_id ?? "");
+    if (!uid || uid === excludeUserId) continue;
+    counts.set(uid, (counts.get(uid) ?? 0) + 1);
+  }
+  const sorted = [...counts.entries()].sort((a, b) => b[1] - a[1]);
+  return sorted[0]?.[0] ?? null;
+}
+
 async function pickAdminUserId(supabase) {
   const allowRaw = process.env.SUSE7_DEV_CENTER_ALLOWED_EMAILS || "ricardo@suse7.com.br";
   const allow = allowRaw
@@ -289,6 +303,71 @@ async function main() {
     "seller",
     "seller bloqueado no admin global",
     String(adminFromSeller.status),
+  );
+
+  if (firstId) {
+    const globalFromSeller = await fetchApi(`/api/dev-center/customers-global/${firstId}`, sellerToken);
+    sellerRequests.push("GET /api/dev-center/customers-global/:id (seller token)");
+    assert(
+      globalFromSeller.status === 403 || globalFromSeller.status === 401,
+      "cross-seller",
+      "seller bloqueado no detail global",
+      String(globalFromSeller.status),
+    );
+  }
+
+  // --- BLOCO S_4.8.2: Seller A × Seller B ---
+  const sellerBUserId = await pickSecondSellerUserId(supabase, sellerUserId);
+  if (sellerBUserId && sellerBUserId !== sellerUserId) {
+    let sellerBToken;
+    try {
+      sellerBToken = await resolveAccessToken(supabase, sellerBUserId);
+      pass("cross-seller", "JWT seller B obtido", sellerBUserId.slice(0, 8) + "…");
+    } catch (e) {
+      fail("cross-seller", "auth seller B", e?.message ?? "falhou");
+      sellerBToken = null;
+    }
+
+    if (sellerBToken) {
+      const listB = await fetchApi("/api/customers?page=1&page_size=5", sellerBToken);
+      const idA = sellerCustomerId;
+      const idB = listB.body?.customers?.[0]?.id;
+
+      if (idA && idB && idA !== idB) {
+        const crossDetail = await fetchApi(`/api/customers/${idB}`, sellerToken);
+        assert(
+          crossDetail.status === 404,
+          "cross-seller",
+          "seller A não acessa cliente do seller B",
+          `status=${crossDetail.status}`,
+        );
+      } else {
+        pass("cross-seller", "seller A×B detail skip", "ids indisponíveis ou iguais — ambiente OK");
+      }
+
+      const adminGlobalFromB = await fetchApi("/api/dev-center/customers-global", sellerBToken);
+      assert(
+        adminGlobalFromB.status === 403 || adminGlobalFromB.status === 401,
+        "cross-seller",
+        "seller B bloqueado no admin global",
+        String(adminGlobalFromB.status),
+      );
+    }
+  } else {
+    pass("cross-seller", "seller B skip", "apenas um seller no ambiente — isolamento A documentado");
+  }
+
+  assert(
+    list1.body?.summary?.scope === "admin_global",
+    "cross-seller",
+    "admin list summary scope admin_global",
+    list1.body?.summary?.scope ?? "?",
+  );
+  assert(
+    sellerList.body?.summary?.scope !== "admin_global",
+    "cross-seller",
+    "seller summary não é admin_global",
+    String(sellerList.body?.summary?.scope ?? "null"),
   );
 
   // --- BLOCO 3: Resiliência (contrato vazio) ---

@@ -207,6 +207,8 @@ export async function handleDevCenterAdminRoutes(req, res, path, method, supabas
     }
 
     // Contrato admin global: customers[] + summary (scope admin_global). Ver customersDomainBoundary.
+    // S_4.8.2 — escopo admin_global intencional: s7_global_customers é cross-seller (sem filtro user_id).
+    // Isolamento seller ↔ seller permanece em /api/customers (JWT + marketplace_customers.user_id).
     if (path === "/api/dev-center/customers-global") {
       const qRaw = req.query?.q != null ? String(req.query.q).trim().toLowerCase() : "";
       const { data: rows, error } = await supabase
