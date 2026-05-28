@@ -7,6 +7,10 @@ import { ok, fail } from "../../infra/http.js";
 import { executarOperacaoAssinaturaSellerDevCenter } from "./devCenterSellerSubscriptionOpsService.js";
 import { executarOperacaoFeatureFlagSellerDevCenter } from "./devCenterSellerFeatureFlagOpsService.js";
 import { executarOperacaoIntegracaoSellerDevCenter } from "./devCenterSellerIntegrationOpsService.js";
+import {
+  listarHistoricoAdministrativoSellerDevCenter,
+  listarTimelineOperacionalSellerDevCenter,
+} from "./devCenterToolboxOperationalTimelineService.js";
 import { buildDevCenterSellerDetail, buildDevCenterSellersList } from "./devCenterSellersService.js";
 import {
   buildDevCenterSubscriptionDetail,
@@ -193,6 +197,30 @@ export async function handleDevCenterAdminRoutes(req, res, path, method, supabas
         notFoundCodes: ["ACCOUNT_NOT_FOUND"],
         badRequestCodes: ["INVALID_ACTION", "INVALID_REASON", "ACCOUNT_ID_REQUIRED"],
       });
+      return true;
+    }
+
+    const operationalTimeline = path.match(/^\/api\/dev-center\/sellers\/([^/]+)\/operational-timeline$/);
+    if (operationalTimeline && method === "GET" && UUID_RE.test(operationalTimeline[1])) {
+      const sellerId = operationalTimeline[1];
+      const url = new URL(req.url || "", `http://${req.headers?.host || "localhost"}`);
+      const limit = Number.parseInt(url.searchParams.get("limit") || "50", 10);
+      const timeline = await listarTimelineOperacionalSellerDevCenter(supabase, sellerId, {
+        limit: Number.isFinite(limit) ? limit : 50,
+      });
+      ok(res, { ok: true, timeline });
+      return true;
+    }
+
+    const operationalHistory = path.match(/^\/api\/dev-center\/sellers\/([^/]+)\/operational-history$/);
+    if (operationalHistory && method === "GET" && UUID_RE.test(operationalHistory[1])) {
+      const sellerId = operationalHistory[1];
+      const url = new URL(req.url || "", `http://${req.headers?.host || "localhost"}`);
+      const limit = Number.parseInt(url.searchParams.get("limit") || "50", 10);
+      const history = await listarHistoricoAdministrativoSellerDevCenter(supabase, sellerId, {
+        limit: Number.isFinite(limit) ? limit : 50,
+      });
+      ok(res, { ok: true, history });
       return true;
     }
 

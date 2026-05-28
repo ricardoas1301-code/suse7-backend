@@ -11,6 +11,10 @@ import {
   isDevCenterToolboxSubscriptionActionId,
 } from "./devCenterToolboxOperationalConstants.js";
 import { registrarAuditoriaOperacionalToolbox } from "./devCenterToolboxOperationalAuditService.js";
+import {
+  buildSubscriptionAfterSnapshot,
+  buildSubscriptionBeforeSnapshot,
+} from "./devCenterToolboxOperationalTimelineService.js";
 import { buildDevCenterSellerSubscriptionUsageBlock } from "./devCenterSellerSubscriptionUsageHelper.js";
 
 const SUBSCRIPTION_SELECT =
@@ -339,6 +343,7 @@ export async function executarOperacaoAssinaturaSellerDevCenter(supabase, seller
 
   const subscriptionId = String(subscription.id);
   const meta = readSubscriptionMeta(subscription);
+  const beforeState = buildSubscriptionBeforeSnapshot(subscription, meta);
 
   /** @type {{ patch: Record<string, unknown>; result: Record<string, unknown> }} */
   let operation;
@@ -374,6 +379,8 @@ export async function executarOperacaoAssinaturaSellerDevCenter(supabase, seller
     const { result, ...patch } = operation;
     await persistSubscriptionPatch(supabase, subscriptionId, patch);
 
+    const afterState = buildSubscriptionAfterSnapshot(beforeState, result, actionId);
+
     const audit = await registrarAuditoriaOperacionalToolbox(supabase, {
       sellerId,
       subscriptionId,
@@ -386,8 +393,24 @@ export async function executarOperacaoAssinaturaSellerDevCenter(supabase, seller
         result,
         operator_metadata: input.metadata ?? null,
       },
+      beforeState,
+      afterState,
       status: "success",
     });
+
+    if (!audit?.id) {
+      return {
+        ok: false,
+        status: "error",
+        error: {
+          code: "AUDIT_PERSISTENCE_FAILED",
+          message: "Operação persistida, mas auditoria operacional não foi registrada.",
+        },
+        subscriptionId,
+        result,
+        auditId: null,
+      };
+    }
 
     return {
       ok: true,
@@ -395,7 +418,7 @@ export async function executarOperacaoAssinaturaSellerDevCenter(supabase, seller
       operationId: actionId,
       subscriptionId,
       result,
-      auditId: audit?.id ?? null,
+      auditId: audit.id,
     };
   } catch (cause) {
     const message = cause instanceof Error ? cause.message : "Erro ao persistir operação.";

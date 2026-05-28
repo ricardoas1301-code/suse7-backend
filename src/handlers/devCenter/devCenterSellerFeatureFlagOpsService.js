@@ -128,6 +128,14 @@ export async function executarOperacaoFeatureFlagSellerDevCenter(supabase, selle
     .eq("flag_key", flagKey)
     .maybeSingle();
 
+  const previousEnabled = existing?.enabled ?? catalog.default_enabled;
+
+  const beforeState = {
+    flagKey,
+    flagLabel: metadata.flagLabel ?? catalog.label,
+    enabled: previousEnabled,
+  };
+
   if (actionId === "enable_feature_flag" && existing?.enabled === true) {
     return {
       ok: false,
@@ -189,7 +197,14 @@ export async function executarOperacaoFeatureFlagSellerDevCenter(supabase, selle
     enabled: nextEnabled,
     updatedAt: now,
     cacheInvalidatedAt: now,
-    previousEnabled: existing?.enabled ?? catalog.default_enabled,
+    previousEnabled,
+  };
+
+  const afterState = {
+    flagKey,
+    flagLabel: result.flagLabel,
+    enabled: nextEnabled,
+    updatedAt: now,
   };
 
   const audit = await registrarAuditoriaOperacionalToolbox(supabase, {
@@ -199,6 +214,10 @@ export async function executarOperacaoFeatureFlagSellerDevCenter(supabase, selle
     operationType: actionId,
     reason,
     payload: { actionId, result, operator_metadata: metadata },
+    beforeState,
+    afterState,
+    entityType: "feature_flag",
+    entityId: flagKey,
     status: "success",
   });
 

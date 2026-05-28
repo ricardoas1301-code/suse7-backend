@@ -219,6 +219,14 @@ export async function executarOperacaoIntegracaoSellerDevCenter(supabase, seller
   /** @type {Record<string, unknown>} */
   let result = { accountId, marketplace: account.marketplace ?? null };
 
+  const beforeState = {
+    accountId,
+    marketplace: account.marketplace ?? null,
+    status: account.status ?? null,
+    last_sync_at: account.ml_sales_last_sync_at ?? null,
+    token_expires_at: account.token_expires_at ?? null,
+  };
+
   try {
     switch (actionId) {
       case "validate_marketplace_token": {
@@ -309,6 +317,16 @@ export async function executarOperacaoIntegracaoSellerDevCenter(supabase, seller
         };
     }
 
+    const afterState = {
+      ...beforeState,
+      connection_health: result.connection_health ?? beforeState.connection_health ?? null,
+      newTokenStatus: result.newTokenStatus ?? null,
+      newSyncStatus: result.newSyncStatus ?? null,
+      cacheInvalidatedAt: result.cacheInvalidatedAt ?? null,
+      reimported: result.reimported ?? null,
+      refreshedAt: result.refreshedAt ?? null,
+    };
+
     const audit = await registrarAuditoriaOperacionalToolbox(supabase, {
       sellerId,
       marketplaceAccountId: accountId,
@@ -317,6 +335,10 @@ export async function executarOperacaoIntegracaoSellerDevCenter(supabase, seller
       operationType: actionId,
       reason,
       payload: { actionId, result, operator_metadata: metadata },
+      beforeState,
+      afterState,
+      entityType: "marketplace_account",
+      entityId: accountId,
       status: "success",
     });
 
