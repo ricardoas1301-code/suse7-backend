@@ -11,6 +11,7 @@ import {
 } from "../../services/marketplace/marketplaceAccountConnectionHealth.js";
 import { buildDevCenterSellerSubscriptionUsageBlock } from "./devCenterSellerSubscriptionUsageHelper.js";
 import { DEV_CENTER_TOOLBOX_METADATA_KEYS } from "./devCenterToolboxOperationalConstants.js";
+import { listarFeatureFlagsSellerDevCenter } from "./devCenterSellerFeatureFlagOpsService.js";
 
 /** @param {string | null | undefined} email */
 export function maskEmailForApi(email) {
@@ -435,6 +436,8 @@ export async function buildDevCenterSellerDetail(supabase, sellerId, traceId) {
   }
   recent_events.sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime());
 
+  const featureFlags = await listarFeatureFlagsSellerDevCenter(supabase, sellerId);
+
   return {
     seller: {
       id: sellerId,
@@ -489,6 +492,7 @@ export async function buildDevCenterSellerDetail(supabase, sellerId, traceId) {
       status: s.status ?? null,
     })),
     recent_events: recent_events.slice(0, 12),
+    feature_flags: featureFlags,
     future_actions: {
       impersonate: { available: false, label: "Entrar como seller" },
       suspend: { available: false, label: "Suspender conta" },

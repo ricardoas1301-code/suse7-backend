@@ -1,5 +1,5 @@
 // =============================================================================
-// Dev Center Toolbox — constantes operacionais (S1 Bloco 2)
+// Dev Center Toolbox — constantes operacionais (S1 Bloco 2 + 3)
 // =============================================================================
 
 /** @typedef {"success" | "error" | "blocked"} DevCenterToolboxOperationStatus */
@@ -11,6 +11,26 @@ export const DEV_CENTER_TOOLBOX_SUBSCRIPTION_ACTION_IDS = Object.freeze([
   "add_subscription_sales",
   "reset_consumption",
   "recalculate_consumption",
+]);
+
+export const DEV_CENTER_TOOLBOX_FEATURE_FLAG_ACTION_IDS = Object.freeze([
+  "enable_feature_flag",
+  "disable_feature_flag",
+]);
+
+export const DEV_CENTER_TOOLBOX_INTEGRATION_ACTION_IDS = Object.freeze([
+  "force_marketplace_sync",
+  "validate_marketplace_token",
+  "reimport_marketplace_account",
+  "invalidate_integration_cache",
+  "refresh_integration_health",
+]);
+
+/** Operações de integração que exigem confirmação dupla (S1_6.6). */
+export const DEV_CENTER_TOOLBOX_INTEGRATION_DOUBLE_CONFIRM_ACTION_IDS = Object.freeze([
+  "force_marketplace_sync",
+  "reimport_marketplace_account",
+  "invalidate_integration_cache",
 ]);
 
 export const DEV_CENTER_TOOLBOX_DEFAULTS = Object.freeze({
@@ -28,6 +48,9 @@ export const DEV_CENTER_TOOLBOX_METADATA_KEYS = Object.freeze({
   EXTRA_SALES_BONUS: "admin_extra_sales_bonus",
   USAGE_RESET_AT: "admin_usage_reset_at",
   USAGE_RECALCULATED_AT: "admin_usage_recalculated_at",
+  FEATURE_FLAG_CACHE_INVALIDATED_AT: "admin_feature_flag_cache_invalidated_at",
+  INTEGRATION_CACHE_INVALIDATED_AT: "admin_integration_cache_invalidated_at",
+  INTEGRATION_HEALTH_REFRESHED_AT: "admin_integration_health_refreshed_at",
 });
 
 /**
@@ -35,4 +58,25 @@ export const DEV_CENTER_TOOLBOX_METADATA_KEYS = Object.freeze({
  */
 export function isDevCenterToolboxSubscriptionActionId(actionId) {
   return DEV_CENTER_TOOLBOX_SUBSCRIPTION_ACTION_IDS.includes(String(actionId ?? "").trim());
+}
+
+/**
+ * @param {string | null | undefined} actionId
+ */
+export function isDevCenterToolboxFeatureFlagActionId(actionId) {
+  return DEV_CENTER_TOOLBOX_FEATURE_FLAG_ACTION_IDS.includes(String(actionId ?? "").trim());
+}
+
+/**
+ * @param {string | null | undefined} actionId
+ */
+export function isDevCenterToolboxIntegrationActionId(actionId) {
+  return DEV_CENTER_TOOLBOX_INTEGRATION_ACTION_IDS.includes(String(actionId ?? "").trim());
+}
+
+/**
+ * @param {string | null | undefined} actionId
+ */
+export function exigeConfirmacaoDuplaIntegracao(actionId) {
+  return DEV_CENTER_TOOLBOX_INTEGRATION_DOUBLE_CONFIRM_ACTION_IDS.includes(String(actionId ?? "").trim());
 }

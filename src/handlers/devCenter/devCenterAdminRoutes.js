@@ -5,6 +5,8 @@
 
 import { ok, fail } from "../../infra/http.js";
 import { executarOperacaoAssinaturaSellerDevCenter } from "./devCenterSellerSubscriptionOpsService.js";
+import { executarOperacaoFeatureFlagSellerDevCenter } from "./devCenterSellerFeatureFlagOpsService.js";
+import { executarOperacaoIntegracaoSellerDevCenter } from "./devCenterSellerIntegrationOpsService.js";
 import { buildDevCenterSellerDetail, buildDevCenterSellersList } from "./devCenterSellersService.js";
 import {
   buildDevCenterSubscriptionDetail,
@@ -22,6 +24,59 @@ import {
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+/**
+ * @param {import("http").ServerResponse} res
+ * @param {string} traceId
+ * @param {{
+ *   ok: boolean;
+ *   status?: string;
+ *   operationId?: string;
+ *   subscriptionId?: string | null;
+ *   marketplaceAccountId?: string | null;
+ *   result?: Record<string, unknown>;
+ *   auditId?: string | null;
+ *   error?: { code?: string; message?: string };
+ * }} outcome
+ * @param {{ notFoundCodes?: string[]; badRequestCodes?: string[] }} [opts]
+ */
+function respondToolboxOperation(res, traceId, outcome, opts = {}) {
+  if (!outcome.ok) {
+    const code = outcome.error?.code ?? "OPERATION_FAILED";
+    const notFound = opts.notFoundCodes ?? ["SUBSCRIPTION_NOT_FOUND", "ACCOUNT_NOT_FOUND"];
+    const badRequest = opts.badRequestCodes ?? [
+      "INVALID_ACTION",
+      "INVALID_REASON",
+      "INVALID_FLAG_KEY",
+      "ACCOUNT_ID_REQUIRED",
+      "ALREADY_ENABLED",
+      "ALREADY_DISABLED",
+    ];
+    const statusCode = notFound.includes(code) ? 404 : badRequest.includes(code) ? 400 : 500;
+    fail(
+      res,
+      {
+        code,
+        message: outcome.error?.message ?? "Falha na operação",
+        auditId: outcome.auditId ?? null,
+      },
+      statusCode,
+      traceId,
+    );
+    return true;
+  }
+
+  ok(res, {
+    ok: true,
+    operationId: outcome.operationId,
+    status: outcome.status,
+    subscriptionId: outcome.subscriptionId ?? null,
+    marketplaceAccountId: outcome.marketplaceAccountId ?? null,
+    result: outcome.result,
+    auditId: outcome.auditId,
+  });
+  return true;
+}
 
 /** @param {string | null | undefined} email */
 function maskEmailForApi(email) {
@@ -92,34 +147,51 @@ export async function handleDevCenterAdminRoutes(req, res, path, method, supabas
         operatorEmail: operator.email ?? null,
         metadata: body.metadata && typeof body.metadata === "object" ? body.metadata : null,
       });
+      respondToolboxOperation(res, traceId, outcome);
+      return true;
+    }
 
-      if (!outcome.ok) {
-        const statusCode =
-          outcome.error?.code === "SUBSCRIPTION_NOT_FOUND"
-            ? 404
-            : outcome.error?.code === "INVALID_ACTION" || outcome.error?.code === "INVALID_REASON"
-              ? 400
-              : 500;
-        fail(
-          res,
-          {
-            code: outcome.error?.code ?? "OPERATION_FAILED",
-            message: outcome.error?.message ?? "Falha na operação de assinatura",
-            auditId: outcome.auditId ?? null,
-          },
-          statusCode,
-          traceId,
-        );
+    const featureFlagOp = path.match(/^\/api\/dev-center\/sellers\/([^/]+)\/feature-flags\/operations$/);
+    if (featureFlagOp && method === "POST" && UUID_RE.test(featureFlagOp[1])) {
+      const sellerId = featureFlagOp[1];
+      const operator = context.user;
+      if (!operator?.id) {
+        fail(res, { code: "UNAUTHORIZED", message: "Operador não identificado" }, 401, traceId);
         return true;
       }
 
-      ok(res, {
-        ok: true,
-        operationId: outcome.operationId,
-        status: outcome.status,
-        subscriptionId: outcome.subscriptionId,
-        result: outcome.result,
-        auditId: outcome.auditId,
+      const body = context.body && typeof context.body === "object" ? context.body : {};
+      const outcome = await executarOperacaoFeatureFlagSellerDevCenter(supabase, sellerId, {
+        actionId: body.actionId != null ? String(body.actionId).trim() : "",
+        reason: body.reason != null ? String(body.reason).trim() : "",
+        operatorUserId: operator.id,
+        operatorEmail: operator.email ?? null,
+        metadata: body.metadata && typeof body.metadata === "object" ? body.metadata : null,
+      });
+      respondToolboxOperation(res, traceId, outcome);
+      return true;
+    }
+
+    const integrationOp = path.match(/^\/api\/dev-center\/sellers\/([^/]+)\/integrations\/operations$/);
+    if (integrationOp && method === "POST" && UUID_RE.test(integrationOp[1])) {
+      const sellerId = integrationOp[1];
+      const operator = context.user;
+      if (!operator?.id) {
+        fail(res, { code: "UNAUTHORIZED", message: "Operador não identificado" }, 401, traceId);
+        return true;
+      }
+
+      const body = context.body && typeof context.body === "object" ? context.body : {};
+      const outcome = await executarOperacaoIntegracaoSellerDevCenter(supabase, sellerId, {
+        actionId: body.actionId != null ? String(body.actionId).trim() : "",
+        reason: body.reason != null ? String(body.reason).trim() : "",
+        operatorUserId: operator.id,
+        operatorEmail: operator.email ?? null,
+        metadata: body.metadata && typeof body.metadata === "object" ? body.metadata : null,
+      });
+      respondToolboxOperation(res, traceId, outcome, {
+        notFoundCodes: ["ACCOUNT_NOT_FOUND"],
+        badRequestCodes: ["INVALID_ACTION", "INVALID_REASON", "ACCOUNT_ID_REQUIRED"],
       });
       return true;
     }
