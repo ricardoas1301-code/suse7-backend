@@ -4,6 +4,7 @@
 // ======================================================
 
 import { ok, fail } from "../../infra/http.js";
+import { executarOperacaoAssinaturaSellerDevCenter } from "./devCenterSellerSubscriptionOpsService.js";
 import { buildDevCenterSellerDetail, buildDevCenterSellersList } from "./devCenterSellersService.js";
 import {
   buildDevCenterSubscriptionDetail,
@@ -66,12 +67,64 @@ async function safeCount(supabase, table, traceId) {
  * @param {string} method
  * @param {import("@supabase/supabase-js").SupabaseClient} supabase
  * @param {string} traceId
+ * @param {{ user?: { id: string; email?: string | null }; body?: Record<string, unknown> }} [context]
  * @returns {Promise<boolean>} true se respondeu
  */
-export async function handleDevCenterAdminRoutes(req, res, path, method, supabase, traceId) {
-  if (method !== "GET") return false;
-
+export async function handleDevCenterAdminRoutes(req, res, path, method, supabase, traceId, context = {}) {
   try {
+    const subscriptionOp = path.match(/^\/api\/dev-center\/sellers\/([^/]+)\/subscription\/operations$/);
+    if (subscriptionOp && method === "POST" && UUID_RE.test(subscriptionOp[1])) {
+      const sellerId = subscriptionOp[1];
+      const operator = context.user;
+      if (!operator?.id) {
+        fail(res, { code: "UNAUTHORIZED", message: "Operador não identificado" }, 401, traceId);
+        return true;
+      }
+
+      const body = context.body && typeof context.body === "object" ? context.body : {};
+      const actionId = body.actionId != null ? String(body.actionId).trim() : "";
+      const reason = body.reason != null ? String(body.reason).trim() : "";
+
+      const outcome = await executarOperacaoAssinaturaSellerDevCenter(supabase, sellerId, {
+        actionId,
+        reason,
+        operatorUserId: operator.id,
+        operatorEmail: operator.email ?? null,
+        metadata: body.metadata && typeof body.metadata === "object" ? body.metadata : null,
+      });
+
+      if (!outcome.ok) {
+        const statusCode =
+          outcome.error?.code === "SUBSCRIPTION_NOT_FOUND"
+            ? 404
+            : outcome.error?.code === "INVALID_ACTION" || outcome.error?.code === "INVALID_REASON"
+              ? 400
+              : 500;
+        fail(
+          res,
+          {
+            code: outcome.error?.code ?? "OPERATION_FAILED",
+            message: outcome.error?.message ?? "Falha na operação de assinatura",
+            auditId: outcome.auditId ?? null,
+          },
+          statusCode,
+          traceId,
+        );
+        return true;
+      }
+
+      ok(res, {
+        ok: true,
+        operationId: outcome.operationId,
+        status: outcome.status,
+        subscriptionId: outcome.subscriptionId,
+        result: outcome.result,
+        auditId: outcome.auditId,
+      });
+      return true;
+    }
+
+    if (method !== "GET") return false;
     if (path === "/api/dev-center/dashboard") {
       const totalSellers = await safeCount(supabase, "profiles", traceId);
       let integracoesMlAtivas = 0;

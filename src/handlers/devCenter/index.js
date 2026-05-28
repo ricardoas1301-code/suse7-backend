@@ -140,12 +140,25 @@ export async function handleDevCenter(req, res, path) {
       )
       .order("updated_at", { ascending: false });
     if (mErr) {
-      console.error("[Suse7][API][dev-center-bootstrap] failed", {
+      console.error("[Suse7][API][dev-center-bootstrap] missions_load_failed", {
         message: mErr?.message,
         code: mErr?.code,
         details: mErr?.details,
+        traceId,
       });
-      return bootstrapFallback();
+      return ok(res, {
+        ok: true,
+        enabled: true,
+        allowed: true,
+        is_admin: access.is_admin,
+        allowlist_email: access.allowlist_email,
+        modules: adminModules,
+        user_id: user.id,
+        email: userEmail || null,
+        missions: [],
+        currentMission: null,
+        missions_degraded: true,
+      });
     }
     return ok(res, {
       ok: true,
@@ -174,7 +187,10 @@ export async function handleDevCenter(req, res, path) {
   const body = parseBody(req);
 
   try {
-    const adminHandled = await handleDevCenterAdminRoutes(req, res, path, method, supabase, traceId);
+    const adminHandled = await handleDevCenterAdminRoutes(req, res, path, method, supabase, traceId, {
+      user,
+      body,
+    });
     if (adminHandled) {
       return;
     }
