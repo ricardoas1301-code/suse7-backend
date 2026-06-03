@@ -79,6 +79,28 @@ export {
   previewTemplate,
 } from "./templates/index.js";
 
+// Canal E-mail Oficial (Fase S5.5) — metadados + integração dispatcher/outbox
+export {
+  S7_EMAIL_OFFICIAL_PROVIDER,
+  S7_EMAIL_OFFICIAL_MODE,
+  S7_EMAIL_OFFICIAL_SENDING_DOMAIN,
+  S7_EMAIL_OFFICIAL_DEFAULT_FROM,
+  S7_EMAIL_DELIVERABILITY_DNS_HINTS,
+  S7_EMAIL_OUTBOX_WORKER_PATH,
+  parseEmailFromDomain,
+  getOfficialEmailChannelSnapshot,
+  evaluateOfficialEmailPolicy,
+  sendS7Email,
+  isRealEmailProviderConfigured,
+  canSendRealEmailNow,
+  processEmailOutbox,
+  createEmailOutboxEntry,
+  renderNotificationEmailTemplate,
+  S7_EMAIL_OUTBOX_STATUS,
+  S7_EMAIL_MAX_ATTEMPTS,
+  logEmailNotification,
+} from "./email/index.js";
+
 export { publishNotificationEvent } from "./events/publishNotificationEvent.js";
 export { runNotificationDispatchEngine } from "./dispatches/notificationDispatchEngine.js";
 
