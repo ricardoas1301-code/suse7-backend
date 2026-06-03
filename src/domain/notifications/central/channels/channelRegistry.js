@@ -101,7 +101,8 @@ export const S7_CHANNEL_REGISTRY = Object.freeze({
       supports_template: true,
       supports_history: true,
     }),
-    description: "Sininho / inbox in-app (entrega imediata, com histórico)",
+    description:
+      "Central Sininho in-app (Motor Central S5.8 — inbox em dispatches, provider s7_in_app)",
   },
   [S7_NOTIFICATION_CHANNEL.EMAIL]: {
     code: S7_NOTIFICATION_CHANNEL.EMAIL,

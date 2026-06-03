@@ -20,7 +20,8 @@
     "test:templates-central": "node ./scripts/test_templates_central_unit.mjs",
     "test:email-channel-official": "node ./scripts/test_email_channel_official_unit.mjs",
     "test:whatsapp-channel-official": "node ./scripts/test_whatsapp_channel_official_unit.mjs",
-    "test:popup-channel-official": "node ./scripts/test_popup_channel_official_unit.mjs"
+    "test:popup-channel-official": "node ./scripts/test_popup_channel_official_unit.mjs",
+    "test:sininho-channel-official": "node ./scripts/test_sininho_channel_official_unit.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.87.1",

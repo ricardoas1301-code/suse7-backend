@@ -153,6 +153,31 @@ export {
   describePopupMultiSurfaceReuse,
 } from "./popup/index.js";
 
+// Central Sininho Oficial (Fase S5.8) — metadados + histórico in_app (sem alterar inbox legado)
+export {
+  S7_SININHO_CHANNEL_CODE,
+  S7_SININHO_CHANNEL_ALIASES,
+  S7_SININHO_SEVERITY,
+  S7_SININHO_INBOX_STATUS,
+  S7_SININHO_READ_STATE,
+  S7_SININHO_ARCHIVE_STATE,
+  S7_SININHO_FUTURE_CATEGORY,
+  S7_SININHO_INBOX_TABLE,
+  S7_SININHO_OFFICIAL_PROVIDER,
+  S7_SININHO_INBOX_API,
+  isValidSininhoSeverity,
+  resolveSininhoReadState,
+  resolveSininhoArchiveState,
+  buildSininhoTimelineEntry,
+  S7_SININHO_TRACE_FIELDS,
+  buildSininhoDeliveryTraceSummary,
+  logSininhoNotification,
+  getOfficialSininhoChannelSnapshot,
+  evaluateOfficialSininhoTimeline,
+  previewSininhoTemplate,
+  describeSininhoUiReuse,
+} from "./sininho/index.js";
+
 export { publishNotificationEvent } from "./events/publishNotificationEvent.js";
 export { runNotificationDispatchEngine } from "./dispatches/notificationDispatchEngine.js";
 
