@@ -283,3 +283,18 @@ export {
   logNotificationCatalog,
 } from "./catalog/index.js";
 
+// Raio-X WhatsApp no Motor Central (Fase S5.12) — integração oficial sem alterar UX
+export {
+  S7_RAYX_WHATSAPP_MOTOR_PHASE,
+  S7_RAYX_WHATSAPP_MOTOR_API_PATH,
+  S7_RAYX_WHATSAPP_MOTOR_FLOW,
+  S7_RAYX_WHATSAPP_MOTOR_PIPELINE_STAGES,
+  getOfficialRayxWhatsAppMotorSnapshot,
+  evaluateOfficialRayxWhatsAppMotorIntegration,
+  describeRayxWhatsAppMotorRedundancyCandidates,
+  buildRayxWhatsAppMotorTimeline,
+  recordRayxWhatsAppMotorObservability,
+  triggerManualSaleRayxNotification,
+  triggerManualSaleRayxNotificationsBatch,
+} from "./sales/index.js";
+

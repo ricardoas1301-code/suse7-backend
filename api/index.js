@@ -314,6 +314,10 @@ export default async function handler(req, res) {
       const mod = await import("../src/handlers/notifications/sellerNotificationInboxApi.js");
       return mod.handleNotificationInboxRoutes(req, res, path);
     }
+    if (path === "/api/notifications/manual/sale-rayx" && req.method === "POST") {
+      const mod = await import("../src/handlers/notifications/saleRayxManualNotificationApi.js");
+      return mod.handleSaleRayxManualNotification(req, res);
+    }
     if (path === "/api/notifications/categories" && req.method === "GET") {
       const mod = await import("../src/handlers/notifications/sellerNotificationSellerApi.js");
       return mod.handleNotificationSellerCategories(req, res);
@@ -474,6 +478,10 @@ export default async function handler(req, res) {
     }
     if (path === "/api/sales" && req.method === "GET") {
       const mod = await import("../src/handlers/sales/list.js");
+      return mod.default(req, res);
+    }
+    if (path === "/api/sales/executive-summary" && req.method === "GET") {
+      const mod = await import("../src/handlers/sales/executiveSummary.js");
       return mod.default(req, res);
     }
     if (path === "/api/sales/summary" && req.method === "GET") {

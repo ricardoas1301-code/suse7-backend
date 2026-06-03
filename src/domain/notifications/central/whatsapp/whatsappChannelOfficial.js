@@ -104,7 +104,9 @@ export function getOfficialWhatsAppChannelSnapshot() {
         s7_zapi_base_url_configured: rayxEnv.s7_zapi_base_url_configured,
       },
       pipeline:
-        "Modal Raio-X → POST sale-rayx → publishNotificationEvent → Actions Engine → outbox → processWhatsAppOutboxDispatch → Z-API",
+        "Modal Raio-X → POST sale-rayx → publishNotificationEvent → runCentralDispatcher → Actions Engine → outbox → processWhatsAppOutboxDispatch → Z-API",
+      motor_phase: "S5.12",
+      official_module: "getOfficialRayxWhatsAppMotorSnapshot",
     },
   };
 }

@@ -10,7 +10,19 @@ import { S7_MOTOR_OBS_EVENT } from "./motorObservabilityContract.js";
  */
 export const S7_MOTOR_OBS_LOG_PREFIX_REGISTRY = Object.freeze({
   "[S7_NOTIFICATION]": { layer: "core", module: "contract + dispatcher + pipeline" },
-  "[S7_ACTIONS]": { layer: "actions_engine", module: "plan + execute" },
+  "[S7_ACTIONS]": {
+    layer: "actions_engine",
+    module: "plan + execute",
+    rayx_whatsapp_suffixes: [
+      "MANUAL_SALE_RAYX_ROUTE_START",
+      "MANUAL_SALE_RAYX_ROUTE_DEDUPE",
+      "MANUAL_SALE_RAYX_START",
+      "MANUAL_SALE_RAYX_COMPLETE",
+      "MANUAL_SALE_RAYX_BATCH_COMPLETE",
+      "MANUAL_SALE_RAYX_ROUTE_LIVE_AUDIT",
+    ],
+    formal_rayx_phase: "S5.12",
+  },
   "[S7_EMAIL]": { layer: "channel", channel: "email" },
   "[S7_WHATSAPP]": { layer: "channel", channel: "whatsapp" },
   "[S7_IN_APP]": { layer: "channel", channel: "in_app", note: "legado sininho" },
@@ -43,6 +55,10 @@ export const S7_MOTOR_OBS_LOG_SUFFIX_MAP = Object.freeze({
   DELIVERY_FAILED: S7_MOTOR_OBS_EVENT.DELIVERY_FAILED,
   OUTBOX_ENQUEUED: S7_MOTOR_OBS_EVENT.DELIVERY_STARTED,
   PROCESS_START: S7_MOTOR_OBS_EVENT.DELIVERY_STARTED,
+  MANUAL_SALE_RAYX_START: S7_MOTOR_OBS_EVENT.DELIVERY_STARTED,
+  MANUAL_SALE_RAYX_COMPLETE: S7_MOTOR_OBS_EVENT.DELIVERY_COMPLETED,
+  MANUAL_SALE_RAYX_BATCH_COMPLETE: S7_MOTOR_OBS_EVENT.DELIVERY_COMPLETED,
+  RAYX_WHATSAPP_PIPELINE: S7_MOTOR_OBS_EVENT.DELIVERY_COMPLETED,
 });
 
 /**
