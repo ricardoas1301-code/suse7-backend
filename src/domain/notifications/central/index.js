@@ -178,6 +178,36 @@ export {
   describeSininhoUiReuse,
 } from "./sininho/index.js";
 
+// Preferências de Comunicação Oficial (Fase S5.9) — governança sem segunda fonte de verdade
+export {
+  resolveNotificationPreferences,
+  S7_COMMUNICATION_PREF_SCOPE,
+  S7_COMMUNICATION_PREFERENCES_TABLE,
+  S7_COMMUNICATION_RECIPIENTS_TABLE,
+  S7_COMMUNICATION_RECIPIENT_SCOPES_TABLE,
+  S7_COMMUNICATION_EVENT_RULES_TABLE,
+  S7_COMMUNICATION_EVENT_TYPES_TABLE,
+  S7_COMMUNICATION_RECIPIENT_ROLE,
+  S7_COMMUNICATION_MANDATORY_TIER,
+  S7_COMMUNICATION_FREQUENCY,
+  S7_COMMUNICATION_QUIET_HOURS_MODE,
+  S7_COMMUNICATION_SELLER_API,
+  S7_COMMUNICATION_PREF_RESOLVER,
+  S7_COMMUNICATION_RECIPIENT_RESOLVER,
+  resolveCommunicationMandatoryTier,
+  isValidCommunicationFrequency,
+  isValidQuietHoursMode,
+  planCommunicationDeliveryPolicy,
+  describePreferenceDimensions,
+  describeCommunicationRecipientsGovernance,
+  describeCommunicationDispatcherPipeline,
+  S7_COMMUNICATION_PREF_TRACE_FIELDS,
+  buildCommunicationPreferencesTraceSummary,
+  logCommunicationPreferences,
+  getOfficialCommunicationPreferencesSnapshot,
+  evaluateOfficialMandatoryTier,
+} from "./preferences/index.js";
+
 export { publishNotificationEvent } from "./events/publishNotificationEvent.js";
 export { runNotificationDispatchEngine } from "./dispatches/notificationDispatchEngine.js";
 
