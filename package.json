@@ -18,7 +18,8 @@
     "test:dispatcher-central": "node ./scripts/test_dispatcher_central_unit.mjs",
     "test:channel-registry": "node ./scripts/test_channel_registry_unit.mjs",
     "test:templates-central": "node ./scripts/test_templates_central_unit.mjs",
-    "test:email-channel-official": "node ./scripts/test_email_channel_official_unit.mjs"
+    "test:email-channel-official": "node ./scripts/test_email_channel_official_unit.mjs",
+    "test:whatsapp-channel-official": "node ./scripts/test_whatsapp_channel_official_unit.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.87.1",
