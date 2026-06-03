@@ -22,7 +22,8 @@
     "test:whatsapp-channel-official": "node ./scripts/test_whatsapp_channel_official_unit.mjs",
     "test:popup-channel-official": "node ./scripts/test_popup_channel_official_unit.mjs",
     "test:sininho-channel-official": "node ./scripts/test_sininho_channel_official_unit.mjs",
-    "test:communication-preferences-official": "node ./scripts/test_communication_preferences_official_unit.mjs"
+    "test:communication-preferences-official": "node ./scripts/test_communication_preferences_official_unit.mjs",
+    "test:motor-observability-official": "node ./scripts/test_motor_observability_official_unit.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.87.1",

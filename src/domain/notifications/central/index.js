@@ -236,6 +236,28 @@ export {
   planNotificationActions,
 } from "./actions/notificationActionsEngine.js";
 export { NOTIFICATION_ACTION_STATUS } from "./actions/notificationActionTypes.js";
-export { logCentralNotification } from "./observability/centralNotificationLog.js";
 export { getCentralNotificationEngineSummary } from "./analytics/notificationEngineAnalytics.js";
-
+
+// Observabilidade Oficial do Motor Central (Fase S5.10) — inclui logCentralNotification
+export {
+  logCentralNotification,
+  S7_MOTOR_OBS_TIMELINE_STAGE,
+  S7_MOTOR_OBS_EVENT,
+  S7_MOTOR_OBS_TABLES,
+  S7_MOTOR_OBS_WORKERS,
+  S7_MOTOR_HEALTH_STATUS,
+  S7_MOTOR_OBS_CORE_LOG_PREFIX,
+  S7_MOTOR_OBS_LOG_PREFIX_REGISTRY,
+  S7_MOTOR_OBS_LOG_SUFFIX_MAP,
+  mapLegacyLogSuffixToObservabilityEvent,
+  buildMotorCommunicationTimeline,
+  planMotorOperationalMetrics,
+  planMotorMetricsFromEngineSummary,
+  evaluateMotorHealthFromMetrics,
+  buildMotorDiagnosisCorrelation,
+  logMotorObservability,
+  getOfficialMotorObservabilitySnapshot,
+  evaluateOfficialMotorHealth,
+  evaluateOfficialMotorTimeline,
+} from "./observability/index.js";
+
