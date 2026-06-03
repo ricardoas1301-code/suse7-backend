@@ -52,6 +52,33 @@ export {
   validateCommunicationEvent,
 } from "./contract/index.js";
 
+// Central de Templates (Fase S5.4)
+export {
+  renderNotificationTemplate,
+  resolveNotificationTemplate,
+  extractTemplatePlaceholders,
+  renderTemplateString,
+  renderTemplate,
+  S7_TEMPLATE_STATUS,
+  S7_TEMPLATE_TYPE,
+  S7_TEMPLATE_INITIAL_VERSION,
+  isValidTemplateStatus,
+  isValidTemplateType,
+  toTemplateContract,
+  validateTemplateContract,
+  S7_TEMPLATE_VARIABLE_SCOPE,
+  defineTemplateVariable,
+  buildTemplateVariableContext,
+  buildSampleVariables,
+  normalizeVariablesSchema,
+  listTemplates,
+  getTemplate,
+  getTemplateVersionHistory,
+  groupTemplatesByChannel,
+  isTemplateChannelRegistered,
+  previewTemplate,
+} from "./templates/index.js";
+
 export { publishNotificationEvent } from "./events/publishNotificationEvent.js";
 export { runNotificationDispatchEngine } from "./dispatches/notificationDispatchEngine.js";
 
