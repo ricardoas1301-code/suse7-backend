@@ -130,6 +130,29 @@ export {
   logWhatsAppNotification,
 } from "./whatsapp/index.js";
 
+// Canal Pop-up Oficial (Fase S5.7) — metadados + persistência/rastreio (sem provider ativo)
+export {
+  S7_POPUP_CHANNEL_CODE,
+  S7_POPUP_DISPLAY_TYPE,
+  S7_POPUP_DISPLAY_MODE,
+  S7_POPUP_DELIVERY_STATUS,
+  S7_POPUP_PRIORITY,
+  S7_POPUP_UI_SURFACE,
+  S7_POPUP_DELIVERIES_TABLE,
+  S7_POPUP_OFFICIAL_PROVIDER,
+  isValidPopupDisplayType,
+  isValidPopupDisplayMode,
+  isValidPopupPriority,
+  planPopupDisplay,
+  S7_POPUP_TRACE_FIELDS,
+  buildPopupDeliveryTraceSummary,
+  logPopupNotification,
+  getOfficialPopupChannelSnapshot,
+  evaluateOfficialPopupDisplay,
+  previewPopupTemplate,
+  describePopupMultiSurfaceReuse,
+} from "./popup/index.js";
+
 export { publishNotificationEvent } from "./events/publishNotificationEvent.js";
 export { runNotificationDispatchEngine } from "./dispatches/notificationDispatchEngine.js";
 

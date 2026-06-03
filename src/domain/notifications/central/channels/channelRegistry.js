@@ -168,8 +168,10 @@ export const S7_CHANNEL_REGISTRY = Object.freeze({
     capabilities: caps({
       immediate_delivery: true,
       supports_template: true,
+      supports_history: true,
     }),
-    description: "Pop-up interno (futuro)",
+    description:
+      "Pop-up in-app (Motor Central S5.7 — contrato oficial; entrega via provider futuro)",
   },
   banner: {
     code: "banner",
