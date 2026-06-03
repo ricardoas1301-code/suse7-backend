@@ -4,6 +4,24 @@
 
 export { S7_NOTIFICATION_CATEGORY, isValidNotificationCategory } from "./constants/categories.js";
 export { S7_NOTIFICATION_CHANNEL, isValidNotificationChannel } from "./constants/channels.js";
+
+// Registro Oficial de Canais (Fase S5.3) — fonte única de verdade dos canais
+export {
+  S7_CHANNEL_REGISTRY,
+  S7_CHANNEL_TYPE,
+  S7_CHANNEL_STATUS,
+  S7_CHANNEL_DELIVERY_MODE,
+  resolveCanonicalChannelCode,
+  getChannelDefinition,
+  isRegisteredChannel,
+  isChannelSupported,
+  isChannelAvailable,
+  getChannelCapabilities,
+  listRegisteredChannels,
+  listAvailableChannels,
+  listChannelsByStatus,
+  filterRegisteredAvailableChannels,
+} from "./channels/index.js";
 export {
   S7_NOTIFICATION_DISPATCH_STATUS,
   S7_DISPATCH_TERMINAL_STATUS,

@@ -15,11 +15,8 @@
     "smoke:dev-center-customers-hardening": "node ./scripts/smoke_dev_center_customers_hardening.mjs",
     "validate:dev-center-customers-global": "npm run test:dev-center-access && npm run test:dev-center-customers-input && npm run smoke:dev-center-customers-hardening && npm run smoke:dev-center-customers-boundary",
     "test:communication-contract": "node ./scripts/test_communication_contract_unit.mjs",
-    "test:communication-contract": "node ./scripts/test_communication_contract_unit.mjs",
     "test:dispatcher-central": "node ./scripts/test_dispatcher_central_unit.mjs",
-    "test:channel-registry": "node ./scripts/test_channel_registry_unit.mjs",
-    "test:templates-central": "node ./scripts/test_templates_central_unit.mjs",
-    "test:email-channel-official": "node ./scripts/test_email_channel_official_unit.mjs"
+    "test:channel-registry": "node ./scripts/test_channel_registry_unit.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.87.1",

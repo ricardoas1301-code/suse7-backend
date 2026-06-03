@@ -4,6 +4,7 @@
 
 import { S7_NOTIFICATION_CHANNEL } from "../constants/channels.js";
 import { lookupNotificationTypeCatalog } from "../constants/eventTypes.js";
+import { filterRegisteredAvailableChannels } from "../channels/channelRegistry.js";
 import { resolveNotificationActionPreferences } from "./notificationPreferenceResolver.js";
 import { logNotificationActions } from "./notificationActionsLog.js";
 
@@ -25,19 +26,24 @@ export async function resolveNotificationChannels(supabase, input) {
   );
 
   /** @type {string[]} */
-  const channels = [];
+  const candidateChannels = [];
   if (prefs.enabledChannels.includes(S7_NOTIFICATION_CHANNEL.IN_APP)) {
-    channels.push(S7_NOTIFICATION_CHANNEL.IN_APP);
+    candidateChannels.push(S7_NOTIFICATION_CHANNEL.IN_APP);
   }
   for (const ch of [S7_NOTIFICATION_CHANNEL.EMAIL, S7_NOTIFICATION_CHANNEL.WHATSAPP]) {
-    if (supportedExternal.has(ch)) channels.push(ch);
+    if (supportedExternal.has(ch)) candidateChannels.push(ch);
   }
+
+  // S5.3: governança — o Dispatcher só consome canais do Registro Oficial e
+  // disponíveis. Elimina dependências implícitas de canal.
+  const { allowed: channels, rejected } = filterRegisteredAvailableChannels(candidateChannels);
 
   logNotificationActions("CHANNELS_RESOLVED", {
     seller_id: input.sellerId,
     category,
     type,
     channels,
+    rejected_unregistered: rejected.length > 0 ? rejected : undefined,
   });
 
   return { channels, catalog, prefs };
