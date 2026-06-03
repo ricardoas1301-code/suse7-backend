@@ -261,3 +261,25 @@ export {
   evaluateOfficialMotorTimeline,
 } from "./observability/index.js";
 
+// Catálogo de Notificações (Fase S5.11) — esqueleto oficial, sem notificações de negócio
+export {
+  S7_NOTIFICATION_CATALOG_TABLES,
+  S7_NOTIFICATION_CATALOG_DOMAIN_GROUP,
+  S7_NOTIFICATION_CATALOG_PRIORITY,
+  S7_NOTIFICATION_CATALOG_MANDATORY,
+  S7_NOTIFICATION_CATALOG_CHANNEL,
+  S7_NOTIFICATION_CATALOG_CODE_MIRROR,
+  listCatalogSupportedCategories,
+  getCatalogCategoryMeta,
+  listCatalogSupportedPriorities,
+  isValidCatalogPriority,
+  listCatalogSupportedChannels,
+  listCatalogMandatoryTiers,
+  mapMandatoryFlagToCatalogTier,
+  validateFutureNotificationDefinitionShape,
+  describeFutureNotificationDefinitionSchema,
+  getOfficialNotificationCatalogSnapshot,
+  getNotificationCatalogPublicContract,
+  logNotificationCatalog,
+} from "./catalog/index.js";
+
