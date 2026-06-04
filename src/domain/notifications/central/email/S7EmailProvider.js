@@ -18,6 +18,7 @@ import { logEmailNotification } from "./emailLog.js";
  * @property {string} html
  * @property {string} text
  * @property {Record<string, unknown>} [metadata]
+ * @property {"fale_conosco"} [policyContext] — formulário público: Resend live sem whitelist de seller
  */
 
 /**
@@ -66,6 +67,10 @@ export async function sendS7Email(input) {
   const to = String(input.to ?? "").trim().toLowerCase();
   if (!to || !to.includes("@")) {
     return { ok: false, error: "INVALID_EMAIL" };
+  }
+
+  if (input.policyContext === "fale_conosco") {
+    return sendFaleConoscoPublicFormEmail(input, to);
   }
 
   const policy = evaluateEmailSendPolicy(to);
@@ -126,6 +131,32 @@ export async function sendS7Email(input) {
   }
 
   return { ok: false, error: "UNKNOWN_PROVIDER" };
+}
+
+/**
+ * Fale Conosco — mesmo contrato da Edge legada: Resend real quando configurado.
+ * Não retorna sucesso simulado (mock) para evitar falso positivo no modal.
+ * @param {S7EmailSendInput} input
+ * @param {string} to
+ * @returns {Promise<S7EmailSendResult>}
+ */
+async function sendFaleConoscoPublicFormEmail(input, to) {
+  const provider = String(config.s7EmailProvider ?? "").toLowerCase();
+
+  if (provider === "resend" && config.resendApiKey) {
+    return sendViaResend(input, to);
+  }
+  if (provider === "sendgrid" && config.sendgridApiKey) {
+    return { ok: false, error: "SENDGRID_NOT_IMPLEMENTED", provider: "sendgrid" };
+  }
+
+  logEmailNotification("FALE_CONOSCO_UNAVAILABLE", {
+    to_masked: maskEmailForLog(to),
+    s7_email_mode: config.s7EmailMode ?? null,
+    s7_email_provider: provider,
+    resend_configured: Boolean(config.resendApiKey),
+  });
+  return { ok: false, error: "EMAIL_PROVIDER_NOT_CONFIGURED" };
 }
 
 /**

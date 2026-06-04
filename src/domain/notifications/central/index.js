@@ -298,3 +298,27 @@ export {
   triggerManualSaleRayxNotificationsBatch,
 } from "./sales/index.js";
 
+// Fale Conosco no Motor Central (Fase S5.13)
+export {
+  S7_FALE_CONOSCO_CONTACT_FIELDS,
+  normalizeFaleConoscoContactBody,
+  S7_FALE_CONOSCO_MOTOR_PHASE,
+  S7_FALE_CONOSCO_PUBLIC_API_PATH,
+  S7_FALE_CONOSCO_LEGACY_EDGE_PATH,
+  S7_FALE_CONOSCO_FLOW,
+  S7_FALE_CONOSCO_PIPELINE_STAGES,
+  getOfficialFaleConoscoMotorSnapshot,
+  evaluateOfficialFaleConoscoMotorIntegration,
+  describeFaleConoscoMotorRedundancyCandidates,
+  buildFaleConoscoMotorTimeline,
+  recordFaleConoscoMotorObservability,
+  validateFaleConoscoContactInput,
+  triggerFaleConoscoContact,
+  renderFaleConoscoTeamEmail,
+  renderFaleConoscoConfirmationEmail,
+  getFaleConoscoEmailRuntimeSnapshot,
+  canSendFaleConoscoEmailLive,
+  isFaleConoscoDeliveryConfirmed,
+  evaluateFaleConoscoLegOutcome,
+} from "./faleConosco/index.js";
+

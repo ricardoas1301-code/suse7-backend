@@ -25,7 +25,8 @@ const snap = getOfficialEmailChannelSnapshot();
 assert("snapshot: canal email", snap.channel_code === "email");
 assert("snapshot: registry presente", snap.channel_registry?.delivery_mode === "async");
 assert("snapshot: outbox worker path", snap.outbox_worker_path === "/api/internal/notifications/email/process");
-assert("snapshot: fale conosco separado", snap.fale_conosco?.integrated === false);
+assert("snapshot: fale conosco integrado S5.13", snap.fale_conosco?.integrated === true);
+assert("snapshot: fale conosco api", snap.fale_conosco?.public_api_path === "/api/public/fale-conosco/contact");
 assert("snapshot: dispatcher tables", snap.dispatcher_integration?.queue_table === "s7_notification_email_outbox");
 assert("snapshot: dns hints", Boolean(snap.deliverability_dns_hints?.spf));
 

@@ -85,15 +85,18 @@ export async function processEmailOutbox(supabase, options = {}) {
       })
       .eq("id", outboxId);
 
+    const rowMeta =
+      row.metadata && typeof row.metadata === "object"
+        ? /** @type {Record<string, unknown>} */ (row.metadata)
+        : {};
+
     const sendResult = await sendS7Email({
       to: String(row.recipient_email),
       subject: String(row.subject),
       html: String(row.body_html),
       text: String(row.body_text),
-      metadata:
-        row.metadata && typeof row.metadata === "object"
-          ? /** @type {Record<string, unknown>} */ (row.metadata)
-          : {},
+      metadata: rowMeta,
+      policyContext: rowMeta.fale_conosco_motor === true ? "fale_conosco" : undefined,
     });
 
     if (sendResult.ok) {

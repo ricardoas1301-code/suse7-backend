@@ -74,6 +74,14 @@ export const config = {
   resendApiKey: getEnv("RESEND_API_KEY", { defaultValue: "" }).trim(),
   sendgridApiKey: getEnv("SENDGRID_API_KEY", { defaultValue: "" }).trim(),
 
+  /** Fase S5.13 — Fale Conosco no Motor Central (seller sintético + inbox equipe). */
+  s7FaleConoscoSystemSellerId: getEnv("S7_FALE_CONOSCO_SYSTEM_SELLER_ID", {
+    defaultValue: "00000000-0000-0000-0000-000000000001",
+  }).trim(),
+  s7FaleConoscoInboxEmail: getEnv("S7_FALE_CONOSCO_INBOX_EMAIL", {
+    defaultValue: "contato@suse7.com.br",
+  }).trim(),
+
   /** Tier lógico: development | staging | production (Fase 3.5C). */
   s7AppEnv: getEnv("S7_APP_ENV", { defaultValue: "" }).trim().toLowerCase(),
   /** Fase 3.5C — permite live em DEV/STAGING apenas quando true. */
@@ -81,7 +89,11 @@ export const config = {
 
   /** Fase 3.5A — WhatsApp central (mock por padrão). */
   s7WhatsAppMode: getEnv("S7_WHATSAPP_MODE", { defaultValue: "mock" }).trim().toLowerCase(),
-  s7WhatsAppProvider: getEnv("S7_WHATSAPP_PROVIDER", { defaultValue: "mock" }).trim().toLowerCase(),
+  /** WHATSAPP_PROVIDER tem precedência sobre S7_WHATSAPP_PROVIDER (3.5C.1.A1). */
+  s7WhatsAppProvider: (
+    getEnv("WHATSAPP_PROVIDER", { defaultValue: "" }).trim() ||
+    getEnv("S7_WHATSAPP_PROVIDER", { defaultValue: "mock" }).trim()
+  ).toLowerCase(),
   s7WhatsAppSandboxWhitelist: getEnv("S7_WHATSAPP_SANDBOX_WHITELIST", { defaultValue: "" }).trim(),
   /** Fase 3.5C.1 — Z-API live controlado (base = .../instances/{id}/token/{token}). */
   s7ZapiBaseUrl: getEnv("S7_ZAPI_BASE_URL", { defaultValue: "" }).trim(),

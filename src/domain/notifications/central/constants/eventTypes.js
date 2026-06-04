@@ -75,10 +75,30 @@ export const S7_NOTIFICATION_TYPE_CATALOG = Object.freeze({
     templateKey: "system.alert",
     severity: "info",
   },
+  [`${S7_NOTIFICATION_CATEGORY.SYSTEM}:FALE_CONOSCO_TEAM`]: {
+    typeKey: "FALE_CONOSCO_TEAM",
+    templateKey: "system.fale_conosco.team",
+    severity: "info",
+    mandatory: true,
+    supportedChannels: ["email"],
+  },
+  [`${S7_NOTIFICATION_CATEGORY.SYSTEM}:FALE_CONOSCO_CONFIRMATION`]: {
+    typeKey: "FALE_CONOSCO_CONFIRMATION",
+    templateKey: "system.fale_conosco.confirmation",
+    severity: "info",
+    mandatory: true,
+    supportedChannels: ["email"],
+  },
   [`${S7_NOTIFICATION_CATEGORY.SALES}:ORDER_CANCELLED`]: {
     typeKey: "ORDER_CANCELLED",
     templateKey: "sales.order.cancelled",
     severity: "warning",
+  },
+  [`${S7_NOTIFICATION_CATEGORY.SALES}:MANUAL_SALE_RAYX`]: {
+    typeKey: "MANUAL_SALE_RAYX",
+    templateKey: "sales.manual.rayx",
+    severity: "info",
+    supportedChannels: ["whatsapp", "email"],
   },
   [`${S7_NOTIFICATION_CATEGORY.INVENTORY}:LOW_STOCK`]: {
     typeKey: "LOW_STOCK",

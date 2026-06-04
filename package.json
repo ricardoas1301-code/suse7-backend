@@ -25,7 +25,8 @@
     "test:communication-preferences-official": "node ./scripts/test_communication_preferences_official_unit.mjs",
     "test:motor-observability-official": "node ./scripts/test_motor_observability_official_unit.mjs",
     "test:notification-catalog-official": "node ./scripts/test_notification_catalog_official_unit.mjs",
-    "test:rayx-whatsapp-motor-official": "node ./scripts/test_rayx_whatsapp_motor_official_unit.mjs"
+    "test:rayx-whatsapp-motor-official": "node ./scripts/test_rayx_whatsapp_motor_official_unit.mjs",
+    "test:fale-conosco-motor-official": "node ./scripts/test_fale_conosco_motor_official_unit.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.87.1",

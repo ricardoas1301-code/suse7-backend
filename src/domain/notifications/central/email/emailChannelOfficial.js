@@ -3,7 +3,7 @@
 // Fonte única de metadados do canal e-mail do Motor Central.
 //
 // NÃO duplica envio: delega para S7EmailProvider + EmailNotificationProvider + outbox.
-// NÃO altera "Fale Conosco" (Edge Function Supabase externa ao backend).
+// Fale Conosco integrado ao Motor Central na fase S5.13 (API pública backend).
 // =============================================================================
 
 import { config } from "../../../../infra/config.js";
@@ -83,8 +83,12 @@ export function getOfficialEmailChannelSnapshot() {
       dispatch_table: "s7_notification_dispatches",
     },
     fale_conosco: {
-      integrated: false,
-      note: "Fluxo legado via Supabase Edge Function send-contact-email (frontend). Não passa pelo Motor Central nesta fase.",
+      integrated: true,
+      motor_phase: "S5.13",
+      public_api_path: "/api/public/fale-conosco/contact",
+      official_module: "getOfficialFaleConoscoMotorSnapshot",
+      legacy_edge_function: "/functions/v1/send-contact-email",
+      note: "Formulário público → Motor Central → outbox e-mail → Resend (Edge legada documentada para descontinuação).",
     },
   };
 }

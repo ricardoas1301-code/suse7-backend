@@ -269,6 +269,11 @@ export default async function handler(req, res) {
       });
     }
 
+    if (path === "/api/public/fale-conosco/contact" && req.method === "POST") {
+      const mod = await import("../src/handlers/public/faleConoscoContactApi.js");
+      return mod.handleFaleConoscoContact(req, res);
+    }
+
     // ------------------------------
     // Billing — cedo no router (path + pathNorm + rawUrl; evita 404 se divergir normalização)
     // ------------------------------
