@@ -418,6 +418,56 @@ export async function patchManualRayxWhatsAppOutboxShare(supabase, dispatchId, s
 /**
  * @param {import("@supabase/supabase-js").SupabaseClient} supabase
  * @param {string} dispatchId
+ * @param {{
+ *   subject: string;
+ *   html: string;
+ *   text: string;
+ *   imageDataUri?: string | null;
+ *   shareCacheKey?: string | null;
+ * }} rendered
+ */
+export async function patchManualRayxEmailOutboxShare(supabase, dispatchId, rendered) {
+  const id = String(dispatchId ?? "").trim();
+  if (!id) return { ok: false, error: "MISSING_DISPATCH_ID" };
+
+  const { data: row, error } = await supabase
+    .from("s7_notification_email_outbox")
+    .select("id, metadata")
+    .eq("dispatch_id", id)
+    .maybeSingle();
+
+  if (error) throw error;
+  if (!row?.id) return { ok: false, error: "OUTBOX_NOT_FOUND" };
+
+  const prev =
+    row.metadata && typeof row.metadata === "object"
+      ? /** @type {Record<string, unknown>} */ (row.metadata)
+      : {};
+
+  const { error: updErr } = await supabase
+    .from("s7_notification_email_outbox")
+    .update({
+      subject: String(rendered.subject ?? "").trim(),
+      body_html: String(rendered.html ?? ""),
+      body_text: String(rendered.text ?? ""),
+      metadata: {
+        ...prev,
+        sale_rayx_premium_email: true,
+        delivery_format: "image",
+        share_image_data_uri: rendered.imageDataUri ?? null,
+        share_cache_key: rendered.shareCacheKey ?? null,
+      },
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", row.id);
+
+  if (updErr) throw updErr;
+  return { ok: true, outbox_id: String(row.id) };
+}
+
+/**
+ * @param {import("@supabase/supabase-js").SupabaseClient} supabase
+ * @param {string} dispatchId
  * @param {Record<string, unknown>} policyMetadata
  */
 export async function patchManualRayxWhatsAppOutboxPolicy(supabase, dispatchId, policyMetadata) {

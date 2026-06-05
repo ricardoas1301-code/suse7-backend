@@ -35,6 +35,7 @@ import {
   normalizeManualRayxPhone,
   patchManualRayxWhatsAppOutboxPolicy,
   patchManualRayxWhatsAppOutboxShare,
+  patchManualRayxEmailOutboxShare,
   resolveExplicitSmokePhoneForSeller,
 } from "./manualSaleRayxLiveDelivery.js";
 import { dedupeOfficialWhatsAppRecipients } from "../whatsapp/index.js";
@@ -42,8 +43,10 @@ import { recordRayxWhatsAppMotorObservability } from "./rayxWhatsAppMotorObserva
 import { isProviderSmokeEnabled } from "../providers/abstraction/providerSmokePolicy.js";
 
 import { processWhatsAppOutboxDispatch } from "../whatsapp/processWhatsAppOutboxDispatch.js";
+import { processEmailOutbox } from "../email/processEmailOutbox.js";
 
 import { resolveWhatsAppProviderName } from "../providers/whatsapp/whatsappProviderEnv.js";
+import { renderSaleRayxManualEmailBody } from "./renderSaleRayxManualEmailBody.js";
 
 
 
@@ -218,7 +221,8 @@ async function loadIdempotentManualContext(supabase, sellerId, idempotencyKey) {
  *   deliveryFormat?: string | null;
 
  *   shareCacheKey?: string | null;
-
+ *   shareTextFallback?: string | null;
+ *   recipientName?: string | null;
  * }} input
  */
 
@@ -755,6 +759,33 @@ export async function triggerManualSaleRayxNotification(supabase, input) {
     outbox = await loadOutboxByDispatch(supabase, dispatchId, channel);
   }
 
+  if (
+    channel === S7_NOTIFICATION_CHANNEL.EMAIL &&
+    dispatchId &&
+    (shareImageBase64 || (input.shareTextFallback != null && String(input.shareTextFallback).trim() !== ""))
+  ) {
+    const mimeType = "image/png";
+    const imageDataUri = shareImageBase64
+      ? shareImageBase64.startsWith("data:")
+        ? shareImageBase64
+        : `data:${mimeType};base64,${shareImageBase64}`
+      : "";
+    const rendered = renderSaleRayxManualEmailBody({
+      recipientName: input.recipientName ?? null,
+      saleId,
+      summaryText: input.shareTextFallback ?? shareCaption,
+      imageDataUri,
+      caption: shareCaption,
+      plainTextFallback: input.shareTextFallback ?? shareCaption,
+    });
+    await patchManualRayxEmailOutboxShare(supabase, dispatchId, {
+      ...rendered,
+      imageDataUri,
+      shareCacheKey: input.shareCacheKey ?? null,
+    });
+    outbox = await loadOutboxByDispatch(supabase, dispatchId, channel);
+  }
+
   if (channel === S7_NOTIFICATION_CHANNEL.WHATSAPP && dispatchId) {
     const liveDecision = canProcessManualSaleRayxWhatsAppLive({
       sellerId,
@@ -793,6 +824,22 @@ export async function triggerManualSaleRayxNotification(supabase, input) {
 
     }
 
+  }
+
+  if (channel === S7_NOTIFICATION_CHANNEL.EMAIL && dispatchId) {
+    processOutboxCalled = true;
+    const processResult = await processEmailOutbox(supabase, { dispatchId });
+
+    providerMs = processResult.duration_ms ?? providerMs;
+
+    outbox = await loadOutboxByDispatch(supabase, dispatchId, channel);
+
+    realSendExecuted =
+      (processResult?.sent ?? 0) >= 1 &&
+      outbox?.status === "sent" &&
+      Boolean(outbox?.provider_message_id);
+
+    liveProcessReason = realSendExecuted ? "LIVE_DISPATCH_PROCESSED" : "ENQUEUE_ONLY";
   }
 
   const liveAudit = auditManualSaleRayxWhatsAppLive({
@@ -1034,6 +1081,7 @@ export async function triggerManualSaleRayxNotificationsBatch(supabase, input) {
       shareCaption: input.shareCaption ?? null,
       deliveryFormat: input.deliveryFormat ?? null,
       shareCacheKey: input.shareCacheKey ?? null,
+      shareTextFallback: input.shareTextFallback ?? null,
     });
 
     results.push(one);
