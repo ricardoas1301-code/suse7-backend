@@ -4,6 +4,8 @@
 
 import { logBilling } from "../billingLog.js";
 import { SUBSCRIPTION_STATUS } from "../billingConstants.js";
+import { resolveDelinquencyAccess, readSubscriptionDelinquency } from "./billingDunningService.js";
+import { listUserBillingSubscriptions, pickActiveSubscription } from "./billingSubscriptionQueryService.js";
 
 /**
  * Estados expostos ao restante do backend / APIs.
@@ -51,15 +53,12 @@ export function resolveAccessFromSubscriptionRow(status, provider) {
  * }>}
  */
 export async function canUserAccessPlanFeatures(supabase, userId) {
-  const { data: rows, error } = await supabase
-    .from("billing_subscriptions")
-    .select("id, plan_id, status, provider, created_at")
-    .eq("user_id", userId)
-    .order("created_at", { ascending: false })
-    .limit(20);
-
-  if (error) {
-    logBilling("access", "load_subscriptions_failed", { user_id: userId, message: error.message });
+  let list;
+  try {
+    list = await listUserBillingSubscriptions(supabase, userId);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    logBilling("access", "load_subscriptions_failed", { user_id: userId, message });
     const empty = {
       can_access: false,
       allowed: false,
@@ -72,18 +71,8 @@ export async function canUserAccessPlanFeatures(supabase, userId) {
     return empty;
   }
 
-  const list = Array.isArray(rows) ? rows : [];
-  /** @type {{ id: string; plan_id: string; status: string; provider: string } | null} */
-  let pick = null;
-  for (const r of list) {
-    const st = String(r.status || "").toLowerCase();
-    if (st === SUBSCRIPTION_STATUS.CANCELED || st === SUBSCRIPTION_STATUS.REFUNDED) continue;
-    pick = /** @type {any} */ (r);
-    break;
-  }
-  if (!pick && list.length > 0) {
-    pick = /** @type {any} */ (list[0]);
-  }
+  /** @type {{ id: string; plan_id: string; status: string; provider: string; metadata?: Record<string, unknown> | null; current_period_end?: string | null } | null} */
+  const pick = pickActiveSubscription(list);
 
   if (!pick) {
     return {
@@ -98,14 +87,34 @@ export async function canUserAccessPlanFeatures(supabase, userId) {
   }
 
   const { allowed, state } = resolveAccessFromSubscriptionRow(pick.status, pick.provider);
-  logBilling("access", "resolved", { user_id: userId, state, can_access: allowed, subscription_id: pick.id });
+  let canAccess = allowed;
+  let resolvedState = state;
+  if (!canAccess && state === "canceled" && pick.current_period_end) {
+    const end = new Date(String(pick.current_period_end));
+    if (!Number.isNaN(end.getTime()) && end.getTime() > Date.now()) {
+      canAccess = true;
+      resolvedState = "active";
+    }
+  }
+  const delinquencyAccess = resolveDelinquencyAccess(pick.metadata);
+  const delinquency = readSubscriptionDelinquency(pick.metadata);
+  if (delinquencyAccess) {
+    canAccess = delinquencyAccess.can_access;
+    resolvedState = /** @type {BillingAccessState} */ (delinquencyAccess.state);
+  }
+  logBilling("access", "resolved", { user_id: userId, state: resolvedState, can_access: canAccess, subscription_id: pick.id });
   return {
-    can_access: allowed,
-    allowed,
-    state,
+    can_access: canAccess,
+    allowed: canAccess,
+    state: resolvedState,
     plan_id: pick.plan_id ?? null,
     subscription_id: pick.id ?? null,
     subscription_status: pick.status ?? null,
     provider: pick.provider ?? null,
+    delinquency_warning: Boolean(delinquencyAccess?.delinquency_warning),
+    delinquency_status: delinquency.delinquency_status,
+    overdue_since: delinquency.overdue_since,
+    grace_period_ends_at: delinquency.grace_period_ends_at,
+    access_suspended_at: delinquency.access_suspended_at,
   };
 }
