@@ -410,6 +410,60 @@ export async function fetchMercadoLivreShipmentById(accessToken, shipmentId, opt
  * @param {string | number} orderId
  * @param {{ marketplaceAccountId?: string | null }} [options]
  */
+/**
+ * Métricas Product Ads do anúncio em um dia (atribuição agregada por data).
+ * @param {string} accessToken
+ * @param {string} itemId — MLB…
+ * @param {string} dateYmd — YYYY-MM-DD
+ * @param {{ marketplaceAccountId?: string | null; siteId?: string | null }} [options]
+ */
+export async function fetchMercadoLivreProductAdsItemDayMetrics(
+  accessToken,
+  itemId,
+  dateYmd,
+  options = {},
+) {
+  const id = itemId != null ? String(itemId).trim() : "";
+  const day = dateYmd != null ? String(dateYmd).trim() : "";
+  if (!id || !day) return null;
+
+  const site = options.siteId != null && String(options.siteId).trim() !== "" ? String(options.siteId).trim() : "MLB";
+  const metrics =
+    "advertising_items_quantity,organic_items_quantity,direct_items_quantity,indirect_items_quantity,units_quantity";
+  const url = `${ML_API}/advertising/${encodeURIComponent(site)}/product_ads/ads/${encodeURIComponent(id)}?date_from=${encodeURIComponent(day)}&date_to=${encodeURIComponent(day)}&metrics=${metrics}`;
+  const mpAcct =
+    options?.marketplaceAccountId != null && String(options.marketplaceAccountId).trim() !== ""
+      ? String(options.marketplaceAccountId).trim()
+      : "__product_ads_item__";
+  const limiter = getAccountLimiter(mpAcct);
+  try {
+    return await limiter(async () => {
+      const timeoutMs = resolveMlTimeoutMs();
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+      try {
+        const res = await fetch(url, {
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            Accept: "application/json",
+            "api-version": "2",
+          },
+          signal: ctrl.signal,
+        });
+        clearTimeout(timer);
+        if (!res.ok) return null;
+        const json = await res.json().catch(() => null);
+        return json && typeof json === "object" ? json : null;
+      } catch {
+        clearTimeout(timer);
+        return null;
+      }
+    });
+  } catch {
+    return null;
+  }
+}
+
 export async function fetchMercadoLivreOrderDiscountsById(accessToken, orderId, options = {}) {
   const id = orderId != null ? String(orderId).trim() : "";
   if (!id) throw new Error("orderId obrigatório");

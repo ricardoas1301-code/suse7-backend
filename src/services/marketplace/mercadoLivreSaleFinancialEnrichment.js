@@ -4,6 +4,10 @@ import {
   fetchMercadoLivreShipmentById,
   fetchOrderById,
 } from "../../handlers/ml/_helpers/mercadoLibreOrdersApi.js";
+import {
+  ensureSalesOrderItemsFromOrderLines,
+  resolveMlOrderLinesFromOrder,
+} from "../../handlers/ml/_helpers/mlSalesPersist.js";
 import { toFiniteNumber } from "../../handlers/ml/_helpers/mlItemMoneyExtract.js";
 import {
   resolveMercadoLivreFinancialFormula,
@@ -231,14 +235,8 @@ export function itemNeedsFinancialEnrichment(itemRow) {
  * @param {Array<Record<string, unknown>>} dbItems
  */
 function resolveOrderLinesForEnrichment(order, dbItems) {
-  if (Array.isArray(order.order_items) && order.order_items.length > 0) {
-    return /** @type {Record<string, unknown>[]} */ (order.order_items);
-  }
-
-  const nested = order.raw_json && typeof order.raw_json === "object" ? order.raw_json : null;
-  if (nested && Array.isArray(nested.order_items) && nested.order_items.length > 0) {
-    return /** @type {Record<string, unknown>[]} */ (nested.order_items);
-  }
+  const fromOrder = resolveMlOrderLinesFromOrder(order);
+  if (fromOrder.length > 0) return fromOrder;
 
   /** @type {Record<string, unknown>[]} */
   const fromItems = [];
@@ -640,6 +638,12 @@ export async function enrichMercadoLivreSaleFinancialSnapshot(supabase, userId, 
   }
 
   if (opts.salesOrderId && supabase) {
+    try {
+      await ensureSalesOrderItemsFromOrderLines(supabase, userId, String(opts.salesOrderId), orderPayload);
+    } catch (itemsEnsureErr) {
+      debug.items_ensure_error = itemsEnsureErr instanceof Error ? itemsEnsureErr.message : String(itemsEnsureErr);
+    }
+
     const { enrichedOrder, linesIndex, persistLog } = await persistFinancialEnrichmentToDatabase(
       supabase,
       userId,
