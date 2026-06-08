@@ -19,6 +19,7 @@ function moneyDecimal(d) {
  * @param {{
  *   feeGrossDec: Decimal | null;
  *   line?: Record<string, unknown> | null;
+ *   qty?: number;
  *   saleFeeSubsidyDec?: Decimal | null;
  *   logContext?: {
  *     sale_id?: string | null;
@@ -48,8 +49,14 @@ export function resolveMercadoLivreMarketplaceRebate(ctx) {
   const saleFeeSubsidyDec = ctx.saleFeeSubsidyDec ?? null;
   const logContext = ctx.logContext ?? {};
 
+  const qty = ctx.qty != null && ctx.qty > 1 ? Math.trunc(ctx.qty) : 1;
   const lineSaleFeeRaw = line != null ? parseMlMoney(line.sale_fee ?? line.listing_fee) : null;
-  const lineSaleFeeDec = lineSaleFeeRaw != null && lineSaleFeeRaw > 0 ? new Decimal(lineSaleFeeRaw) : null;
+  const lineSaleFeeDec =
+    lineSaleFeeRaw != null && lineSaleFeeRaw > 0
+      ? qty > 1
+        ? new Decimal(lineSaleFeeRaw).mul(qty)
+        : new Decimal(lineSaleFeeRaw)
+      : null;
 
   let candidateDec = null;
   /** @type {string | null} */
@@ -133,6 +140,7 @@ export function resolveMercadoLivreMarketplaceRebate(ctx) {
       reject_reason: marketplaceRebate ? null : rejectReason,
       fee_gross_brl: feeGrossDec != null ? moneyDecimal(feeGrossDec) : null,
       line_sale_fee_brl: lineSaleFeeDec != null ? moneyDecimal(lineSaleFeeDec) : null,
+      qty,
       net_received_before: netReceivedBefore,
       net_received_after: marketplaceRebate?.amount_brl ?? null,
     });

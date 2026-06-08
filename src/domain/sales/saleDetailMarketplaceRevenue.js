@@ -6,6 +6,7 @@ import {
   extractMercadoLivrePositiveAdjustmentsFromSaleFeeDetails,
   extractSaleFee,
   extractShippingCost,
+  parseMlMoneyScalar,
   toFiniteNumber,
 } from "../../handlers/ml/_helpers/mlItemMoneyExtract.js";
 import { findMercadoLivreOrderLine, toNum } from "../../handlers/sales/_vendasSalesRows.js";
@@ -22,6 +23,11 @@ import {
   mercadoLivreFeeFromPercentOfGross,
   validateMercadoLivreFeeCandidate,
 } from "./mercadoLivreSaleRevenueRules.js";
+import {
+  isMercadoLivreFlexDeliverySale,
+  resolveMercadoLivreDiscountsFinancials,
+  resolveMercadoLivreShippingBonusForFinancial,
+} from "./mercadoLivreSaleFinancialFormula.js";
 
 export { formatMercadoLivreListingTypeLabel };
 import {
@@ -33,7 +39,7 @@ import {
 
 /** @param {unknown} v */
 function parseMlMoney(v) {
-  return toFiniteNumber(v);
+  return parseMlMoneyScalar(v);
 }
 
 /** @param {unknown} v */
@@ -93,7 +99,8 @@ export function resolveEffectiveMercadoLivreSaleLine(item, order) {
       : item.external_item_id != null
         ? String(item.external_item_id).trim()
         : "";
-  const orderLine = findMercadoLivreOrderLine(orderRaw, extItem || null);
+  const extListing = item.external_listing_id != null ? String(item.external_listing_id).trim() : "";
+  const orderLine = findMercadoLivreOrderLine(orderRaw, extItem || null, extListing || null);
 
   if (orderLine && lineHasSaleFinancialSignals(orderLine)) return orderLine;
   if (itemLine && lineHasSaleFinancialSignals(itemLine)) return itemLine;
@@ -564,6 +571,24 @@ function isPlausibleShippingAmount(shipDec, grossDec) {
  * @param {Decimal | null} lineGrossDec
  */
 function resolveSaleShippingBrl(item, line, orderRaw, lineGrossDec, order) {
+  const orderFin =
+    orderRaw?._s7_financial && typeof orderRaw._s7_financial === "object"
+      ? /** @type {Record<string, unknown>} */ (orderRaw._s7_financial)
+      : null;
+  const shipmentSnapshot = orderFin?.shipment_snapshot;
+
+  if (isMercadoLivreFlexDeliverySale({ order: orderRaw, line, shipmentSnapshot })) {
+    return {
+      ship: new Decimal(0),
+      source: "flex_no_shipping_charge",
+      debug: {
+        flex_delivery: true,
+        shippingCandidates: [],
+        selected: { source: "flex_no_shipping_charge", amount: "0.00" },
+      },
+    };
+  }
+
   /** @type {Array<{ source: string; amount: string | null; shipDec: Decimal }>} */
   const shippingCandidates = [];
 
@@ -589,11 +614,6 @@ function resolveSaleShippingBrl(item, line, orderRaw, lineGrossDec, order) {
     shippingCandidates.push({ source, amount: moneyDecimal(dec), shipDec: dec });
   };
 
-  const orderFin =
-    orderRaw?._s7_financial && typeof orderRaw._s7_financial === "object"
-      ? /** @type {Record<string, unknown>} */ (orderRaw._s7_financial)
-      : null;
-  const shipmentSnapshot = orderFin?.shipment_snapshot;
   if (shipmentSnapshot) {
     pushCandidate(extractSellerShippingCostFromShipmentSnapshot(shipmentSnapshot), "shipment_api_snapshot");
   }
@@ -702,6 +722,17 @@ export function resolveMercadoLivreSaleRevenueSnapshot(item, order, listing = nu
   const orderRaw =
     order?.raw_json && typeof order.raw_json === "object" ? /** @type {Record<string, unknown>} */ (order.raw_json) : null;
 
+  const orderFinEarly =
+    orderRaw?._s7_financial && typeof orderRaw._s7_financial === "object"
+      ? /** @type {Record<string, unknown>} */ (orderRaw._s7_financial)
+      : null;
+  const shipmentSnapshotEarly = orderFinEarly?.shipment_snapshot;
+  const isFlexDelivery = isMercadoLivreFlexDeliverySale({
+    order: orderRaw,
+    line,
+    shipmentSnapshot: shipmentSnapshotEarly,
+  });
+
   const persistedSnap = pickPersistedFinancialSnapshot(item);
   if (
     persistedSnap?.gross_sale_amount_brl &&
@@ -728,12 +759,16 @@ export function resolveMercadoLivreSaleRevenueSnapshot(item, order, listing = nu
       (persistedSnap.marketplace_fee_percent != null ? String(persistedSnap.marketplace_fee_percent) : null);
     const feeGrossDec = toDecimal(feeAmount);
     const grossDec = toDecimal(persistedSnap.gross_sale_amount_brl);
-    const shipDec =
-      persistedSnap.shipping_amount_brl != null ? toDecimal(persistedSnap.shipping_amount_brl) : null;
+    const shipDec = isFlexDelivery
+      ? new Decimal(0)
+      : persistedSnap.shipping_amount_brl != null
+        ? toDecimal(persistedSnap.shipping_amount_brl)
+        : null;
 
     const rebateResolved = resolveMercadoLivreMarketplaceRebate({
       feeGrossDec,
       line: line && typeof line === "object" ? line : null,
+      qty: resolveSaleQuantity(item, line),
       logContext: {
         item_id: item.id != null ? String(item.id) : null,
         external_order_id:
@@ -749,9 +784,17 @@ export function resolveMercadoLivreSaleRevenueSnapshot(item, order, listing = nu
     const rebateDec =
       explicitRebate?.amount_brl != null ? toDecimal(explicitRebate.amount_brl) : null;
 
+    const shippingBonusResolved = resolveMercadoLivreShippingBonusForFinancial({
+      order: orderRaw,
+      line,
+      shipmentSnapshot: shipmentSnapshotEarly,
+    });
+    const shippingBonusDec = shippingBonusResolved.bonusDec;
+
     let netDec = toDecimal(persistedSnap.net_received_amount_brl);
     if (grossDec != null && feeGrossDec != null && shipDec != null) {
       netDec = grossDec.minus(feeGrossDec).minus(shipDec);
+      if (shippingBonusDec != null) netDec = netDec.plus(shippingBonusDec);
       if (rebateDec != null) netDec = netDec.plus(rebateDec);
     }
 
@@ -767,8 +810,12 @@ export function resolveMercadoLivreSaleRevenueSnapshot(item, order, listing = nu
       listing_type_id: listingTypeId,
       listing_type_label:
         marketplaceFee?.listing_type_label ?? formatMercadoLivreListingTypeLabel(listingTypeId),
-      shipping_amount_brl:
-        persistedSnap.shipping_amount_brl != null ? String(persistedSnap.shipping_amount_brl) : null,
+      shipping_amount_brl: isFlexDelivery
+        ? "0.00"
+        : persistedSnap.shipping_amount_brl != null
+          ? String(persistedSnap.shipping_amount_brl)
+          : null,
+      shipping_bonus_brl: moneyDecimal(shippingBonusDec),
       marketplace_rebate: explicitRebate,
       positive_adjustments_brl: rebateDec != null ? moneyDecimal(rebateDec) : null,
       net_received_amount_brl: moneyDecimal(netDec),
@@ -782,7 +829,8 @@ export function resolveMercadoLivreSaleRevenueSnapshot(item, order, listing = nu
             : persistedSnap.positive_adjustments_brl != null
               ? "derived_from_gross_minus_subsidy"
               : null,
-        shipping: "s7_financial_snapshot",
+        shipping: isFlexDelivery ? "flex_no_shipping_charge" : "s7_financial_snapshot",
+        shipping_bonus: shippingBonusResolved.source,
         positive_adjustments: "s7_financial_snapshot",
         net: "s7_financial_snapshot",
         line: "s7_financial_snapshot",
@@ -823,6 +871,13 @@ export function resolveMercadoLivreSaleRevenueSnapshot(item, order, listing = nu
   const shipDec = shipResult.ship;
   const shipSource = shipResult.source;
 
+  const shippingBonusResolved = resolveMercadoLivreShippingBonusForFinancial({
+    order: orderRaw,
+    line,
+    shipmentSnapshot: shipmentSnapshotEarly,
+  });
+  const shippingBonusDec = shippingBonusResolved.bonusDec;
+
   const feePercentStr =
     marketplaceFee?.percentage ??
     (feeResult.feePercentHint != null
@@ -837,6 +892,7 @@ export function resolveMercadoLivreSaleRevenueSnapshot(item, order, listing = nu
   const rebateResolved = resolveMercadoLivreMarketplaceRebate({
     feeGrossDec: feeDec,
     line: line && typeof line === "object" ? line : null,
+    qty,
     logContext: {
       item_id: item.id != null ? String(item.id) : null,
       external_order_id:
@@ -858,6 +914,7 @@ export function resolveMercadoLivreSaleRevenueSnapshot(item, order, listing = nu
   if (grossDec != null && feeDec != null) {
     let computed = grossDec.minus(feeDec);
     if (shipDec != null) computed = computed.minus(shipDec);
+    if (shippingBonusDec != null) computed = computed.plus(shippingBonusDec);
     if (positiveAdjDec != null) computed = computed.plus(positiveAdjDec);
     netDec = computed;
     netSource = "computed";
@@ -867,14 +924,16 @@ export function resolveMercadoLivreSaleRevenueSnapshot(item, order, listing = nu
     gross_source: grossSource,
     fee: feeResult.debug,
     shipping: shipResult.debug,
+    shipping_bonus_source: shippingBonusResolved.source,
     positive_adjustments_source: positiveSource,
     net_calculation: {
       gross: moneyDecimal(grossDec),
       fee: moneyDecimal(feeDec),
       shipping: moneyDecimal(shipDec),
+      shipping_bonus: moneyDecimal(shippingBonusDec),
       positive_adjustments: moneyDecimal(positiveAdjDec),
       net: moneyDecimal(netDec),
-      formula: "gross - fee - shipping + positive_adjustments",
+      formula: "gross - fee - shipping + shipping_bonus + positive_adjustments",
     },
   };
 
@@ -890,6 +949,7 @@ export function resolveMercadoLivreSaleRevenueSnapshot(item, order, listing = nu
     listing_type_id: listingTypeId,
     listing_type_label: listingTypeLabel,
     shipping_amount_brl: moneyDecimal(shipDec),
+    shipping_bonus_brl: moneyDecimal(shippingBonusDec),
     marketplace_rebate: explicitRebate,
     positive_adjustments_brl: moneyDecimal(positiveAdjDec),
     net_received_amount_brl: moneyDecimal(netDec),
@@ -898,6 +958,7 @@ export function resolveMercadoLivreSaleRevenueSnapshot(item, order, listing = nu
       gross: grossSource,
       fee: feeSource,
       shipping: shipSource,
+      shipping_bonus: shippingBonusResolved.source,
       positive_adjustments: positiveSource,
       line: line ? "order_or_item_line" : null,
     },
@@ -920,6 +981,491 @@ export function resolveSaleMarketplaceRevenue(item, order, listing = null) {
   return resolveMercadoLivreSaleRevenueSnapshot(item, order, listing);
 }
 
+/** @param {string} s */
+function isTechnicalPromotionToken(s) {
+  const t = s.trim();
+  if (!t) return true;
+  if (/^promo[cç][aã]o\s*\(/i.test(t)) return true;
+  if (/^offer-/i.test(t)) return true;
+  if (/^p-ml[bai]/i.test(t)) return true;
+  return false;
+}
+
+/** @param {Record<string, unknown>} detail */
+function humanizeDiscountDetailName(detail) {
+  const supplier =
+    detail.supplier && typeof detail.supplier === "object"
+      ? /** @type {Record<string, unknown>} */ (detail.supplier)
+      : {};
+  const meta =
+    detail.metadata && typeof detail.metadata === "object"
+      ? /** @type {Record<string, unknown>} */ (detail.metadata)
+      : {};
+
+  for (const key of ["promotion_name", "campaign_name", "name", "title", "label"]) {
+    const raw = meta[key] ?? supplier[key] ?? detail[key];
+    if (raw == null) continue;
+    const s = String(raw).trim();
+    if (s && !isTechnicalPromotionToken(s)) return s;
+  }
+
+  const typeRaw = String(detail.type ?? meta.promotion_type ?? supplier.promotion_type ?? "")
+    .trim()
+    .toLowerCase();
+  const discountType = String(meta.discount_type ?? supplier.discount_type ?? "")
+    .trim()
+    .toLowerCase();
+
+  if (
+    typeRaw.includes("percent") ||
+    typeRaw.includes("porcentagem") ||
+    discountType.includes("percent") ||
+    discountType.includes("porcentagem") ||
+    typeRaw === "custom"
+  ) {
+    return "Desconto por porcentagem";
+  }
+
+  if (typeRaw.includes("price_discount") || (typeRaw.includes("price") && typeRaw.includes("discount"))) {
+    return "Desconto no preço";
+  }
+
+  if (typeRaw === "discount") return "Desconto por porcentagem";
+
+  const meli = supplier.meli_campaign != null ? String(supplier.meli_campaign).trim() : "";
+  if (meli && !/^p-ml[bai]/i.test(meli)) return meli;
+
+  return null;
+}
+
+/** @param {unknown} discountsPayload */
+function flattenSaleDiscountDetails(discountsPayload) {
+  /** @type {Record<string, unknown>[]} */
+  const details = [];
+
+  const pushDetail = (row) => {
+    if (!row || typeof row !== "object") return;
+    details.push(/** @type {Record<string, unknown>} */ (row));
+  };
+
+  const walkCoupon = (coupon) => {
+    if (!coupon || typeof coupon !== "object") return;
+    const c = /** @type {Record<string, unknown>} */ (coupon);
+    const inner = c.details;
+    if (Array.isArray(inner)) {
+      for (const d of inner) pushDetail(d);
+    }
+    pushDetail(c);
+  };
+
+  if (Array.isArray(discountsPayload)) {
+    for (const row of discountsPayload) walkCoupon(row);
+  } else if (discountsPayload && typeof discountsPayload === "object") {
+    const root = /** @type {Record<string, unknown>} */ (discountsPayload);
+    const arr = root.details ?? root.results ?? root.discounts ?? root.coupons ?? root.items;
+    if (Array.isArray(arr)) {
+      for (const row of arr) walkCoupon(row);
+    } else {
+      walkCoupon(root);
+    }
+  }
+
+  return details;
+}
+
+/**
+ * @param {Record<string, unknown>} discountItem
+ * @param {string[]} matchKeys
+ * @param {number} orderLineCount
+ */
+function saleDiscountItemMatchesLine(discountItem, matchKeys, orderLineCount) {
+  if (matchKeys.length === 0) return orderLineCount <= 1;
+
+  const listingId = discountItem.id != null ? String(discountItem.id).trim() : "";
+  const orderItemId = discountItem.order_item_id != null ? String(discountItem.order_item_id).trim() : "";
+  const elementId = discountItem.element_id != null ? String(discountItem.element_id).trim() : "";
+
+  if (orderItemId && matchKeys.includes(orderItemId)) return true;
+  if (listingId && matchKeys.includes(listingId)) return true;
+  if (elementId && matchKeys.includes(elementId)) return true;
+  if (orderLineCount <= 1) return true;
+
+  return false;
+}
+
+/**
+ * @param {Record<string, unknown> | null | undefined} line
+ * @param {string | null | undefined} externalOrderItemId
+ * @param {string | null | undefined} externalListingId
+ */
+function collectSaleDiscountLineMatchKeys(line, externalOrderItemId = null, externalListingId = null) {
+  /** @type {string[]} */
+  const keys = [];
+  const push = (v) => {
+    const s = v != null ? String(v).trim() : "";
+    if (s && !keys.includes(s)) keys.push(s);
+  };
+
+  push(externalOrderItemId);
+  push(externalListingId);
+  if (!line || typeof line !== "object") return keys;
+
+  push(line.id);
+  push(line.order_item_id);
+  push(line.item_id);
+  const item = line.item && typeof line.item === "object" ? /** @type {Record<string, unknown>} */ (line.item) : null;
+  if (item) {
+    push(item.id);
+    push(item.item_id);
+  }
+
+  return keys;
+}
+
+/**
+ * @param {number} amount
+ * @param {Record<string, unknown> | null | undefined} line
+ * @param {number} qty
+ */
+function isSaleItemPriceGapMislabeledAsSaleFee(amount, line, qty) {
+  if (!line || amount == null || amount <= 0) return false;
+  const unit = parseMlMoney(line.unit_price ?? line.discounted_unit_price);
+  const grossPrice = parseMlMoney(line.gross_price);
+  if (unit == null || grossPrice == null) return false;
+  const q = qty > 0 ? Math.trunc(qty) : 1;
+  const saleLineTotal = unit * q;
+  if (grossPrice <= saleLineTotal + 0.01) return false;
+  return Math.abs(grossPrice - saleLineTotal - amount) <= 0.08;
+}
+
+/** @param {Record<string, unknown> | null | undefined} order */
+function resolveOrderDiscountsSnapshot(order) {
+  const orderRaw =
+    order?.raw_json && typeof order.raw_json === "object" ? /** @type {Record<string, unknown>} */ (order.raw_json) : null;
+  if (!orderRaw) return null;
+
+  const fin =
+    orderRaw._s7_financial && typeof orderRaw._s7_financial === "object"
+      ? /** @type {Record<string, unknown>} */ (orderRaw._s7_financial)
+      : null;
+
+  return fin?.discounts_snapshot ?? orderRaw._s7_discounts ?? orderRaw.discounts ?? null;
+}
+
+/** @param {Decimal} originalDec @param {Decimal} saleDec */
+function deriveSaleDiscountPercentString(originalDec, saleDec) {
+  if (originalDec.lte(0) || saleDec.gte(originalDec)) return null;
+  const pct = originalDec.minus(saleDec).div(originalDec).mul(100);
+  const rounded = pct.toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
+  const asInt = rounded.toDecimalPlaces(0, Decimal.ROUND_HALF_UP);
+  if (rounded.minus(asInt).abs().lte(new Decimal("0.04"))) {
+    return asInt.toFixed(0);
+  }
+  return rounded.toFixed(2);
+}
+
+/**
+ * Mescla campos de preço da linha canônica do pedido ML (order_items) quando o snapshot do item não tem gross_price.
+ *
+ * @param {Record<string, unknown>} item
+ * @param {Record<string, unknown> | null | undefined} order
+ * @param {Record<string, unknown> | null | undefined} line
+ */
+function mergeOrderLinePricingFields(item, order, line) {
+  const orderRaw =
+    order?.raw_json && typeof order.raw_json === "object" ? /** @type {Record<string, unknown>} */ (order.raw_json) : null;
+  if (!orderRaw) return line;
+
+  const extItem =
+    item.external_order_item_id != null
+      ? String(item.external_order_item_id).trim()
+      : item.external_item_id != null
+        ? String(item.external_item_id).trim()
+        : "";
+  const extListing = item.external_listing_id != null ? String(item.external_listing_id).trim() : "";
+  const orderLine = findMercadoLivreOrderLine(orderRaw, extItem || null, extListing || null);
+  if (!orderLine) return line;
+
+  const base = line && typeof line === "object" ? { ...line } : { ...orderLine };
+  for (const key of [
+    "gross_price",
+    "full_unit_price",
+    "base_unit_price",
+    "original_unit_price",
+    "unit_price",
+    "discounted_unit_price",
+    "quantity",
+  ]) {
+    if (parseMlMoney(base[key]) == null && parseMlMoney(orderLine[key]) != null) {
+      base[key] = orderLine[key];
+    }
+  }
+  if ((!base.item || typeof base.item !== "object") && orderLine.item && typeof orderLine.item === "object") {
+    base.item = orderLine.item;
+  }
+  return base;
+}
+
+/**
+ * Valor do desconto de preço aplicado na linha (GET /orders/:id/discounts), sem cupom/cashback.
+ *
+ * @param {Record<string, unknown>} item
+ * @param {Record<string, unknown> | null | undefined} order
+ * @param {Record<string, unknown> | null | undefined} line
+ * @param {number} qty
+ */
+function resolveLinePriceDiscountAmountBrl(item, order, line, qty) {
+  const snapshot = resolveOrderDiscountsSnapshot(order);
+  if (snapshot == null) return null;
+
+  const orderRaw =
+    order?.raw_json && typeof order.raw_json === "object" ? /** @type {Record<string, unknown>} */ (order.raw_json) : null;
+  const orderLineCount = Array.isArray(orderRaw?.order_items) ? orderRaw.order_items.length : 1;
+
+  const externalOrderItemId =
+    item.external_order_item_id != null ? String(item.external_order_item_id).trim() : null;
+  const externalListingId = item.external_listing_id != null ? String(item.external_listing_id).trim() : null;
+
+  const matchKeys = collectSaleDiscountLineMatchKeys(line, externalOrderItemId, externalListingId);
+  const details = flattenSaleDiscountDetails(snapshot);
+  let best = 0;
+
+  for (const d of details) {
+    const type = String(d.type ?? "").trim().toLowerCase();
+    if (type === "coupon" || type === "cashback") continue;
+
+    const discountItems = Array.isArray(d.items) ? d.items : [];
+    let amountForLine = 0;
+
+    if (discountItems.length > 0) {
+      for (const rawItem of discountItems) {
+        if (!rawItem || typeof rawItem !== "object") continue;
+        const it = /** @type {Record<string, unknown>} */ (rawItem);
+        if (!saleDiscountItemMatchesLine(it, matchKeys, orderLineCount)) continue;
+        const amounts =
+          it.amounts && typeof it.amounts === "object" ? /** @type {Record<string, unknown>} */ (it.amounts) : {};
+        const amt = parseMlMoney(amounts.total ?? amounts.seller ?? it.amount ?? d.amount);
+        if (amt != null && amt > 0) amountForLine += amt;
+      }
+    } else {
+      const amt = parseMlMoney(d.amount ?? d.value ?? d.coupon_amount ?? d.total);
+      if (amt != null && amt > 0) amountForLine = amt;
+    }
+
+    if (amountForLine > best) best = amountForLine;
+  }
+
+  return best > 0 ? best : null;
+}
+
+/**
+ * @param {Record<string, unknown> | null | undefined} line
+ * @param {number} qty
+ * @param {Decimal} saleGrossDec
+ * @param {Record<string, unknown>} item
+ * @param {Record<string, unknown> | null | undefined} order
+ */
+function resolveOriginalProductPriceDec(line, qty, saleGrossDec, item, order) {
+  if (!line || typeof line !== "object") return null;
+
+  const q = qty > 0 ? Math.trunc(qty) : 1;
+  const unitSale = parseMlMoney(line.unit_price ?? line.discounted_unit_price ?? line.paid_unit_price);
+  const saleUnitDec =
+    unitSale != null
+      ? new Decimal(unitSale)
+      : q > 0
+        ? saleGrossDec.div(q)
+        : saleGrossDec;
+
+  const itemObj =
+    line.item && typeof line.item === "object" ? /** @type {Record<string, unknown>} */ (line.item) : null;
+
+  /** @type {number[]} */
+  const catalogUnitCandidates = [];
+  for (const key of ["full_unit_price", "base_unit_price", "original_unit_price"]) {
+    const v = parseMlMoney(line[key]);
+    if (v != null && v > 0) catalogUnitCandidates.push(v);
+  }
+  if (itemObj) {
+    for (const key of ["original_price", "full_price", "base_price"]) {
+      const v = parseMlMoney(itemObj[key]);
+      if (v != null && v > 0) catalogUnitCandidates.push(v);
+    }
+  }
+
+  for (const catalogUnit of catalogUnitCandidates) {
+    if (catalogUnit <= saleUnitDec.toNumber() + 0.01) continue;
+    const originalDec = new Decimal(catalogUnit).mul(q);
+    if (originalDec.gt(saleGrossDec)) return originalDec;
+  }
+
+  const grossPrice = parseMlMoney(line.gross_price);
+  if (grossPrice != null && grossPrice > 0) {
+    const originalDec = new Decimal(grossPrice);
+    if (originalDec.gt(saleGrossDec)) return originalDec;
+  }
+
+  const lineDiscounts =
+    line.discounts && typeof line.discounts === "object"
+      ? /** @type {Record<string, unknown>} */ (line.discounts)
+      : null;
+  const discountFull = parseMlMoney(
+    lineDiscounts?.full ?? lineDiscounts?.discount ?? lineDiscounts?.amount,
+  );
+  if (discountFull != null && discountFull > 0 && unitSale != null) {
+    const originalDec = new Decimal(unitSale).plus(discountFull).mul(q);
+    if (originalDec.gt(saleGrossDec)) return originalDec;
+  }
+
+  const discountAmt = resolveLinePriceDiscountAmountBrl(item, order, line, qty);
+  if (discountAmt != null && discountAmt > 0) {
+    const originalDec = saleGrossDec.plus(discountAmt);
+    if (originalDec.gt(saleGrossDec)) return originalDec;
+  }
+
+  if (unitSale != null && grossPrice != null && grossPrice > unitSale * q + 0.01) {
+    return new Decimal(grossPrice);
+  }
+
+  return null;
+}
+
+/**
+ * @param {Record<string, unknown>} item
+ * @param {Record<string, unknown> | null | undefined} order
+ * @param {Record<string, unknown> | null | undefined} line
+ * @param {Decimal} originalDec
+ * @param {Decimal} saleGrossDec
+ * @param {number} qty
+ */
+function resolvePromotionMetaFromOrderDiscounts(item, order, line, originalDec, saleGrossDec, qty) {
+  const snapshot = resolveOrderDiscountsSnapshot(order);
+  if (snapshot == null) return { name: null, percentFromApi: null };
+
+  const orderRaw =
+    order?.raw_json && typeof order.raw_json === "object" ? /** @type {Record<string, unknown>} */ (order.raw_json) : null;
+  const orderLineCount = Array.isArray(orderRaw?.order_items) ? orderRaw.order_items.length : 1;
+
+  const externalOrderItemId =
+    item.external_order_item_id != null ? String(item.external_order_item_id).trim() : null;
+  const externalListingId = item.external_listing_id != null ? String(item.external_listing_id).trim() : null;
+
+  const matchKeys = collectSaleDiscountLineMatchKeys(line, externalOrderItemId, externalListingId);
+  const gapNum = originalDec.minus(saleGrossDec).toNumber();
+
+  const details = flattenSaleDiscountDetails(snapshot);
+  /** @type {{ name: string | null; amount: number; percentFromApi: string | null } | null} */
+  let best = null;
+
+  for (const d of details) {
+    const type = String(d.type ?? "").trim().toLowerCase();
+    if (type === "coupon" || type === "cashback") continue;
+
+    const supplier =
+      d.supplier && typeof d.supplier === "object" ? /** @type {Record<string, unknown>} */ (d.supplier) : {};
+    const funding = String(supplier.funding_mode ?? d.funding_mode ?? "").trim().toLowerCase();
+
+    const discountItems = Array.isArray(d.items) ? d.items : [];
+    let amountForLine = 0;
+
+    if (discountItems.length > 0) {
+      for (const rawItem of discountItems) {
+        if (!rawItem || typeof rawItem !== "object") continue;
+        const it = /** @type {Record<string, unknown>} */ (rawItem);
+        if (!saleDiscountItemMatchesLine(it, matchKeys, orderLineCount)) continue;
+
+        const amounts =
+          it.amounts && typeof it.amounts === "object" ? /** @type {Record<string, unknown>} */ (it.amounts) : {};
+        const amt = parseMlMoney(amounts.total ?? amounts.seller ?? it.amount ?? d.amount);
+        if (amt != null && amt > 0) amountForLine += amt;
+      }
+    } else {
+      const amt = parseMlMoney(d.amount ?? d.value ?? d.coupon_amount ?? d.total);
+      if (amt != null && amt > 0) amountForLine = amt;
+    }
+
+    if (amountForLine <= 0) continue;
+
+    const matchesGap =
+      Math.abs(amountForLine - gapNum) <= 0.08 ||
+      (funding === "sale_fee" && isSaleItemPriceGapMislabeledAsSaleFee(amountForLine, line, qty));
+
+    if (!matchesGap) continue;
+
+    const name = humanizeDiscountDetailName(d);
+    const pctApi = parseMlMoney(
+      d.applied_percentage ??
+        d.percentage ??
+        d.percent ??
+        supplier.applied_percentage ??
+        supplier.percentage,
+    );
+    const percentFromApi =
+      pctApi != null && pctApi > 0 && pctApi <= 100
+        ? new Decimal(pctApi).toDecimalPlaces(2, Decimal.ROUND_HALF_UP).toFixed(2)
+        : null;
+
+    if (!best || amountForLine >= best.amount) {
+      best = { name, amount: amountForLine, percentFromApi };
+    }
+  }
+
+  if (best) {
+    return { name: best.name, percentFromApi: best.percentFromApi };
+  }
+
+  const discountFin = resolveMercadoLivreDiscountsFinancials(
+    snapshot,
+    externalOrderItemId,
+    line,
+    orderLineCount,
+  );
+  if (discountFin.sale_fee_subsidy_brl != null) {
+    const subsidy = parseMlMoney(discountFin.sale_fee_subsidy_brl);
+    if (subsidy != null && Math.abs(subsidy - gapNum) <= 0.08) {
+      return { name: "Desconto por porcentagem", percentFromApi: null };
+    }
+  }
+
+  return { name: null, percentFromApi: null };
+}
+
+/**
+ * Promoção aplicada nesta venda (não lista promoções do anúncio).
+ *
+ * @param {Record<string, unknown>} item
+ * @param {Record<string, unknown> | null | undefined} order
+ */
+export function resolveSaleAppliedPromotion(item, order) {
+  const lineRaw = resolveEffectiveMercadoLivreSaleLine(item, order);
+  const line = mergeOrderLinePricingFields(item, order, lineRaw);
+  const qty = resolveSaleQuantity(item, line);
+  const { gross: saleGrossDec } = resolveSaleGrossBrl(item, line);
+
+  if (!saleGrossDec || saleGrossDec.lte(0)) return null;
+
+  const originalDec = resolveOriginalProductPriceDec(line, qty, saleGrossDec, item, order);
+  if (!originalDec || !originalDec.gt(saleGrossDec)) return null;
+
+  const promoMeta = resolvePromotionMetaFromOrderDiscounts(item, order, line, originalDec, saleGrossDec, qty);
+  const promotionName =
+    promoMeta.name != null && String(promoMeta.name).trim() !== ""
+      ? String(promoMeta.name).trim()
+      : "Promoção";
+
+  const promotionDiscountPercent =
+    promoMeta.percentFromApi != null
+      ? promoMeta.percentFromApi
+      : deriveSaleDiscountPercentString(originalDec, saleGrossDec);
+
+  return {
+    original_product_price_brl: moneyDecimal(originalDec),
+    promotion_name: promotionName,
+    promotion_discount_percent: promotionDiscountPercent,
+    has_applied_promotion: true,
+  };
+}
+
 /**
  * @param {Record<string, unknown>} item
  * @param {Record<string, unknown> | null | undefined} order
@@ -927,9 +1473,14 @@ export function resolveSaleMarketplaceRevenue(item, order, listing = null) {
  */
 export function buildSaleDetailMarketplaceRevenue(item, order, listing = null) {
   const marketplaceRevenue = resolveSaleMarketplaceRevenue(item, order, listing);
+  const appliedSalePromotion = resolveSaleAppliedPromotion(item, order);
 
   return {
-    marketplace_revenue: marketplaceRevenue,
+    marketplace_revenue: {
+      ...marketplaceRevenue,
+      applied_sale_promotion: appliedSalePromotion,
+    },
+    applied_sale_promotion: appliedSalePromotion,
     marketplace_fee: marketplaceRevenue.marketplace_fee ?? null,
     gross_amount: marketplaceRevenue.gross_sale_amount_brl,
     sale_price: marketplaceRevenue.gross_sale_amount_brl,
@@ -942,6 +1493,7 @@ export function buildSaleDetailMarketplaceRevenue(item, order, listing = null) {
       marketplaceRevenue.marketplace_fee?.listing_type_label ?? marketplaceRevenue.listing_type_label,
     shipping_cost_amount: marketplaceRevenue.shipping_amount_brl,
     shipping_cost: marketplaceRevenue.shipping_amount_brl,
+    shipping_bonus_brl: marketplaceRevenue.shipping_bonus_brl ?? null,
     positive_adjustments_brl: marketplaceRevenue.positive_adjustments_brl,
     marketplace_rebate: marketplaceRevenue.marketplace_rebate ?? null,
     net_received_amount: marketplaceRevenue.net_received_amount_brl,

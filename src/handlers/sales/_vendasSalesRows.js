@@ -5,7 +5,16 @@
 
 import { computeProductReadiness } from "../../domain/productReadiness.js";
 import { hasRequiredProductCosts, normalizeSkuForDbLookup } from "../../domain/productCatalogCompleteness.js";
+import { buildSaleDetailInternalCostsContract } from "../../domain/sales/saleDetailInternalCosts.js";
+import { resolveSaleOperationalStatusLabel, attachFreshMercadoLivreShipmentSnapshot } from "../../domain/sales/saleDetailGeneral.js";
+import { getValidMLToken } from "../ml/_helpers/mlToken.js";
+import {
+  resolveEffectiveMercadoLivreSaleLine,
+  resolveListingTypeId,
+} from "../../domain/sales/saleDetailMarketplaceRevenue.js";
+import { buildMercadoLivreMarketplaceFeeContract } from "../../domain/sales/mercadoLivreMarketplaceFee.js";
 import { extractMlLineThumbnail } from "../ml/_helpers/mlSalesPersist.js";
+import Decimal from "decimal.js";
 
 /** @param {unknown} v */
 export function toNum(v) {
@@ -322,22 +331,44 @@ export function titleFromOrderItemsArray(orderRaw, externalOrderItemId) {
  * @param {string | null | undefined} externalOrderItemId
  * @returns {Record<string, unknown> | null}
  */
-export function findMercadoLivreOrderLine(orderRaw, externalOrderItemId) {
+export function findMercadoLivreOrderLine(orderRaw, externalOrderItemId, externalListingId = null) {
   if (!orderRaw || typeof orderRaw !== "object") return null;
   const want = externalOrderItemId != null ? String(externalOrderItemId).trim() : "";
-  if (!want) return null;
+  const wantListing = externalListingId != null ? String(externalListingId).trim() : "";
   const arr = orderRaw.order_items;
   if (!Array.isArray(arr)) return null;
-  for (const line of arr) {
-    if (!line || typeof line !== "object") continue;
-    const lid =
-      line.id != null
-        ? String(line.id).trim()
-        : line.order_item_id != null
-          ? String(line.order_item_id).trim()
-          : "";
-    if (lid && lid === want) return /** @type {Record<string, unknown>} */ (line);
+
+  if (want) {
+    for (const line of arr) {
+      if (!line || typeof line !== "object") continue;
+      const lid =
+        line.id != null
+          ? String(line.id).trim()
+          : line.order_item_id != null
+            ? String(line.order_item_id).trim()
+            : "";
+      if (lid && lid === want) return /** @type {Record<string, unknown>} */ (line);
+    }
   }
+
+  if (wantListing) {
+    for (const line of arr) {
+      if (!line || typeof line !== "object") continue;
+      const itemObj = line.item && typeof line.item === "object" ? /** @type {Record<string, unknown>} */ (line.item) : null;
+      const listingRef =
+        itemObj?.id != null
+          ? String(itemObj.id).trim()
+          : line.item_id != null
+            ? String(line.item_id).trim()
+            : "";
+      if (listingRef && listingRef === wantListing) return /** @type {Record<string, unknown>} */ (line);
+    }
+  }
+
+  if (arr.length === 1 && arr[0] && typeof arr[0] === "object") {
+    return /** @type {Record<string, unknown>} */ (arr[0]);
+  }
+
   return null;
 }
 
@@ -663,6 +694,112 @@ export function buildFinancialsBlock(item, productCostLine) {
 }
 
 /**
+ * Expõe `internal_costs.internal_tax_brl` na lista — mesma função de domínio do Raio-X.
+ * @param {Record<string, unknown>} financials
+ * @param {{
+ *   item: Record<string, unknown>;
+ *   product: Record<string, unknown> | null | undefined;
+ *   sellerCompany: Record<string, unknown> | null | undefined;
+ *   sellerCompanyId: string | null;
+ *   marketplaceAccountId: string | null;
+ * }} ctx
+ */
+function attachListFinancialsInternalCosts(financials, ctx) {
+  const { item, product, sellerCompany, sellerCompanyId, marketplaceAccountId } = ctx;
+  const qty = Number.parseInt(String(item.quantity ?? "1"), 10) || 1;
+  const grossN = toNum(item.gross_amount);
+  const grossDec = grossN != null ? new Decimal(grossN) : null;
+
+  const productId =
+    item.product_id != null
+      ? String(item.product_id).trim()
+      : product?.id != null
+        ? String(product.id).trim()
+        : "";
+
+  let taxPercent = null;
+  /** @type {string | null} */
+  let taxPercentSource = "missing_tax_profile";
+  const rateN = toNum(sellerCompany?.default_tax_rate);
+  if (rateN != null && rateN >= 0 && rateN <= 100) {
+    taxPercent = String(rateN);
+    taxPercentSource = "seller_company_tax_profile";
+  }
+
+  const internalCosts = buildSaleDetailInternalCostsContract({
+    product: product ?? null,
+    productId: productId || null,
+    qty,
+    grossDec,
+    taxPercent,
+    taxPercentSource,
+    seller_company_id: sellerCompanyId,
+    marketplace_account_id: marketplaceAccountId,
+  });
+
+  financials.internal_costs = internalCosts;
+  financials.internal_taxes = internalCosts.internal_tax_brl;
+  financials.internal_tax_amount = internalCosts.internal_tax_brl;
+  return financials;
+}
+
+/**
+ * Tarifa/comissão e tipo do anúncio — mesmo contrato do Raio-X (buildMercadoLivreMarketplaceFeeContract).
+ * @param {Record<string, unknown>} financials
+ * @param {{
+ *   item: Record<string, unknown>;
+ *   order: Record<string, unknown> | null | undefined;
+ *   listing: Record<string, unknown> | null | undefined;
+ *   marketplace: string;
+ * }} ctx
+ */
+function attachListFinancialsMarketplaceFee(financials, ctx) {
+  const { item, order, listing, marketplace } = ctx;
+  const mp = String(marketplace ?? "").trim().toLowerCase();
+  if (mp !== "mercado_livre" && mp !== "mercadolivre") return financials;
+
+  const saleLine = resolveEffectiveMercadoLivreSaleLine(item, order ?? null);
+  const listingTypeId = resolveListingTypeId(saleLine, listing ?? null);
+  const salePrice = financials.sale_price ?? toMoneyString(item.gross_amount);
+  const qty = Number.parseInt(String(item.quantity ?? "1"), 10) || 1;
+  const extItem =
+    item.external_order_item_id != null
+      ? String(item.external_order_item_id).trim()
+      : item.external_item_id != null
+        ? String(item.external_item_id).trim()
+        : null;
+
+  const contract = buildMercadoLivreMarketplaceFeeContract({
+    item,
+    order: order ?? null,
+    listing: listing ?? null,
+    line: saleLine,
+    listing_type_id: listingTypeId,
+    sale_price_brl: salePrice,
+    qty,
+    external_order_item_id: extItem,
+  });
+
+  if (!contract || typeof contract !== "object") return financials;
+
+  financials.marketplace_fee = {
+    amount_brl: contract.amount_brl ?? financials.commission ?? null,
+    percentage: contract.percentage ?? null,
+    listing_type_label: contract.listing_type_label ?? null,
+    listing_type: contract.listing_type ?? null,
+  };
+  if (contract.percentage != null) financials.marketplace_fee_percent = String(contract.percentage);
+  if (contract.listing_type_label != null) {
+    financials.listing_type_label = String(contract.listing_type_label);
+    financials.marketplace_fee_tier_label = String(contract.listing_type_label);
+  }
+  if (contract.amount_brl != null && String(contract.amount_brl).trim() !== "") {
+    financials.commission = String(contract.amount_brl);
+  }
+  return financials;
+}
+
+/**
  * @param {{
  *   item: Record<string, unknown>;
  *   order: Record<string, unknown> | null | undefined;
@@ -675,7 +812,14 @@ export function buildFinancialsBlock(item, productCostLine) {
  */
 export function buildVendasListRow(ctx) {
   const { item, order, listing, product, account, customer, sellerCompany } = ctx;
-  const orderRaw = order?.raw_json && typeof order.raw_json === "object" ? /** @type {Record<string, unknown>} */ (order.raw_json) : null;
+  const orderRaw =
+    order?.raw_json && typeof order.raw_json === "object"
+      ? /** @type {Record<string, unknown>} */ (order.raw_json)
+      : null;
+  const itemRaw =
+    item.raw_json && typeof item.raw_json === "object"
+      ? /** @type {Record<string, unknown>} */ (item.raw_json)
+      : null;
 
   const buyerDisplayName = resolveBuyerDisplayName(orderRaw, customer ?? null);
   const buyerThumb = extractBuyerThumbFromOrderRaw(orderRaw);
@@ -718,7 +862,45 @@ export function buildVendasListRow(ctx) {
 
   const qty = Number.parseInt(String(item.quantity ?? "1"), 10) || 1;
   const costLine = productCostLineTotalBrl(product, qty);
+
+  const seller_company_id_early =
+    item.seller_company_id != null && String(item.seller_company_id).trim() !== ""
+      ? String(item.seller_company_id).trim()
+      : order?.seller_company_id != null && String(order.seller_company_id).trim() !== ""
+        ? String(order.seller_company_id).trim()
+        : null;
+
+  const marketplace_account_id_early =
+    item.marketplace_account_id != null && String(item.marketplace_account_id).trim() !== ""
+      ? String(item.marketplace_account_id).trim()
+      : order?.marketplace_account_id != null && String(order.marketplace_account_id).trim() !== ""
+        ? String(order.marketplace_account_id).trim()
+        : null;
+
   const financials = buildFinancialsBlock(item, costLine);
+  attachListFinancialsInternalCosts(financials, {
+    item,
+    product,
+    sellerCompany,
+    sellerCompanyId: seller_company_id_early,
+    marketplaceAccountId: marketplace_account_id_early,
+  });
+  attachListFinancialsMarketplaceFee(financials, {
+    item,
+    order,
+    listing,
+    marketplace: item.marketplace != null ? String(item.marketplace) : "",
+  });
+
+  const sale_status_label =
+    resolveSaleOperationalStatusLabel(
+      orderRaw,
+      {
+        order_status: order?.order_status ?? null,
+        order_substatus: order?.order_substatus ?? null,
+      },
+      itemRaw,
+    ) ?? null;
 
   let product_image_url = resolveProductImageUrl(item, listing, product ?? null, orderRaw, extItem || null);
   product_image_url = normalizeSalesUiImageUrl(product_image_url);
@@ -791,6 +973,7 @@ export function buildVendasListRow(ctx) {
     ml_account_alias: account_alias,
     account_logo_url,
     order_status: order?.order_status != null ? String(order.order_status) : null,
+    sale_status_label,
     /** ISO da venda no marketplace — usar para ordenação (mesma prioridade do backend). */
     date_created_marketplace: order?.date_created_marketplace ?? null,
     /** created_at do pedido interno (fallback de estabilidade). */
@@ -819,4 +1002,100 @@ export function buildVendasListRow(ctx) {
     raw_json: item.raw_json ?? null,
     order_raw_json: order?.raw_json ?? null,
   };
+}
+
+/**
+ * Alinha sale_status_label da lista com o Raio-X: snapshot de envio ML atualizado por pedido (mesma rotina do GET /api/sales/detail).
+ * @param {string} userId
+ * @param {Record<string, unknown>[]} items
+ * @param {Map<string, Record<string, unknown>>} ordersById
+ * @param {Record<string, unknown>[]} rows
+ */
+export async function enrichVendasListRowsOperationalStatus(userId, items, ordersById, rows) {
+  if (!Array.isArray(items) || !Array.isArray(rows) || rows.length === 0) return rows;
+
+  const itemById = new Map();
+  for (const it of items) {
+    if (it?.id != null) itemById.set(String(it.id), it);
+  }
+
+  /** @type {Map<string, Record<string, unknown>>} */
+  const orderForGeneralById = new Map();
+  /** @type {Map<string, Promise<Record<string, unknown>>>} */
+  const refreshByOrderId = new Map();
+
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
+    if (!row || typeof row !== "object") continue;
+
+    const itemKey =
+      row.item_id != null
+        ? String(row.item_id)
+        : row.sale_item_id != null
+          ? String(row.sale_item_id)
+          : "";
+    const item = (itemKey && itemById.get(itemKey)) || items[i] || null;
+    if (!item || typeof item !== "object") continue;
+
+    const orderId = item.sales_order_id != null ? String(item.sales_order_id) : "";
+    if (!orderId) continue;
+
+    const order = ordersById.get(orderId);
+    if (!order || typeof order !== "object") continue;
+
+    const marketplace = String(item.marketplace ?? order.marketplace ?? "")
+      .trim()
+      .toLowerCase();
+    if (marketplace !== "mercado_livre" && marketplace !== "mercadolivre") continue;
+
+    const marketplaceAccountId =
+      item.marketplace_account_id != null && String(item.marketplace_account_id).trim() !== ""
+        ? String(item.marketplace_account_id).trim()
+        : order.marketplace_account_id != null && String(order.marketplace_account_id).trim() !== ""
+          ? String(order.marketplace_account_id).trim()
+          : "";
+
+    if (!marketplaceAccountId) continue;
+
+    let orderForGeneral = orderForGeneralById.get(orderId);
+    if (!orderForGeneral) {
+      if (!refreshByOrderId.has(orderId)) {
+        refreshByOrderId.set(
+          orderId,
+          (async () => {
+            try {
+              const token = await getValidMLToken(userId, { marketplaceAccountId });
+              return await attachFreshMercadoLivreShipmentSnapshot(order, token, marketplaceAccountId);
+            } catch {
+              return order;
+            }
+          })(),
+        );
+      }
+      orderForGeneral = await refreshByOrderId.get(orderId);
+      orderForGeneralById.set(orderId, orderForGeneral);
+    }
+
+    const orderRaw =
+      orderForGeneral?.raw_json && typeof orderForGeneral.raw_json === "object"
+        ? /** @type {Record<string, unknown>} */ (orderForGeneral.raw_json)
+        : null;
+    const itemRaw =
+      item.raw_json && typeof item.raw_json === "object"
+        ? /** @type {Record<string, unknown>} */ (item.raw_json)
+        : null;
+
+    row.sale_status_label =
+      resolveSaleOperationalStatusLabel(
+        orderRaw,
+        {
+          order_status: order.order_status != null ? String(order.order_status) : null,
+          order_substatus:
+            order.order_substatus != null ? String(order.order_substatus) : null,
+        },
+        itemRaw,
+      ) ?? null;
+  }
+
+  return rows;
 }

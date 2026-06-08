@@ -7,6 +7,7 @@ import {
 import { extractMarketplaceFeeFromOrderPayments } from "../../services/marketplace/mercadoLivreSaleFinancialEnrichment.js";
 import {
   applyMercadoLivreFeeGrossNetSplit,
+  preferSaleFeeTimesQtyOverCatalogPromo,
   resolveMercadoLivreDiscountsFinancials,
   resolveMercadoLivreSaleFeeGross,
 } from "./mercadoLivreSaleFinancialFormula.js";
@@ -177,13 +178,23 @@ function tryCatalogRateForPromotionalSale(ctx) {
   const line = ctx.line;
   if (!line || typeof line !== "object") return null;
 
+  const qty = Math.max(1, Math.trunc(parseMlMoney(line.quantity) ?? 1));
   const unit = parseMlMoney(line.unit_price ?? line.discounted_unit_price);
   const grossPrice = parseMlMoney(line.gross_price);
   const lineFee = parseMlMoney(line.sale_fee ?? line.listing_fee);
+  const salePrice = parseMlMoney(ctx.sale_price_brl);
   if (unit == null || unit <= 0 || lineFee == null || lineFee <= 0) return null;
-  if (grossPrice == null || grossPrice <= unit * 1.01) return null;
 
   const listingTypeId = line.listing_type_id != null ? String(line.listing_type_id) : null;
+  if (
+    qty > 1 &&
+    preferSaleFeeTimesQtyOverCatalogPromo(line, qty, ctx.sale_price_brl, listingTypeId)
+  ) {
+    return null;
+  }
+
+  if (grossPrice == null || grossPrice <= unit * 1.01) return null;
+
   const norm = normalizeMercadoLivreListingType(listingTypeId);
   const ratesOrdered =
     norm.listing_type === "premium"
@@ -194,7 +205,27 @@ function tryCatalogRateForPromotionalSale(ctx) {
 
   const unitDec = new Decimal(unit);
   const lineFeeDec = new Decimal(lineFee);
+  const lineFeeTotalDec = qty > 1 ? lineFeeDec.mul(qty) : lineFeeDec;
+  const salePriceDec = salePrice != null && salePrice > 0 ? new Decimal(salePrice) : null;
   const exactMatchTolerance = new Decimal("0.02");
+
+  if (salePriceDec != null && qty > 1) {
+    for (const rate of ratesOrdered) {
+      const nominalOnSale = mercadoLivreFeeFromPercentOfGross(salePriceDec, rate, {
+        qty,
+        unitPriceDec: unitDec,
+      });
+      if (nominalOnSale == null) continue;
+      if (nominalOnSale.minus(lineFeeTotalDec).abs().lte(exactMatchTolerance)) {
+        return {
+          amount_brl: moneyDecimal(nominalOnSale),
+          percentage: rate,
+          raw_amount_source_path: "line.sale_fee_x_qty_catalog_rate_on_sale",
+          raw_percentage_source_path: `catalog_rate_${rate}`,
+        };
+      }
+    }
+  }
 
   for (const rate of ratesOrdered) {
     const nominal = mercadoLivreFeeFromPercentOfGross(unitDec, rate);
@@ -211,18 +242,40 @@ function tryCatalogRateForPromotionalSale(ctx) {
 
   /** @type {Array<{ rate: string; nominal: Decimal; netShare: Decimal; rebate: Decimal }>} */
   const candidates = [];
+  const feeForPool = qty > 1 ? lineFeeTotalDec : lineFeeDec;
+
+  if (salePriceDec != null && qty > 1) {
+    for (const rate of ratesOrdered) {
+      const nominal = mercadoLivreFeeFromPercentOfGross(salePriceDec, rate, {
+        qty,
+        unitPriceDec: unitDec,
+      });
+      if (nominal == null || nominal.lte(feeForPool)) continue;
+
+      const netShare = feeForPool.div(nominal);
+      if (netShare.lt(0.35) || netShare.gt(1.01)) continue;
+
+      candidates.push({
+        rate,
+        nominal,
+        netShare,
+        rebate: nominal.minus(feeForPool),
+      });
+    }
+  }
+
   for (const rate of ratesOrdered) {
     const nominal = mercadoLivreFeeFromPercentOfGross(unitDec, rate);
-    if (nominal == null || nominal.lte(lineFeeDec)) continue;
+    if (nominal == null || nominal.lte(feeForPool)) continue;
 
-    const netShare = lineFeeDec.div(nominal);
+    const netShare = feeForPool.div(nominal);
     if (netShare.lt(0.35) || netShare.gt(1.01)) continue;
 
     candidates.push({
       rate,
       nominal,
       netShare,
-      rebate: nominal.minus(lineFeeDec),
+      rebate: nominal.minus(feeForPool),
     });
   }
 
@@ -232,9 +285,18 @@ function tryCatalogRateForPromotionalSale(ctx) {
   const promoWithRebate = candidates.filter((c) => c.rebate.gte(minRebate) && c.netShare.lt(0.98));
   const pool = promoWithRebate.length > 0 ? promoWithRebate : candidates;
 
-  for (const rate of ratesOrdered) {
-    const hit = pool.find((c) => c.rate === rate);
-    if (!hit) continue;
+  if (pool.length > 0) {
+    /** @type {{ rate: string; nominal: Decimal; netShare: Decimal; rebate: Decimal } | undefined} */
+    let hit;
+    if (qty > 1 && salePriceDec != null) {
+      hit = pool.reduce((best, c) => (!best || c.nominal.gt(best.nominal) ? c : best));
+    } else {
+      for (const rate of ratesOrdered) {
+        hit = pool.find((c) => c.rate === rate);
+        if (hit) break;
+      }
+      if (!hit) hit = pool[0];
+    }
     return {
       amount_brl: moneyDecimal(hit.nominal),
       percentage: hit.rate,
@@ -396,6 +458,13 @@ export function buildMercadoLivreMarketplaceFeeContract(ctx) {
     external_order_item_id: ctx.external_order_item_id ?? null,
   });
 
+  const qty =
+    ctx.qty != null && ctx.qty > 1
+      ? Math.trunc(ctx.qty)
+      : line != null
+        ? Math.max(1, Math.trunc(parseMlMoney(line.quantity) ?? 1))
+        : 1;
+
   const promoMatch =
     salePrice !== ""
       ? tryCatalogRateForPromotionalSale({
@@ -413,7 +482,13 @@ export function buildMercadoLivreMarketplaceFeeContract(ctx) {
     percentage != null ? /** @type {const} */ ("explicit_from_marketplace") : null;
   let isEstimated = false;
 
-  if (promoMatch && !explicitPct.percentage) {
+  const skipPromoOverride =
+    !!explicitPct.percentage ||
+    (line != null &&
+      qty > 1 &&
+      preferSaleFeeTimesQtyOverCatalogPromo(line, qty, salePrice, listingTypeId));
+
+  if (promoMatch && !skipPromoOverride) {
     amountBrl = promoMatch.amount_brl;
     percentage = promoMatch.percentage;
     percentageSource = "explicit_from_marketplace";

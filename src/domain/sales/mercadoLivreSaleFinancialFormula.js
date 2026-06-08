@@ -35,6 +35,53 @@ function toQty(v) {
   return q > 0 ? q : 1;
 }
 
+/**
+ * `gross_price` ≈ unit_price × qty indica total da linha, não promo de catálogo por unidade.
+ *
+ * @param {Record<string, unknown> | null | undefined} line
+ * @param {number} qty
+ */
+export function isLineGrossPriceTotalNotUnitPromo(line, qty) {
+  const unit = parseMlMoney(line?.unit_price ?? line?.discounted_unit_price);
+  const grossPrice = parseMlMoney(line?.gross_price);
+  if (unit == null || grossPrice == null || qty < 2) return false;
+  const lineTotal = new Decimal(unit).mul(qty);
+  return new Decimal(grossPrice).minus(lineTotal).abs().lte(new Decimal("0.05"));
+}
+
+/**
+ * Tarifa líquida retida na API (`line.sale_fee`) em escala da linha (× qty quando qty > 1).
+ *
+ * @param {Record<string, unknown> | null | undefined} line
+ * @param {number} qty
+ */
+export function resolveLineSaleFeeNetTotal(line, qty) {
+  const raw = parseMlMoney(line?.sale_fee ?? line?.listing_fee);
+  if (raw == null || raw <= 0) return null;
+  const q = qty > 0 ? Math.trunc(qty) : 1;
+  return q > 1 ? new Decimal(raw).mul(q) : new Decimal(raw);
+}
+
+/**
+ * Prioriza `line.sale_fee × qty` em vez do matcher promocional por unidade.
+ *
+ * @param {Record<string, unknown> | null | undefined} line
+ * @param {number} qty
+ * @param {string | number | null | undefined} salePriceBrl
+ * @param {string | null | undefined} listingTypeId
+ */
+export function preferSaleFeeTimesQtyOverCatalogPromo(line, qty, salePriceBrl, listingTypeId) {
+  if (!line || qty < 2 || !isLineGrossPriceTotalNotUnitPromo(line, qty)) return false;
+
+  const raw = parseMlMoney(line.sale_fee ?? line.listing_fee);
+  const salePrice = parseMlMoney(salePriceBrl);
+  if (raw == null || salePrice == null || salePrice <= 0) return false;
+
+  const totalFee = new Decimal(raw).mul(qty);
+  const grossDec = new Decimal(salePrice);
+  return isFeePlausibleForListing(totalFee, grossDec, listingTypeId ?? null);
+}
+
 /** @param {Decimal} fee @param {Decimal} gross */
 function feePercent(fee, gross) {
   if (gross.isZero()) return null;
@@ -62,6 +109,135 @@ function isShippingPlausible(ship, gross) {
   if (!gross || gross.lte(0)) return true;
   if (ship.gte(gross)) return false;
   return ship.div(gross).lte(0.55);
+}
+
+/** @param {unknown} raw */
+function pickLogisticToken(raw) {
+  if (raw == null || String(raw).trim() === "") return null;
+  return String(raw).trim().toLowerCase();
+}
+
+/**
+ * Venda FLEX (Mercado Envios Flex / self_service): seller não deve ter frete ME descontado
+ * (list_cost − cost / tabela subsidida). Não altera bônus/rebate positivo.
+ *
+ * @param {{
+ *   order?: Record<string, unknown> | null;
+ *   line?: Record<string, unknown> | null;
+ *   shipmentSnapshot?: unknown;
+ *   deliveryType?: unknown;
+ * }} ctx
+ */
+export function isMercadoLivreFlexDeliverySale(ctx) {
+  const order = ctx.order && typeof ctx.order === "object" ? ctx.order : null;
+  const line = ctx.line && typeof ctx.line === "object" ? ctx.line : null;
+  const shipment =
+    ctx.shipmentSnapshot && typeof ctx.shipmentSnapshot === "object"
+      ? /** @type {Record<string, unknown>} */ (ctx.shipmentSnapshot)
+      : null;
+
+  const explicit = pickLogisticToken(ctx.deliveryType);
+  if (explicit === "flex") return true;
+
+  const s7 =
+    order?._s7_delivery && typeof order._s7_delivery === "object"
+      ? /** @type {Record<string, unknown>} */ (order._s7_delivery)
+      : null;
+  const shipping =
+    order?.shipping && typeof order.shipping === "object"
+      ? /** @type {Record<string, unknown>} */ (order.shipping)
+      : null;
+
+  const lineItem =
+    line?.item && typeof line.item === "object" ? /** @type {Record<string, unknown>} */ (line.item) : null;
+
+  const logistic =
+    pickLogisticToken(shipment?.logistic_type) ??
+    pickLogisticToken(s7?.logistic_type) ??
+    pickLogisticToken(shipping?.logistic_type) ??
+    pickLogisticToken(line?.logistic_type) ??
+    pickLogisticToken(lineItem?.logistic_type);
+
+  if (logistic === "flex" || logistic === "self_service") return true;
+
+  return false;
+}
+
+/**
+ * Frete na fórmula financeira da venda (snapshot / Raio-X).
+ * @param {{
+ *   order?: Record<string, unknown> | null;
+ *   line?: Record<string, unknown> | null;
+ *   shipmentSnapshot?: unknown;
+ *   grossDec?: Decimal | null;
+ * }} ctx
+ */
+export function resolveMercadoLivreSaleShippingForFinancial(ctx) {
+  const { order, line, shipmentSnapshot, grossDec = null } = ctx;
+  if (isMercadoLivreFlexDeliverySale({ order, line, shipmentSnapshot })) {
+    return {
+      amount: 0,
+      source: "flex_no_shipping_charge",
+      shipDec: new Decimal(0),
+      candidates: { flex_no_shipping_charge: 0 },
+    };
+  }
+  const resolved = resolveMercadoLivreShippingSellerCost(shipmentSnapshot, grossDec);
+  return {
+    ...resolved,
+    shipDec: resolved.amount != null ? new Decimal(resolved.amount) : null,
+  };
+}
+
+/**
+ * Estorno / bônus por envio exibido no painel ML para vendas FLEX (base_cost − list_cost).
+ * @param {{
+ *   order?: Record<string, unknown> | null;
+ *   line?: Record<string, unknown> | null;
+ *   shipmentSnapshot?: unknown;
+ * }} ctx
+ */
+export function resolveMercadoLivreShippingBonusForFinancial(ctx) {
+  if (!isMercadoLivreFlexDeliverySale(ctx)) {
+    return { amount: null, source: null, bonusDec: null };
+  }
+
+  const shipment =
+    ctx.shipmentSnapshot && typeof ctx.shipmentSnapshot === "object"
+      ? /** @type {Record<string, unknown>} */ (ctx.shipmentSnapshot)
+      : null;
+  if (!shipment) return { amount: null, source: null, bonusDec: null };
+
+  const baseCost = parseMlMoney(shipment.base_cost);
+  const shippingOption =
+    shipment.shipping_option && typeof shipment.shipping_option === "object"
+      ? /** @type {Record<string, unknown>} */ (shipment.shipping_option)
+      : null;
+  const listCost = shippingOption ? parseMlMoney(shippingOption.list_cost) : null;
+
+  if (baseCost != null && listCost != null && baseCost > listCost + 0.001) {
+    const bonus = Math.round((baseCost - listCost) * 100) / 100;
+    return {
+      amount: bonus,
+      source: "shipment_base_cost_minus_list_cost",
+      bonusDec: new Decimal(bonus),
+    };
+  }
+
+  const costComponents =
+    shipment.cost_components && typeof shipment.cost_components === "object"
+      ? /** @type {Record<string, unknown>} */ (shipment.cost_components)
+      : null;
+  const compensation = costComponents ? parseMlMoney(costComponents.compensation) : null;
+  if (compensation != null && compensation > 0.001) {
+    return {
+      amount: compensation,
+      source: "shipment_cost_components.compensation",
+      bonusDec: new Decimal(compensation),
+    };
+  }
+
+  return { amount: null, source: null, bonusDec: null };
 }
 
 /**
@@ -467,11 +643,18 @@ export function resolveMercadoLivreSaleFeeGross(order, line, grossDec, qty, unit
       }
     }
 
+    if (qty > 1) {
+      const pickedScaled = pushCandidate("line.sale_fee_x_qty", asScaled);
+      if (pickedScaled) return { fee: pickedScaled, source: "line.sale_fee_x_qty", feeCandidates };
+    }
+
     const pickedLine = pushCandidate("line.sale_fee_as_line_total", asLine);
     if (pickedLine) return { fee: pickedLine, source: "line.sale_fee_as_line_total", feeCandidates };
 
-    const pickedScaled = pushCandidate("line.sale_fee_x_qty", asScaled);
-    if (pickedScaled) return { fee: pickedScaled, source: "line.sale_fee_x_qty", feeCandidates };
+    if (qty <= 1) {
+      const pickedScaledSingle = pushCandidate("line.sale_fee_x_qty", asScaled);
+      if (pickedScaledSingle) return { fee: pickedScaledSingle, source: "line.sale_fee_x_qty", feeCandidates };
+    }
   }
 
   if (line.sale_fee_details) {
@@ -527,8 +710,19 @@ export function resolveMercadoLivreFinancialFormula(ctx) {
         ? String(/** @type {Record<string, unknown>} */ (line.item).listing_type_id).trim()
         : null;
 
-  const shipResolved = resolveMercadoLivreShippingSellerCost(shipmentSnapshot, grossDec);
-  const shipDec = shipResolved.amount != null ? new Decimal(shipResolved.amount) : null;
+  const shipResolved = resolveMercadoLivreSaleShippingForFinancial({
+    order,
+    line,
+    shipmentSnapshot,
+    grossDec,
+  });
+  const shipDec = shipResolved.shipDec;
+  const shippingBonusResolved = resolveMercadoLivreShippingBonusForFinancial({
+    order,
+    line,
+    shipmentSnapshot,
+  });
+  const shippingBonusDec = shippingBonusResolved.bonusDec;
 
   const orderLineCount = Array.isArray(order.order_items) ? order.order_items.length : 1;
   const discountFin = resolveMercadoLivreDiscountsFinancials(
@@ -593,14 +787,20 @@ export function resolveMercadoLivreFinancialFormula(ctx) {
     if (feeNetDec.lte(0)) feeNetDec = feeGrossDec;
   }
 
-  const lineSaleFeeNet = parseMlMoney(line.sale_fee ?? line.listing_fee);
-  if (feeGrossDec != null && lineSaleFeeNet != null && lineSaleFeeNet > 0 && lineSaleFeeNet < feeGrossDec) {
-    feeNetDec = new Decimal(lineSaleFeeNet);
+  const lineSaleFeeNetTotal = resolveLineSaleFeeNetTotal(line, qty);
+  if (
+    feeGrossDec != null &&
+    lineSaleFeeNetTotal != null &&
+    lineSaleFeeNetTotal.gt(0) &&
+    lineSaleFeeNetTotal.lt(feeGrossDec)
+  ) {
+    feeNetDec = lineSaleFeeNetTotal;
   }
 
   const rebateResolve = resolveMercadoLivreMarketplaceRebate({
     feeGrossDec,
     line,
+    qty,
     saleFeeSubsidyDec,
     logContext: {
       external_order_id: order.id != null ? String(order.id) : null,
@@ -614,6 +814,7 @@ export function resolveMercadoLivreFinancialFormula(ctx) {
   let netDec = null;
   if (grossDec != null && feeGrossDec != null && shipDec != null) {
     netDec = grossDec.minus(feeGrossDec).minus(shipDec);
+    if (shippingBonusDec != null) netDec = netDec.plus(shippingBonusDec);
     if (positiveDec != null) netDec = netDec.plus(positiveDec);
   }
 
@@ -639,6 +840,10 @@ export function resolveMercadoLivreFinancialFormula(ctx) {
     selected_fee_net: feeNetDec != null ? moneyDecimal(feeNetDec) : null,
     shipping_candidates: shipResolved.candidates,
     selected_shipping: shipDec != null ? { source: shipResolved.source, amount: moneyDecimal(shipDec) } : null,
+    selected_shipping_bonus:
+      shippingBonusDec != null
+        ? { amount: moneyDecimal(shippingBonusDec), source: shippingBonusResolved.source }
+        : null,
     discounts_details: discountFin.details,
     discounts_payload_shape:
       discountsSnapshot && typeof discountsSnapshot === "object"
@@ -673,6 +878,7 @@ export function resolveMercadoLivreFinancialFormula(ctx) {
     listing_type_id: listingTypeId,
     listing_type_label: formatMercadoLivreListingTypeLabel(listingTypeId),
     shipping_amount_brl: moneyDecimal(shipDec),
+    shipping_bonus_brl: shippingBonusDec != null ? moneyDecimal(shippingBonusDec) : null,
     marketplace_rebate: marketplaceRebate,
     positive_adjustments_brl: positiveDec != null ? moneyDecimal(positiveDec) : null,
     net_received_amount_brl: snapshotComplete ? moneyDecimal(netDec) : null,
@@ -685,6 +891,7 @@ export function resolveMercadoLivreFinancialFormula(ctx) {
       fee_net: feeNetDec != null && feeGrossDec != null && feeNetDec.lt(feeGrossDec) ? "fee_gross_minus_subsidy" : feeResolved.source,
       positive_adjustments: positiveSource,
       shipping: shipResolved.source,
+      shipping_bonus: shippingBonusResolved.source,
       net: snapshotComplete ? "computed" : null,
     },
   };
