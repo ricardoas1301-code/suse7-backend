@@ -84,6 +84,13 @@ export const config = {
 
   /** Tier lógico: development | staging | production (Fase 3.5C). */
   s7AppEnv: getEnv("S7_APP_ENV", { defaultValue: "" }).trim().toLowerCase(),
+  /**
+   * Guard-rail DEV: project ref esperado do Supabase (ex.: ujznkyvgqhxagemdgmor).
+   * Quando definido, /api/ml/connect e oauth-config alertam mismatch de SUPABASE_URL.
+   */
+  s7ExpectedSupabaseProjectRef: getEnv("S7_EXPECTED_SUPABASE_PROJECT_REF", { defaultValue: "" })
+    .trim()
+    .toLowerCase(),
   /** Fase 3.5C — permite live em DEV/STAGING apenas quando true. */
   s7AllowLiveDelivery: getEnv("S7_ALLOW_LIVE_DELIVERY", { defaultValue: "false" }).trim().toLowerCase(),
 
