@@ -103,7 +103,21 @@ function authFailureMessage(reason) {
  * @param {import("http").IncomingMessage} req
  * @param {import("http").ServerResponse} res
  */
+function logSyncCheckpoint(checkpoint, extra = {}) {
+  console.info(`[marketplace-account-sync-job] CHECKPOINT_${checkpoint}`, {
+    checkpoint,
+    vercel_env: process.env.VERCEL_ENV ?? null,
+    node_env: process.env.NODE_ENV ?? null,
+    supabase_host: resolveSupabaseHostForLog(),
+    job_secret_configured: Boolean(config.jobSecret && String(config.jobSecret).trim()),
+    dev_job_secret_configured: Boolean(process.env.DEV_JOB_SECRET && String(process.env.DEV_JOB_SECRET).trim()),
+    ...extra,
+  });
+}
+
 export async function handleJobsMarketplaceAccountSync(req, res) {
+  logSyncCheckpoint(1, { stage: "handler_entry", method: req.method });
+
   if (req.method !== "POST" && req.method !== "GET") {
     return res.status(405).json({ ok: false, error: "Método não permitido" });
   }
@@ -143,6 +157,11 @@ export async function handleJobsMarketplaceAccountSync(req, res) {
     });
   }
 
+  logSyncCheckpoint(2, {
+    stage: "auth_ok",
+    auth_mode: auth.mode === "none" ? "none" : auth.mode,
+  });
+
   if (auth.mode && auth.mode !== "none") {
     console.info("[marketplace-account-sync-job] auth_ok", { auth_mode: auth.mode });
   }
@@ -151,11 +170,16 @@ export async function handleJobsMarketplaceAccountSync(req, res) {
     supabase_host: resolveSupabaseHostForLog(),
     vercel_env: process.env.VERCEL_ENV ?? null,
     node_env: process.env.NODE_ENV ?? null,
+    supabase_url_present: Boolean(config.supabaseUrl && String(config.supabaseUrl).trim()),
+    supabase_service_role_present: Boolean(
+      config.supabaseServiceRoleKey && String(config.supabaseServiceRoleKey).trim(),
+    ),
   });
 
   const supabase = createClient(config.supabaseUrl, config.supabaseServiceRoleKey, {
     auth: { autoRefreshToken: false, persistSession: false },
   });
+  logSyncCheckpoint(3, { stage: "supabase_client_ready" });
 
   /** @type {Record<string, unknown>} */
   let body = {};
@@ -180,10 +204,23 @@ export async function handleJobsMarketplaceAccountSync(req, res) {
   }
 
   try {
+    logSyncCheckpoint(4, { stage: "worker_dispatch_start", worker_opts: workerOpts });
     const out = await runMarketplaceAccountSyncWorker(supabase, workerOpts);
+    logSyncCheckpoint(5, {
+      stage: "worker_dispatch_done",
+      chunks_processed: out?.chunks_processed ?? 0,
+    });
+    logSyncCheckpoint(6, {
+      stage: "incremental_sales_poll_done",
+      incremental_sales_poll: out?.incremental_sales_poll ?? null,
+    });
     console.log("[MARKETPLACE_SYNC_JOB_SUMMARY]", {
       chunks_processed: out?.chunks_processed ?? 0,
       requested_limit_chunks: workerOpts.maxChunks ?? null,
+    });
+    logSyncCheckpoint(7, {
+      stage: "response_ok",
+      chunks_processed: out?.chunks_processed ?? 0,
     });
     return res.status(200).json({
       ok: true,
@@ -193,7 +230,12 @@ export async function handleJobsMarketplaceAccountSync(req, res) {
       hint: "Agende este endpoint em cron (ex.: Vercel/GitHub Actions) com X-Job-Secret.",
     });
   } catch (e) {
-    console.error("[jobs/marketplace-account-sync] fatal", e);
+    console.error("[jobs/marketplace-account-sync] fatal", {
+      message: e?.message ? String(e.message) : String(e),
+      name: e?.name ?? null,
+      code: e?.code ?? null,
+      stack: e?.stack ?? null,
+    });
     return res.status(500).json({
       ok: false,
       error: e?.message ? String(e.message) : "Falha no worker de sync marketplace",

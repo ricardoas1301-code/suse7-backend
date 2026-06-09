@@ -18,7 +18,7 @@ const DEBUG_ML_COVER_COMPARE_PATH = "/api/debug/ml/listing-cover-compare";
 const DEBUG_ML_LISTINGS_COVER_CONTEXT_PATH = "/api/debug/ml/listings-cover-context";
 console.log("[S7 API Router] boot — rotas diagnóstico ML:", DEBUG_ML_FIELD_MAP_PATH, DEBUG_ML_COVER_COMPARE_PATH, DEBUG_ML_LISTINGS_COVER_CONTEXT_PATH);
 console.log("[S7 API Router] boot — ML OAuth diag: GET /api/ml/oauth-config");
-console.log("[S7 API Router] boot — billing: GET /api/billing/ping · GET /api/billing/plans · POST /api/billing/checkout/card · POST /api/billing/checkout/start · POST /api/billing/webhooks/asaas · POST /api/jobs/billing-renewal-engine · POST /api/jobs/billing-consistency-check · POST /api/billing/renewals/:id/pay");
+console.log("[S7 API Router] boot — billing: GET /api/billing/ping · GET /api/billing/plans · POST /api/billing/checkout/card · POST /api/billing/checkout/start · GET /api/billing/webhooks/asaas/health · POST /api/billing/webhooks/asaas · POST /api/jobs/billing-renewal-engine · POST /api/jobs/billing-consistency-check · POST /api/billing/renewals/:id/pay");
 
 /**
  * Resolve rota lógica para o router único (/api + __path no Vercel).
@@ -200,8 +200,19 @@ export default async function handler(req, res) {
         router_version: "marketplace-account-sync-rawurl-hotfix-v1",
       });
 
-      const mod = await import("../src/handlers/jobs/marketplaceAccountSyncJob.js");
-      return mod.handleJobsMarketplaceAccountSync(req, res);
+      try {
+        const mod = await import("../src/handlers/jobs/marketplaceAccountSyncJob.js");
+        return await mod.handleJobsMarketplaceAccountSync(req, res);
+      } catch (syncRouteErr) {
+        console.error("[S7 API Router] marketplace-account-sync route failed", {
+          phase: "import_or_handler",
+          message: syncRouteErr?.message ?? String(syncRouteErr),
+          name: syncRouteErr?.name ?? null,
+          code: syncRouteErr?.code ?? null,
+          stack: syncRouteErr?.stack ?? null,
+        });
+        throw syncRouteErr;
+      }
     }
 
     const url = new URL(rawUrl, baseUrl);
@@ -252,8 +263,19 @@ export default async function handler(req, res) {
         router_version: "marketplace-account-sync-route-v1",
       });
 
-      const mod = await import("../src/handlers/jobs/marketplaceAccountSyncJob.js");
-      return mod.handleJobsMarketplaceAccountSync(req, res);
+      try {
+        const mod = await import("../src/handlers/jobs/marketplaceAccountSyncJob.js");
+        return await mod.handleJobsMarketplaceAccountSync(req, res);
+      } catch (syncRouteErr) {
+        console.error("[S7 API Router] marketplace-account-sync route failed", {
+          phase: "import_or_handler",
+          message: syncRouteErr?.message ?? String(syncRouteErr),
+          name: syncRouteErr?.name ?? null,
+          code: syncRouteErr?.code ?? null,
+          stack: syncRouteErr?.stack ?? null,
+        });
+        throw syncRouteErr;
+      }
     }
 
     req.query = Object.fromEntries(url.searchParams);
@@ -295,6 +317,10 @@ export default async function handler(req, res) {
     // ------------------------------
     // Rotas (lazy import — FASE 2)
     // ------------------------------
+    if (path === "/api/user/profile-summary" && req.method === "GET") {
+      const mod = await import("../src/handlers/user/profileSummary.js");
+      return mod.handleUserProfileSummary(req, res);
+    }
     if (path === "/api/user/preferences") {
       const mod = await import("../src/handlers/user/preferences.js");
       return mod.handleUserPreferences(req, res);
@@ -451,6 +477,10 @@ export default async function handler(req, res) {
     }
     if (path === "/api/ml/listings/pricing-scenarios") {
       const mod = await import("../src/handlers/ml/listingPricingScenarios.js");
+      return await mod.default(req, res);
+    }
+    if (path === "/api/ml/listings/pricing-simulate-scenario" && req.method === "POST") {
+      const mod = await import("../src/handlers/ml/listingPricingSimulateScenario.js");
       return await mod.default(req, res);
     }
     if (
@@ -639,10 +669,9 @@ export default async function handler(req, res) {
       return mod.default(req, res, path);
     }
 
-    if (
-      path === "/api/competition/listings" ||
-      /^\/api\/competition\/listing\/[^/]+\/(overview|discover|select|insights)$/.test(path)
-    ) {
+    // Concorrência Inteligente: roteamento interno fica no handler
+    // (products, products/:id/competitors, competitors/:id, discover, + rotas legadas).
+    if (path === "/api/competition" || path.startsWith("/api/competition/")) {
       const mod = await import("../src/handlers/competition/index.js");
       return mod.default(req, res, path);
     }
