@@ -349,6 +349,10 @@ export default async function handler(req, res) {
       const mod = await import("../src/handlers/notifications/saleRayxManualNotificationApi.js");
       return mod.handleSaleRayxManualNotification(req, res);
     }
+    if (path === "/api/notifications/manual/sales-report" && req.method === "POST") {
+      const mod = await import("../src/handlers/notifications/salesReportManualNotificationApi.js");
+      return mod.handleSalesReportManualNotification(req, res);
+    }
     if (path === "/api/notifications/categories" && req.method === "GET") {
       const mod = await import("../src/handlers/notifications/sellerNotificationSellerApi.js");
       return mod.handleNotificationSellerCategories(req, res);
@@ -672,6 +676,15 @@ export default async function handler(req, res) {
     // Concorrência Inteligente: roteamento interno fica no handler
     // (products, products/:id/competitors, competitors/:id, discover, + rotas legadas).
     if (path === "/api/competition" || path.startsWith("/api/competition/")) {
+      console.info("[S7_COMPETITION_AUDIT_BOOT]", {
+        module: "api_index_competition_gate",
+        path,
+        node_env: process.env.NODE_ENV ?? null,
+        vercel_env: process.env.VERCEL_ENV ?? null,
+        vercel_url: process.env.VERCEL_URL ?? null,
+        sales_audit_flag: process.env.S7_COMPETITION_SALES_AUDIT ?? null,
+        at: new Date().toISOString(),
+      });
       const mod = await import("../src/handlers/competition/index.js");
       return mod.default(req, res, path);
     }
