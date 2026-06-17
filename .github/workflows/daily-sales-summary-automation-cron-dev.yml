@@ -1,14 +1,12 @@
 name: Daily Sales Summary Automation Cron (DEV)
 
-# Contrato DEV:
+# DIAGNÓSTICO / MANUAL — homologação real usa Vercel Cron (vercel.json */5 * * * *).
+# Contrato DEV (workflow_dispatch ou schedule legado):
 #   POST secrets.DEV_DAILY_SALES_SUMMARY_JOB_URL
 #   Header X-Job-Secret: secrets.DEV_JOB_SECRET
 #   Body: {"limit":200}
-# Tolerância do motor: ±3 min — cron a cada 2 min para não perder slots.
 
 on:
-  schedule:
-    - cron: "*/2 * * * *"
   workflow_dispatch: {}
 
 permissions:
