@@ -11,6 +11,9 @@ on:
     - cron: "*/2 * * * *"
   workflow_dispatch: {}
 
+permissions:
+  contents: read
+
 jobs:
   run-dev:
     runs-on: ubuntu-latest
@@ -40,6 +43,9 @@ jobs:
             echo "::error::Missing DEV_DAILY_SALES_SUMMARY_JOB_URL and/or DEV_JOB_SECRET"
             exit 1
           fi
+
+          echo "[daily-sales-summary-dev] cron_firing method=POST limit=200"
+          echo "[daily-sales-summary-dev] request_start url_host=$(echo "${JOB_URL}" | sed -E 's#https?://([^/]+).*#\1#')"
 
           http_code=$(curl -sS -o /tmp/daily-sales-summary-dev.json -w "%{http_code}" -X POST "${JOB_URL}" \
             -H "Content-Type: application/json" \
