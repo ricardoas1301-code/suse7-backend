@@ -106,6 +106,12 @@ export const S7_NOTIFICATION_TYPE_CATALOG = Object.freeze({
     severity: "info",
     supportedChannels: ["whatsapp", "email"],
   },
+  [`${S7_NOTIFICATION_CATEGORY.SALES}:DAILY_SALES_SUMMARY`]: {
+    typeKey: "DAILY_SALES_SUMMARY",
+    templateKey: "sales.daily.summary",
+    severity: "info",
+    supportedChannels: ["in_app", "email", "whatsapp", "push"],
+  },
   [`${S7_NOTIFICATION_CATEGORY.INVENTORY}:LOW_STOCK`]: {
     typeKey: "LOW_STOCK",
     templateKey: "inventory.low.stock",

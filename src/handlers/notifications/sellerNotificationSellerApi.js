@@ -23,6 +23,10 @@ import {
   listSellerEventDeliveryRules,
   patchSellerEventDeliveryRules,
 } from "../../domain/notifications/central/seller/sellerNotificationEventDeliveryRulesService.js";
+import {
+  getDailySalesSummaryAutomationRule,
+  patchDailySalesSummaryAutomationRule,
+} from "../../domain/notifications/central/sales/dailySalesSummaryAutomationRuleService.js";
 import { logNotificationUi } from "../../domain/notifications/central/seller/sellerNotificationObservability.js";
 import { RECIPIENT_ERROR } from "../../domain/notifications/central/seller/sellerNotificationRecipientValidation.js";
 
@@ -307,6 +311,45 @@ export async function handleNotificationSellerRecipients(req, res, path) {
       return res.status(201).json({ ok: true, recipient: result.recipient });
     } catch (e) {
       return jsonError(res, 500, "INTERNAL", e?.message ?? "Erro ao criar destinatário");
+    }
+  }
+
+  return jsonError(res, 405, "METHOD_NOT_ALLOWED", "Método não permitido");
+}
+
+/**
+ * GET | PATCH /api/notifications/automation-rules/daily-sales-summary
+ */
+export async function handleNotificationSellerDailySalesSummaryAutomation(req, res) {
+  const auth = await requireAuthUser(req);
+  if (auth.error) {
+    return res.status(auth.error.status ?? 401).json({ ok: false, error: auth.error.message });
+  }
+
+  const sellerId = String(auth.user.id);
+
+  if (req.method === "GET") {
+    try {
+      const rule = await getDailySalesSummaryAutomationRule(auth.supabase, sellerId);
+      return res.status(200).json({ ok: true, rule });
+    } catch (e) {
+      logNotificationUi("DAILY_SALES_SUMMARY_RULE_GET_ERR", { message: e?.message });
+      return jsonError(res, 500, "INTERNAL", "Erro ao carregar regra de automação.");
+    }
+  }
+
+  if (req.method === "PATCH") {
+    const body = parseBody(req);
+    if (body === null) return jsonError(res, 400, "INVALID_JSON", "JSON inválido");
+    try {
+      const result = await patchDailySalesSummaryAutomationRule(auth.supabase, sellerId, body);
+      if (!result.ok) {
+        return res.status(400).json({ ok: false, error: result.error, message: result.message });
+      }
+      return res.status(200).json({ ok: true, rule: result.rule });
+    } catch (e) {
+      logNotificationUi("DAILY_SALES_SUMMARY_RULE_PATCH_ERR", { message: e?.message });
+      return jsonError(res, 500, "INTERNAL", "Erro ao salvar regra de automação.");
     }
   }
 

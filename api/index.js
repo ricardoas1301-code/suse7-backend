@@ -19,6 +19,7 @@ const DEBUG_ML_LISTINGS_COVER_CONTEXT_PATH = "/api/debug/ml/listings-cover-conte
 console.log("[S7 API Router] boot — rotas diagnóstico ML:", DEBUG_ML_FIELD_MAP_PATH, DEBUG_ML_COVER_COMPARE_PATH, DEBUG_ML_LISTINGS_COVER_CONTEXT_PATH);
 console.log("[S7 API Router] boot — ML OAuth diag: GET /api/ml/oauth-config");
 console.log("[S7 API Router] boot — billing: GET /api/billing/ping · GET /api/billing/plans · POST /api/billing/checkout/card · POST /api/billing/checkout/start · GET /api/billing/webhooks/asaas/health · POST /api/billing/webhooks/asaas · POST /api/jobs/billing-renewal-engine · POST /api/jobs/billing-consistency-check · POST /api/billing/renewals/:id/pay");
+console.log("[S7 API Router] boot — notifications: POST /api/jobs/daily-sales-summary-automation");
 
 /**
  * Resolve rota lógica para o router único (/api + __path no Vercel).
@@ -369,6 +370,13 @@ export default async function handler(req, res) {
       return mod.handleNotificationSellerEventDeliveryRules(req, res);
     }
     if (
+      path === "/api/notifications/automation-rules/daily-sales-summary" &&
+      (req.method === "GET" || req.method === "PATCH")
+    ) {
+      const mod = await import("../src/handlers/notifications/sellerNotificationSellerApi.js");
+      return mod.handleNotificationSellerDailySalesSummaryAutomation(req, res);
+    }
+    if (
       (path === "/api/notifications/recipients" && (req.method === "GET" || req.method === "POST")) ||
       /^\/api\/notifications\/recipients\/[^/]+$/.test(path)
     ) {
@@ -595,6 +603,10 @@ export default async function handler(req, res) {
     if (path === "/api/jobs/process-notification-deliveries") {
       const mod = await import("../src/handlers/jobs/processNotificationDeliveriesJob.js");
       return mod.handleJobsProcessNotificationDeliveries(req, res);
+    }
+    if (path === "/api/jobs/daily-sales-summary-automation") {
+      const mod = await import("../src/handlers/jobs/dailySalesSummaryAutomationJob.js");
+      return mod.handleJobsDailySalesSummaryAutomation(req, res);
     }
     if (path === "/api/jobs/billing-process-period-expirations") {
       const mod = await import("../src/handlers/jobs/billingPeriodExpirationsJob.js");
