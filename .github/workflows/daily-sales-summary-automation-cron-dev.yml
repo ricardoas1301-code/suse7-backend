@@ -1,0 +1,56 @@
+name: Daily Sales Summary Automation Cron (DEV)
+
+# Contrato DEV:
+#   POST secrets.DEV_DAILY_SALES_SUMMARY_JOB_URL
+#   Header X-Job-Secret: secrets.DEV_JOB_SECRET
+#   Body: {"limit":200}
+# Tolerância do motor: ±3 min — cron a cada 2 min para não perder slots.
+
+on:
+  schedule:
+    - cron: "*/2 * * * *"
+  workflow_dispatch: {}
+
+jobs:
+  run-dev:
+    runs-on: ubuntu-latest
+    env:
+      JOB_URL: ${{ secrets.DEV_DAILY_SALES_SUMMARY_JOB_URL }}
+      JOB_SECRET: ${{ secrets.DEV_JOB_SECRET }}
+    steps:
+      - name: Trigger DEV daily-sales-summary-automation job
+        run: |
+          set -euo pipefail
+
+          echo "[daily-sales-summary-dev] workflow_boot event=schedule_or_dispatch"
+
+          if [ -n "${JOB_URL}" ]; then
+            echo "[daily-sales-summary-dev] url_present=true"
+          else
+            echo "[daily-sales-summary-dev] url_present=false"
+          fi
+
+          if [ -n "${JOB_SECRET}" ]; then
+            echo "[daily-sales-summary-dev] secret_present=true"
+          else
+            echo "[daily-sales-summary-dev] secret_present=false"
+          fi
+
+          if [ -z "${JOB_URL}" ] || [ -z "${JOB_SECRET}" ]; then
+            echo "::error::Missing DEV_DAILY_SALES_SUMMARY_JOB_URL and/or DEV_JOB_SECRET"
+            exit 1
+          fi
+
+          http_code=$(curl -sS -o /tmp/daily-sales-summary-dev.json -w "%{http_code}" -X POST "${JOB_URL}" \
+            -H "Content-Type: application/json" \
+            -H "X-Job-Secret: ${JOB_SECRET}" \
+            -d '{"limit":200}')
+
+          echo "[daily-sales-summary-dev] http_status=${http_code}"
+          head -c 800 /tmp/daily-sales-summary-dev.json || true
+          echo
+
+          if [ "${http_code}" -lt 200 ] || [ "${http_code}" -ge 300 ]; then
+            echo "::error::Falha DEV daily-sales-summary: HTTP ${http_code}"
+            exit 1
+          fi
