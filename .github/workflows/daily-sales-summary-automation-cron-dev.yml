@@ -8,6 +8,12 @@ name: Daily Sales Summary Automation Cron (DEV)
 
 on:
   workflow_dispatch: {}
+  # Backup scheduler previsível (GitHub Actions, mínimo de 5 min):
+  # roda em offset de 2 min para complementar o Vercel (0,5,10...),
+  # reduzindo buracos de trigger e melhorando a cadência efetiva.
+  # Janela contínua UTC 11-22 (BRT 08-19).
+  schedule:
+    - cron: "2-59/5 11-22 * * *"
 
 permissions:
   contents: read
