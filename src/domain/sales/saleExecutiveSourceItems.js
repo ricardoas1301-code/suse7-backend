@@ -36,31 +36,15 @@ const ITEM_SELECT =
 
   "id,sales_order_id,user_id,marketplace,marketplace_account_id,seller_company_id,external_listing_id,external_variation_id,external_order_id,external_order_item_id,title_snapshot,sku_snapshot,quantity,unit_price,gross_amount,net_amount,fee_amount,shipping_share_amount,tax_amount,thumbnail_snapshot,raw_json,created_at";
 
+export { ITEM_SELECT };
+
 
 
 /**
-
- * Cap de linhas processadas (fetch + hidratação + agregação).
-
- * S7_EXECUTIVE_SUMMARY_MAX_ITEMS ou S7_EXECUTIVE_SUMMARY_MAX_ORDERS (alias temporário).
-
- * Default 500 — evita timeout em contas grandes com period_preset=all.
-
+ * @deprecated Cap legado removido na DASH.4C — scan completo via saleExecutiveBatchScan.js.
+ * Mantido apenas para scripts/diag que ainda importam o símbolo.
  */
-
-export const EXECUTIVE_SUMMARY_MAX_ITEMS_SCAN = (() => {
-
-  const raw =
-
-    process.env.S7_EXECUTIVE_SUMMARY_MAX_ITEMS ?? process.env.S7_EXECUTIVE_SUMMARY_MAX_ORDERS ?? "500";
-
-  const parsed = parseInt(String(raw), 10);
-
-  const cap = Number.isFinite(parsed) && parsed > 0 ? parsed : 500;
-
-  return Math.min(15000, Math.max(50, cap));
-
-})();
+export const EXECUTIVE_SUMMARY_MAX_ITEMS_SCAN = Number.POSITIVE_INFINITY;
 
 
 
@@ -150,7 +134,7 @@ function logExecutiveSourceItemsFailed(error, selectUsed) {
 
  */
 
-function buildExecutiveSourceItemsQuery(supabase, userId, filters, selectExpr) {
+export function buildExecutiveSourceItemsQuery(supabase, userId, filters, selectExpr) {
 
   let itemsQuery = supabase.from("sales_order_items").select(selectExpr).eq("user_id", userId);
 
@@ -172,6 +156,23 @@ function buildExecutiveSourceItemsQuery(supabase, userId, filters, selectExpr) {
 
 }
 
+/** Paginação de sales_orders ao resolver IDs do período (scan completo, sem cap). */
+export const EXECUTIVE_SUMMARY_ORDER_IDS_PAGE_SIZE = (() => {
+  const raw = process.env.S7_EXECUTIVE_SUMMARY_ORDER_PAGE_SIZE ?? "1000";
+  const parsed = parseInt(String(raw), 10);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.min(5000, Math.max(100, parsed)) : 1000;
+})();
+
+/**
+ * Chunk no `.in(sales_order_id)`: muitos UUIDs num único filtro estouram o header HTTP
+ * do PostgREST (Bad Request / HeadersOverflowError) — cenário típico em “Todas as contas”.
+ */
+export const EXECUTIVE_SUMMARY_ORDER_IDS_IN_CHUNK_SIZE = (() => {
+  const raw = process.env.S7_EXECUTIVE_SUMMARY_ORDER_IN_CHUNK_SIZE ?? "100";
+  const parsed = parseInt(String(raw), 10);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.min(200, Math.max(50, parsed)) : 100;
+})();
+
 /**
  * @param {import("@supabase/supabase-js").SupabaseClient} supabase
  * @param {string} userId
@@ -181,225 +182,192 @@ function buildExecutiveSourceItemsQuery(supabase, userId, filters, selectExpr) {
  *   seller_company_id?: string | null;
  *   period?: { start_ms: number | null; end_ms_exclusive: number | null };
  * }} filters
+ * @returns {Promise<string[]>}
  */
-async function fetchExecutiveSummaryOrderIdsByPeriod(supabase, userId, filters) {
+export async function fetchAllExecutiveSummaryOrderIdsByPeriod(supabase, userId, filters) {
   const period = filters.period;
   const hasPeriod =
     (period?.start_ms != null && Number.isFinite(period.start_ms)) ||
     (period?.end_ms_exclusive != null && Number.isFinite(period.end_ms_exclusive));
-  if (!hasPeriod) return null;
+  if (!hasPeriod) return [];
 
-  let q = supabase.from("sales_orders").select("id").eq("user_id", userId);
+  /** @type {string[]} */
+  const allIds = [];
+  const pageSize = EXECUTIVE_SUMMARY_ORDER_IDS_PAGE_SIZE;
+  let offset = 0;
 
-  if (filters.marketplace) q = q.eq("marketplace", filters.marketplace);
-  if (filters.marketplace_account_id) q = q.eq("marketplace_account_id", filters.marketplace_account_id);
-  if (filters.seller_company_id) q = q.eq("seller_company_id", filters.seller_company_id);
+  while (true) {
+    let q = supabase.from("sales_orders").select("id").eq("user_id", userId);
 
-  if (period?.start_ms != null && Number.isFinite(period.start_ms)) {
-    q = q.gte("date_created_marketplace", new Date(period.start_ms).toISOString());
+    if (filters.marketplace) q = q.eq("marketplace", filters.marketplace);
+    if (filters.marketplace_account_id) q = q.eq("marketplace_account_id", filters.marketplace_account_id);
+    if (filters.seller_company_id) q = q.eq("seller_company_id", filters.seller_company_id);
+
+    if (period?.start_ms != null && Number.isFinite(period.start_ms)) {
+      q = q.gte("date_created_marketplace", new Date(period.start_ms).toISOString());
+    }
+    if (period?.end_ms_exclusive != null && Number.isFinite(period.end_ms_exclusive)) {
+      q = q.lt("date_created_marketplace", new Date(period.end_ms_exclusive).toISOString());
+    }
+
+    const { data, error } = await q
+      .order("date_created_marketplace", { ascending: false, nullsFirst: false })
+      .range(offset, offset + pageSize - 1);
+
+    if (error) throw error;
+
+    const page = Array.isArray(data) ? data.map((r) => String(r?.id ?? "")).filter(Boolean) : [];
+    allIds.push(...page);
+
+    if (page.length < pageSize) break;
+    offset += pageSize;
   }
-  if (period?.end_ms_exclusive != null && Number.isFinite(period.end_ms_exclusive)) {
-    q = q.lt("date_created_marketplace", new Date(period.end_ms_exclusive).toISOString());
-  }
 
-  const { data, error } = await q
-    .order("date_created_marketplace", { ascending: false, nullsFirst: false })
-    .limit(Math.min(1200, EXECUTIVE_SUMMARY_MAX_ITEMS_SCAN * 4));
-  if (error) throw error;
-  const ids = Array.isArray(data) ? data.map((r) => String(r?.id ?? "")).filter(Boolean) : [];
-  return ids;
+  return [...new Set(allIds)];
 }
 
-
-
 /**
-
- * Mesmos filtros base de canal/conta/busca que a listagem /api/sales (sales_order_items).
-
- *
-
  * @param {import("@supabase/supabase-js").SupabaseClient} supabase
-
  * @param {string} userId
-
  * @param {{
-
  *   marketplace?: string | null;
-
  *   marketplace_account_id?: string | null;
-
  *   seller_company_id?: string | null;
-
  *   q?: string | null;
-
  * }} filters
-
+ * @param {string[]} orderIds
+ * @param {string[]} orderIdsForSearch
  */
-
-export async function fetchExecutiveSummarySourceItems(supabase, userId, filters) {
+async function fetchExecutiveSummaryItemsForOrderIds(
+  supabase,
+  userId,
+  filters,
+  orderIds,
+  orderIdsForSearch,
+) {
+  if (!orderIds.length) return [];
 
   const qNormalized = filters.q ? normalizeSearchQuery(filters.q) : null;
 
-  /** @type {string[]} */
+  /**
+   * @param {string} selectExpr
+   */
+  async function runSelect(selectExpr) {
+    let itemsQuery = buildExecutiveSourceItemsQuery(supabase, userId, filters, selectExpr);
+    itemsQuery = itemsQuery.in("sales_order_id", orderIds);
 
+    if (qNormalized) {
+      const tokens = splitSearchTokens(qNormalized);
+      const orExpr = buildVendasSalesItemQOrFilter(tokens, orderIdsForSearch);
+      if (!orExpr) return [];
+      itemsQuery = itemsQuery.or(orExpr);
+    }
+
+    const { data, error } = await itemsQuery.order("created_at", { ascending: false });
+    if (error) throw error;
+    return Array.isArray(data) ? data : [];
+  }
+
+  try {
+    let rows = await runSelect(ITEM_SELECT);
+    if (rows.length === 0) {
+      rows = await runSelect("*");
+    }
+    return rows;
+  } catch (err) {
+    if (isShapeError(err)) {
+      return runSelect("*");
+    }
+    throw err;
+  }
+}
+
+/**
+ * Itera lotes completos do recorte (todos os pedidos do período, sem truncar).
+ *
+ * @param {import("@supabase/supabase-js").SupabaseClient} supabase
+ * @param {string} userId
+ * @param {{
+ *   marketplace?: string | null;
+ *   marketplace_account_id?: string | null;
+ *   seller_company_id?: string | null;
+ *   q?: string | null;
+ *   period?: { start_ms: number | null; end_ms_exclusive: number | null };
+ * }} filters
+ * @returns {AsyncGenerator<{
+ *   items: Record<string, unknown>[];
+ *   ordersById: Map<string, Record<string, unknown>>;
+ *   orderIds: string[];
+ *   batchIndex: number;
+ *   totalOrderIds: number;
+ * }, void, void>}
+ */
+export async function* iterateExecutiveSummaryBatches(supabase, userId, filters) {
+  const qNormalized = filters.q ? normalizeSearchQuery(filters.q) : null;
+  /** @type {string[]} */
   let orderIdsForSearch = [];
 
   if (qNormalized) {
-
     const [fromOrders, fromItems] = await Promise.all([
-
       fetchVendasSearchOrderIds(supabase, userId, qNormalized, 800),
-
       fetchOrderIdsFromItemTextSearch(supabase, userId, qNormalized, 1200),
-
     ]);
-
     orderIdsForSearch = [...new Set([...fromOrders, ...fromItems])];
-
   }
 
-  const orderIdsForPeriod = await fetchExecutiveSummaryOrderIdsByPeriod(supabase, userId, filters);
-  if (Array.isArray(orderIdsForPeriod) && orderIdsForPeriod.length === 0) return [];
+  const allOrderIds = await fetchAllExecutiveSummaryOrderIdsByPeriod(supabase, userId, filters);
+  if (allOrderIds.length === 0) return;
 
+  const chunks = chunkIds(allOrderIds, EXECUTIVE_SUMMARY_ORDER_IDS_IN_CHUNK_SIZE);
+  let batchIndex = 0;
 
-
-  // Chunk no `.in(sales_order_id)`: muitos UUIDs num único filtro estouram o header HTTP
-  // do PostgREST (Bad Request / HeadersOverflowError) — cenário típico em “Todas as contas”.
-  const ORDER_IDS_IN_CHUNK_SIZE = 100;
-
-  /**
-
-   * @param {string} selectExpr
-
-   */
-
-  async function runSelect(selectExpr) {
-    const cap = EXECUTIVE_SUMMARY_MAX_ITEMS_SCAN;
-
-    /**
-     * @param {ReturnType<typeof buildExecutiveSourceItemsQuery>} baseQuery
-     */
-    function applySearchOr(baseQuery) {
-      if (!qNormalized) return baseQuery;
-      const tokens = splitSearchTokens(qNormalized);
-      const orExpr = buildVendasSalesItemQOrFilter(tokens, orderIdsForSearch);
-      if (!orExpr) return null;
-      return baseQuery.or(orExpr);
-    }
-
-    if (Array.isArray(orderIdsForPeriod) && orderIdsForPeriod.length > 0) {
-      /** @type {Record<string, unknown>[]} */
-      const merged = [];
-      /** @type {Set<string>} */
-      const seenItemIds = new Set();
-
-      for (const chunk of chunkIds(orderIdsForPeriod, ORDER_IDS_IN_CHUNK_SIZE)) {
-        let itemsQuery = buildExecutiveSourceItemsQuery(supabase, userId, filters, selectExpr);
-        itemsQuery = itemsQuery.in("sales_order_id", chunk);
-        const withSearch = applySearchOr(itemsQuery);
-        if (withSearch === null) return { data: [], error: null };
-        itemsQuery = withSearch;
-
-        const { data, error } = await itemsQuery.order("created_at", { ascending: false }).limit(cap);
-        if (error) return { data: null, error };
-
-        for (const row of data || []) {
-          const id = row?.id != null ? String(row.id) : "";
-          if (!id || seenItemIds.has(id)) continue;
-          seenItemIds.add(id);
-          merged.push(row);
-        }
-
-        if (merged.length >= cap) break;
-      }
-
-      merged.sort((a, b) => {
-        const ta = Date.parse(String(a?.created_at ?? ""));
-        const tb = Date.parse(String(b?.created_at ?? ""));
-        return (Number.isFinite(tb) ? tb : 0) - (Number.isFinite(ta) ? ta : 0);
-      });
-
-      return { data: merged.slice(0, cap), error: null };
-    }
-
-    let itemsQuery = buildExecutiveSourceItemsQuery(supabase, userId, filters, selectExpr);
-    const withSearch = applySearchOr(itemsQuery);
-    if (withSearch === null) return { data: [], error: null };
-    itemsQuery = withSearch;
-
-    return itemsQuery.order("created_at", { ascending: false }).limit(cap);
+  for (const orderIds of chunks) {
+    batchIndex += 1;
+    const items = await fetchExecutiveSummaryItemsForOrderIds(
+      supabase,
+      userId,
+      filters,
+      orderIds,
+      orderIdsForSearch,
+    );
+    const ordersById = await fetchExecutiveSummaryOrdersById(supabase, userId, orderIds);
+    yield {
+      items,
+      ordersById,
+      orderIds,
+      batchIndex,
+      totalOrderIds: allOrderIds.length,
+    };
   }
-
-
-
-  try {
-
-    let { data, error } = await runSelect(ITEM_SELECT);
-
-
-
-    if (error) {
-
-      logExecutiveSourceItemsFailed(error, ITEM_SELECT);
-
-
-
-      if (isShapeError(error)) {
-
-        console.warn("[Suse7][executive-summary] source_items_select_fallback", {
-
-          reason: String(/** @type {{ message?: unknown }} */ (error).message ?? error),
-
-          fallback: "*",
-
-        });
-
-        ({ data, error } = await runSelect("*"));
-
-      }
-
-
-
-      if (error) {
-
-        logExecutiveSourceItemsFailed(error, isShapeError(error) ? "*" : ITEM_SELECT);
-
-        throw error;
-
-      }
-
-    }
-
-
-
-    return Array.isArray(data) ? data : [];
-
-  } catch (err) {
-
-    if (!isShapeError(err)) {
-
-      logExecutiveSourceItemsFailed(err, ITEM_SELECT);
-
-    }
-
-    throw err;
-
-  }
-
 }
 
-
+/**
+ * Compatibilidade/diag — concatena todos os lotes (sem cap de amostragem).
+ *
+ * @param {import("@supabase/supabase-js").SupabaseClient} supabase
+ * @param {string} userId
+ * @param {{
+ *   marketplace?: string | null;
+ *   marketplace_account_id?: string | null;
+ *   seller_company_id?: string | null;
+ *   q?: string | null;
+ *   period?: { start_ms: number | null; end_ms_exclusive: number | null };
+ * }} filters
+ */
+export async function fetchExecutiveSummarySourceItems(supabase, userId, filters) {
+  /** @type {Record<string, unknown>[]} */
+  const all = [];
+  for await (const batch of iterateExecutiveSummaryBatches(supabase, userId, filters)) {
+    all.push(...batch.items);
+  }
+  return all;
+}
 
 /**
-
  * @param {import("@supabase/supabase-js").SupabaseClient} supabase
-
  * @param {string} userId
-
  * @param {string[]} orderIds
-
  */
-
 export async function fetchExecutiveSummaryOrdersById(supabase, userId, orderIds) {
 
   /** @type {Map<string, Record<string, unknown>>} */

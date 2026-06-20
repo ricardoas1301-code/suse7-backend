@@ -21,11 +21,9 @@ import {
 } from "./executiveRankingImageUrl.js";
 import { resolveExecutiveRankingListingId } from "./saleExecutiveListingKey.js";
 import {
-  EXECUTIVE_SUMMARY_MAX_ITEMS_SCAN,
   buildExecutiveMinimalUiRowsFromItems,
-  fetchExecutiveSummaryOrdersById,
-  fetchExecutiveSummarySourceItems,
   isExecutiveSummaryDevAutoDebugEnabled,
+  iterateExecutiveSummaryBatches,
   logExecutiveSummaryZeroDebug,
   pickExecutiveDebugHydratedSnapshot,
   pickExecutiveDebugItemSnapshot,
@@ -38,6 +36,27 @@ import {
 } from "./saleExecutiveSummaryTelemetry.js";
 import { hydrateExecutiveSummaryRankingRows } from "../../handlers/sales/list.js";
 import { createExecutiveSummaryPerf } from "./saleExecutiveSummaryPerf.js";
+
+/**
+ * ID de catálogo (marketplace_listings.external_listing_id) quando disponível.
+ * @param {Record<string, unknown>} item
+ * @param {Record<string, unknown>} row
+ * @param {string} listingId
+ */
+function pickExternalListingIdForCatalog(item, row, listingId) {
+  const fromItem = item.external_listing_id != null ? String(item.external_listing_id).trim() : "";
+  if (fromItem) return fromItem;
+  const fromRow =
+    row.external_listing_id != null
+      ? String(row.external_listing_id).trim()
+      : row.listing_id_display != null
+        ? String(row.listing_id_display).trim()
+        : "";
+  if (fromRow) return fromRow;
+  const lid = listingId != null ? String(listingId).trim() : "";
+  if (!lid || /^(title:|line:|sku:|pid:)/i.test(lid)) return "";
+  return lid;
+}
 
 /**
  * @param {{
@@ -148,182 +167,24 @@ export async function buildSaleExecutiveSummary(supabase, userId, filters, optio
     ranking_limit: rankingLimit,
   };
 
-  /** @type {Record<string, unknown>[]} */
-  let items = [];
-  perf.mark("sales_query_start");
-  try {
-    items = await fetchExecutiveSummarySourceItems(supabase, userId, filters);
-  } catch (itemFetchErr) {
-    console.error("[Suse7][executive-summary] source_items_failed", itemFetchErr);
-    logExecutiveSummaryZeroDebug({
-      sellerId: userId,
-      query: debugQuery,
-      sourceOrdersCount: 0,
-      sourceItemsCount: 0,
-      hydratedRowsCount: 0,
-      validOrders: 0,
-      eligibleItems: 0,
-      skippedInvalid: 0,
-      skippedPeriod: 0,
-      skippedMissingOrder: 0,
-      skippedNoMoney: 0,
-      skippedNoListingKey: 0,
-      firstSourceOrder: null,
-      firstSourceItem: null,
-      firstHydratedRow: null,
-      error: itemFetchErr?.message ?? String(itemFetchErr),
-    });
-    return empty();
-  }
-  perf.mark("sales_query_end");
-  perf.log("sales_query_end", {
-    items_count: items.length,
-    duration_ms: perf.stepDurationMs("sales_query_start", "sales_query_end"),
-  });
-
-  const sourceItemsCount = items.length;
-  const sourceOrderIds = [...new Set(items.map((it) => String(it.sales_order_id)).filter(Boolean))];
-  const sourceOrdersCount = sourceOrderIds.length;
-  const truncatedOrders = sourceItemsCount >= EXECUTIVE_SUMMARY_MAX_ITEMS_SCAN;
-
-  logExecutiveSummarySourceReady({
-    sourceItemsCount,
-    sourceOrdersCount,
-    processCap: EXECUTIVE_SUMMARY_MAX_ITEMS_SCAN,
-    truncatedScan: truncatedOrders,
-    elapsedMs: executiveSummaryElapsedMs(startedAt),
-  });
-
-  if (items.length === 0) {
-    logExecutiveSummaryZeroDebug({
-      sellerId: userId,
-      query: debugQuery,
-      sourceOrdersCount: 0,
-      sourceItemsCount: 0,
-      hydratedRowsCount: 0,
-      validOrders: 0,
-      eligibleItems: 0,
-      skippedInvalid: 0,
-      skippedPeriod: 0,
-      skippedMissingOrder: 0,
-      skippedNoMoney: 0,
-      skippedNoListingKey: 0,
-      firstSourceOrder: null,
-      firstSourceItem: null,
-      firstHydratedRow: null,
-    });
-    return empty();
-  }
-
-  const ordersById = await fetchExecutiveSummaryOrdersById(supabase, userId, sourceOrderIds);
-  const firstSourceItem = pickExecutiveDebugItemSnapshot(items[0]);
-  const firstSourceOrder = pickExecutiveDebugOrderSnapshot(
-    items[0]?.sales_order_id != null ? ordersById.get(String(items[0].sales_order_id)) : null,
-  );
-
-  /** @type {Record<string, unknown>[]} */
-  const eligibleItems = [];
+  let sourceItemsCount = 0;
+  let sourceOrdersCount = 0;
+  let totalEligibleItems = 0;
+  let hydratedRowsCount = 0;
   let skippedInvalid = 0;
   let skippedPeriod = 0;
   let skippedMissingOrder = 0;
-  for (const it of items) {
-    const oid = it?.sales_order_id != null ? String(it.sales_order_id) : "";
-    const order = oid ? ordersById.get(oid) ?? null : null;
-    if (!order) skippedMissingOrder += 1;
-
-    if (order && !isExecutiveSummaryEligibleOrderRow(order)) {
-      skippedInvalid += 1;
-      continue;
-    }
-    if (!orderMatchesExecutivePeriod(order, filters.period, it)) {
-      skippedPeriod += 1;
-      continue;
-    }
-    eligibleItems.push(it);
-  }
-
-  if (eligibleItems.length === 0) {
-    logExecutiveSummaryZeroDebug({
-      sellerId: userId,
-      query: debugQuery,
-      sourceOrdersCount,
-      sourceItemsCount,
-      hydratedRowsCount: 0,
-      validOrders: 0,
-      eligibleItems: 0,
-      skippedInvalid,
-      skippedPeriod,
-      skippedMissingOrder,
-      skippedNoMoney: 0,
-      skippedNoListingKey: 0,
-      firstSourceOrder,
-      firstSourceItem,
-      firstHydratedRow: null,
-    });
-    return { ...empty(), truncated_scan: truncatedOrders };
-  }
-
-  /** @type {Record<string, unknown>[]} */
-  let uiRows = [];
+  let firstSourceItem = null;
+  let firstSourceOrder = null;
+  let firstHydratedRow = null;
+  /** @type {Set<string>} */
+  const eligibleOrderIds = new Set();
   let hydrationDegraded = false;
-  perf.mark("hydration_start");
-  try {
-    uiRows = await hydrateExecutiveSummaryRankingRows(supabase, userId, eligibleItems, ordersById);
-  } catch (hydrateErr) {
-    hydrationDegraded = true;
-    console.warn("[S7_EXEC_SUMMARY_HYDRATION_DEGRADED]", {
-      message: hydrateErr?.message ?? String(hydrateErr),
-      eligibleItems: eligibleItems.length,
-    });
-    uiRows = buildExecutiveMinimalUiRowsFromItems(eligibleItems);
-  }
-  perf.mark("hydration_end");
-  perf.log("hydration_end", {
-    rows_count: uiRows.length,
-    degraded: hydrationDegraded,
-    duration_ms: perf.stepDurationMs("hydration_start", "hydration_end"),
-  });
-
-  const hydratedRowsCount = uiRows.length;
-  const firstHydratedRow = pickExecutiveDebugHydratedSnapshot(uiRows[0]);
-  const itemsById = new Map(eligibleItems.map((it) => [String(it.id), it]));
+  let hydrationStarted = false;
+  let profitCalcStarted = false;
 
   /** @type {Map<string, Awaited<ReturnType<typeof resolveSaleInternalTaxProfile>>>} */
   const taxProfileCache = new Map();
-
-  /** @type {Set<string>} */
-  const taxKeys = new Set();
-  for (const it of eligibleItems) {
-    const oid = it?.sales_order_id != null ? String(it.sales_order_id) : "";
-    const order = oid ? ordersById.get(oid) ?? null : null;
-    const sellerCompanyId =
-      it.seller_company_id != null && String(it.seller_company_id).trim() !== ""
-        ? String(it.seller_company_id).trim()
-        : order?.seller_company_id != null && String(order.seller_company_id).trim() !== ""
-          ? String(order.seller_company_id).trim()
-          : "";
-    const accountId =
-      it.marketplace_account_id != null && String(it.marketplace_account_id).trim() !== ""
-        ? String(it.marketplace_account_id).trim()
-        : order?.marketplace_account_id != null && String(order.marketplace_account_id).trim() !== ""
-          ? String(order.marketplace_account_id).trim()
-          : "";
-    taxKeys.add(`${sellerCompanyId}|${accountId}`);
-  }
-
-  perf.mark("profit_calc_start");
-  await Promise.all(
-    [...taxKeys].map(async (key) => {
-      const [sellerCompanyId, accountId] = key.split("|");
-      taxProfileCache.set(
-        key,
-        await resolveSaleInternalTaxProfile(supabase, userId, {
-          seller_company_id: sellerCompanyId || null,
-          marketplace_account_id: accountId || null,
-        }),
-      );
-    }),
-  );
 
   /**
    * @param {Record<string, unknown>} item
@@ -386,33 +247,147 @@ export async function buildSaleExecutiveSummary(supabase, userId, filters, optio
 
   /** @type {Map<string, string>} */
   const bestImageByListingKey = new Map();
-  for (const row of uiRows) {
-    const itemForImg = itemsById.get(String(row.item_id));
-    if (!itemForImg) continue;
-    const productIdForImg =
-      row.product_id != null && String(row.product_id).trim() !== ""
-        ? String(row.product_id).trim()
-        : "";
-    const { listing_id: listingIdForImg } = resolveExecutiveRankingListingId({
-      item: itemForImg,
-      row,
-      productId: productIdForImg || null,
-    });
-    if (!listingIdForImg) continue;
-    const mktForImg = row.marketplace != null ? String(row.marketplace) : "";
-    const accForImg =
-      row.marketplace_account_id != null ? String(row.marketplace_account_id) : "";
-    const keyForImg = `${mktForImg}::${accForImg}::${listingIdForImg}`;
-    const urlForImg = pickHydratedRowImageUrl(itemForImg, row);
-    if (urlForImg) bestImageByListingKey.set(keyForImg, urlForImg);
-  }
 
-  for (const row of uiRows) {
-    try {
-    const item = itemsById.get(String(row.item_id));
-    if (!item) continue;
-    const oid = row.sales_order_id != null ? String(row.sales_order_id) : "";
-    const order = oid ? ordersById.get(oid) ?? null : null;
+  perf.mark("sales_query_start");
+  try {
+    for await (const batch of iterateExecutiveSummaryBatches(supabase, userId, filters)) {
+      sourceItemsCount += batch.items.length;
+      sourceOrdersCount = batch.totalOrderIds;
+
+      if (firstSourceItem == null && batch.items.length > 0) {
+        firstSourceItem = pickExecutiveDebugItemSnapshot(batch.items[0]);
+        const oid0 =
+          batch.items[0]?.sales_order_id != null ? String(batch.items[0].sales_order_id) : "";
+        firstSourceOrder = pickExecutiveDebugOrderSnapshot(
+          oid0 ? batch.ordersById.get(oid0) ?? null : null,
+        );
+      }
+
+      const batchOrdersById = batch.ordersById;
+      /** @type {Record<string, unknown>[]} */
+      const eligibleItems = [];
+      for (const it of batch.items) {
+        const oid = it?.sales_order_id != null ? String(it.sales_order_id) : "";
+        const order = oid ? batchOrdersById.get(oid) ?? null : null;
+        if (!order) skippedMissingOrder += 1;
+
+        if (order && !isExecutiveSummaryEligibleOrderRow(order)) {
+          skippedInvalid += 1;
+          continue;
+        }
+        if (!orderMatchesExecutivePeriod(order, filters.period, it)) {
+          skippedPeriod += 1;
+          continue;
+        }
+        eligibleItems.push(it);
+      }
+
+      if (eligibleItems.length === 0) continue;
+
+      totalEligibleItems += eligibleItems.length;
+      for (const it of eligibleItems) {
+        const oid = it?.sales_order_id != null ? String(it.sales_order_id) : "";
+        if (oid) eligibleOrderIds.add(oid);
+      }
+
+      if (!profitCalcStarted) {
+        perf.mark("profit_calc_start");
+        profitCalcStarted = true;
+      }
+
+      /** @type {Record<string, unknown>[]} */
+      let uiRows = [];
+      if (!hydrationStarted) {
+        perf.mark("hydration_start");
+        hydrationStarted = true;
+      }
+      try {
+        uiRows = await hydrateExecutiveSummaryRankingRows(
+          supabase,
+          userId,
+          eligibleItems,
+          batchOrdersById,
+        );
+      } catch (hydrateErr) {
+        hydrationDegraded = true;
+        console.warn("[S7_EXEC_SUMMARY_HYDRATION_DEGRADED]", {
+          message: hydrateErr?.message ?? String(hydrateErr),
+          eligibleItems: eligibleItems.length,
+        });
+        uiRows = buildExecutiveMinimalUiRowsFromItems(eligibleItems);
+      }
+
+      hydratedRowsCount += uiRows.length;
+      if (firstHydratedRow == null && uiRows.length > 0) {
+        firstHydratedRow = pickExecutiveDebugHydratedSnapshot(uiRows[0]);
+      }
+
+      const itemsById = new Map(eligibleItems.map((it) => [String(it.id), it]));
+
+      /** @type {Set<string>} */
+      const batchTaxKeys = new Set();
+      for (const it of eligibleItems) {
+        const oid = it?.sales_order_id != null ? String(it.sales_order_id) : "";
+        const order = oid ? batchOrdersById.get(oid) ?? null : null;
+        const sellerCompanyId =
+          it.seller_company_id != null && String(it.seller_company_id).trim() !== ""
+            ? String(it.seller_company_id).trim()
+            : order?.seller_company_id != null && String(order.seller_company_id).trim() !== ""
+              ? String(order.seller_company_id).trim()
+              : "";
+        const accountId =
+          it.marketplace_account_id != null && String(it.marketplace_account_id).trim() !== ""
+            ? String(it.marketplace_account_id).trim()
+            : order?.marketplace_account_id != null &&
+                String(order.marketplace_account_id).trim() !== ""
+              ? String(order.marketplace_account_id).trim()
+              : "";
+        const key = `${sellerCompanyId}|${accountId}`;
+        if (!taxProfileCache.has(key)) batchTaxKeys.add(key);
+      }
+
+      if (batchTaxKeys.size > 0) {
+        await Promise.all(
+          [...batchTaxKeys].map(async (key) => {
+            const [sellerCompanyId, accountId] = key.split("|");
+            taxProfileCache.set(
+              key,
+              await resolveSaleInternalTaxProfile(supabase, userId, {
+                seller_company_id: sellerCompanyId || null,
+                marketplace_account_id: accountId || null,
+              }),
+            );
+          }),
+        );
+      }
+
+      for (const row of uiRows) {
+        const itemForImg = itemsById.get(String(row.item_id));
+        if (!itemForImg) continue;
+        const productIdForImg =
+          row.product_id != null && String(row.product_id).trim() !== ""
+            ? String(row.product_id).trim()
+            : "";
+        const { listing_id: listingIdForImg } = resolveExecutiveRankingListingId({
+          item: itemForImg,
+          row,
+          productId: productIdForImg || null,
+        });
+        if (!listingIdForImg) continue;
+        const mktForImg = row.marketplace != null ? String(row.marketplace) : "";
+        const accForImg =
+          row.marketplace_account_id != null ? String(row.marketplace_account_id) : "";
+        const keyForImg = `${mktForImg}::${accForImg}::${listingIdForImg}`;
+        const urlForImg = pickHydratedRowImageUrl(itemForImg, row);
+        if (urlForImg) bestImageByListingKey.set(keyForImg, urlForImg);
+      }
+
+      for (const row of uiRows) {
+        try {
+        const item = itemsById.get(String(row.item_id));
+        if (!item) continue;
+        const oid = row.sales_order_id != null ? String(row.sales_order_id) : "";
+        const order = oid ? batchOrdersById.get(oid) ?? null : null;
 
     const qty = toQty(item.quantity);
     const grossDec = toDecimal(item.gross_amount);
@@ -651,6 +626,70 @@ export async function buildSaleExecutiveSummary(supabase, userId, filters, optio
       }
       continue;
     }
+      }
+    }
+  } catch (itemFetchErr) {
+    console.error("[Suse7][executive-summary] source_items_failed", itemFetchErr);
+    logExecutiveSummaryZeroDebug({
+      sellerId: userId,
+      query: debugQuery,
+      sourceOrdersCount: 0,
+      sourceItemsCount: 0,
+      hydratedRowsCount: 0,
+      validOrders: 0,
+      eligibleItems: 0,
+      skippedInvalid: 0,
+      skippedPeriod: 0,
+      skippedMissingOrder: 0,
+      skippedNoMoney: 0,
+      skippedNoListingKey: 0,
+      firstSourceOrder: null,
+      firstSourceItem: null,
+      firstHydratedRow: null,
+      error: itemFetchErr?.message ?? String(itemFetchErr),
+    });
+    return empty();
+  }
+  perf.mark("sales_query_end");
+  perf.log("sales_query_end", {
+    items_count: sourceItemsCount,
+    duration_ms: perf.stepDurationMs("sales_query_start", "sales_query_end"),
+  });
+
+  if (hydrationStarted) {
+    perf.mark("hydration_end");
+    perf.log("hydration_end", {
+      rows_count: hydratedRowsCount,
+      degraded: hydrationDegraded,
+      duration_ms: perf.stepDurationMs("hydration_start", "hydration_end"),
+    });
+  }
+
+  logExecutiveSummarySourceReady({
+    sourceItemsCount,
+    sourceOrdersCount,
+    elapsedMs: executiveSummaryElapsedMs(startedAt),
+  });
+
+  if (sourceItemsCount === 0 || totalEligibleItems === 0) {
+    logExecutiveSummaryZeroDebug({
+      sellerId: userId,
+      query: debugQuery,
+      sourceOrdersCount,
+      sourceItemsCount,
+      hydratedRowsCount,
+      validOrders: eligibleOrderIds.size,
+      eligibleItems: totalEligibleItems,
+      skippedInvalid,
+      skippedPeriod,
+      skippedMissingOrder,
+      skippedNoMoney: 0,
+      skippedNoListingKey: 0,
+      firstSourceOrder,
+      firstSourceItem,
+      firstHydratedRow,
+    });
+    return empty();
   }
 
   const ordersCount = uniqueOrders.size;
@@ -691,12 +730,6 @@ export async function buildSaleExecutiveSummary(supabase, userId, filters, optio
     warnings.push(`${partialCostLines} linha(s) com custo interno parcial ou ausente.`);
     dataQualityStatus = "partial";
   }
-  if (truncatedOrders) {
-    warnings.push(
-      `Análise limitada às ${EXECUTIVE_SUMMARY_MAX_ITEMS_SCAN} linhas mais recentes do recorte (cap S7_EXECUTIVE_SUMMARY_MAX_ITEMS).`,
-    );
-    dataQualityStatus = "partial";
-  }
   if (hydrationDegraded) {
     warnings.push("Hidratação de catálogo degradada; KPIs usam snapshots da linha de venda.");
     dataQualityStatus = "partial";
@@ -704,28 +737,6 @@ export async function buildSaleExecutiveSummary(supabase, userId, filters, optio
   if (skippedLineErrors > 0) {
     warnings.push(`${skippedLineErrors} linha(s) ignorada(s) por erro de cálculo.`);
     dataQualityStatus = "partial";
-  }
-
-  /**
-   * ID de catálogo (marketplace_listings.external_listing_id) quando disponível.
-   * @param {Record<string, unknown>} item
-   * @param {Record<string, unknown>} row
-   * @param {string} listingId
-   */
-  function pickExternalListingIdForCatalog(item, row, listingId) {
-    const fromItem =
-      item.external_listing_id != null ? String(item.external_listing_id).trim() : "";
-    if (fromItem) return fromItem;
-    const fromRow =
-      row.external_listing_id != null
-        ? String(row.external_listing_id).trim()
-        : row.listing_id_display != null
-          ? String(row.listing_id_display).trim()
-          : "";
-    if (fromRow) return fromRow;
-    const lid = listingId != null ? String(listingId).trim() : "";
-    if (!lid || /^(title:|line:|sku:|pid:)/i.test(lid)) return "";
-    return lid;
   }
 
   /**
@@ -806,7 +817,7 @@ export async function buildSaleExecutiveSummary(supabase, userId, filters, optio
 
   perf.mark("profit_calc_end");
   perf.log("profit_calc_end", {
-    lines_processed: uiRows.length,
+    lines_processed: hydratedRowsCount,
     tax_profiles: taxProfileCache.size,
     duration_ms: perf.stepDurationMs("profit_calc_start", "profit_calc_end"),
   });
@@ -892,10 +903,10 @@ export async function buildSaleExecutiveSummary(supabase, userId, filters, optio
       return b.orders_count - a.orders_count;
     });
 
-  const validOrders = new Set(eligibleItems.map((it) => String(it.sales_order_id)).filter(Boolean)).size;
+  const validOrders = eligibleOrderIds.size;
   const shouldLogExecutiveSummaryDebug =
     process.env.S7_EXEC_SUMMARY_DEBUG === "1" ||
-    (listingSorted.length === 0 && eligibleItems.length > 0) ||
+    (listingSorted.length === 0 && totalEligibleItems > 0) ||
     (ordersCount > 0 && listingSorted.length === 0);
 
   if (shouldLogExecutiveSummaryDebug) {
@@ -909,8 +920,7 @@ export async function buildSaleExecutiveSummary(supabase, userId, filters, optio
       skippedFilterChip,
       skippedNoMoney,
       skippedNoListingKey,
-      eligibleItems: eligibleItems.length,
-      uiRows: uiRows.length,
+      eligibleItems: totalEligibleItems,
       hydratedRowsCount,
       rankingListingGroups: listingAgg.size,
       orders_count: ordersCount,
@@ -926,11 +936,10 @@ export async function buildSaleExecutiveSummary(supabase, userId, filters, optio
     ordersCount,
     listingsCount: listingSorted.length,
     productsCount: productSorted.length,
-    eligibleItems: eligibleItems.length,
+    eligibleItems: totalEligibleItems,
     hydratedRowsCount,
     skippedLineErrors,
     hydrationDegraded,
-    truncatedScan: truncatedOrders,
     elapsedMs: executiveSummaryElapsedMs(startedAt),
   });
 
@@ -953,6 +962,8 @@ export async function buildSaleExecutiveSummary(supabase, userId, filters, optio
       accounts_considered: accountsConsidered,
       orders_count: ordersCount,
       gross_sales_brl: moneyDecimal(grossTotal) ?? "0.00",
+      records_processed: hydratedRowsCount,
+      execution_time_ms: executiveSummaryElapsedMs(startedAt),
     });
   }
 
@@ -964,7 +975,7 @@ export async function buildSaleExecutiveSummary(supabase, userId, filters, optio
       sourceItemsCount,
       hydratedRowsCount,
       validOrders,
-      eligibleItems: eligibleItems.length,
+      eligibleItems: totalEligibleItems,
       skippedInvalid,
       skippedPeriod,
       skippedMissingOrder,
@@ -1033,6 +1044,6 @@ export async function buildSaleExecutiveSummary(supabase, userId, filters, optio
       status: dataQualityStatus,
       warnings,
     },
-    truncated_scan: truncatedOrders,
+    truncated_scan: false,
   };
 }
