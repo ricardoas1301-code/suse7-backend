@@ -25,6 +25,7 @@ import {
   buildExecutiveMinimalUiRowsFromItems,
   fetchExecutiveSummaryOrdersById,
   fetchExecutiveSummarySourceItems,
+  isExecutiveSummaryDevAutoDebugEnabled,
   logExecutiveSummaryZeroDebug,
   pickExecutiveDebugHydratedSnapshot,
   pickExecutiveDebugItemSnapshot,
@@ -74,10 +75,20 @@ export function buildEmptyExecutiveSummaryPayload(filters = {}) {
     summary: {
       gross_sales_brl: "0.00",
       orders_count: 0,
+      orders_in_progress_count: 0,
       items_quantity_sold: 0,
+      average_ticket_brl: null,
       net_received_brl: "0.00",
+      gross_profit_brl: null,
+      net_profit_brl: "0.00",
       contribution_profit_brl: "0.00",
       contribution_margin_percent: "0.00",
+      marketplace_fee_brl: null,
+      shipping_cost_brl: null,
+      tax_cost_brl: null,
+      ads_cost_brl: null,
+      total_costs_brl: null,
+      you_receive_brl: "0.00",
       visits_count: null,
       sales_conversion_rate_percent: null,
       conversion_data_status: "unavailable",
@@ -342,6 +353,16 @@ export async function buildSaleExecutiveSummary(supabase, userId, filters, optio
   let unitsTotal = 0;
   /** @type {Set<string>} */
   const uniqueOrders = new Set();
+  /** @type {Set<string>} */
+  const inProgressOrders = new Set();
+  let feeTotal = new Decimal(0);
+  let shippingTotal = new Decimal(0);
+  let taxTotal = new Decimal(0);
+  let adsTotal = new Decimal(0);
+  let hasFeeData = false;
+  let hasShippingData = false;
+  let hasTaxData = false;
+  let hasAdsData = false;
 
   let negativeCount = 0;
   let lowMarginCount = 0;
@@ -398,6 +419,9 @@ export async function buildSaleExecutiveSummary(supabase, userId, filters, optio
     const netDec =
       toDecimal(item.net_amount) ??
       (grossDec != null ? grossDec : null);
+    const feeDec = toDecimal(item.fee_amount);
+    const shippingDec = toDecimal(item.shipping_share_amount);
+    const taxDec = toDecimal(item.tax_amount);
 
     if (grossDec == null && netDec == null) {
       skippedNoMoney += 1;
@@ -406,6 +430,18 @@ export async function buildSaleExecutiveSummary(supabase, userId, filters, optio
 
     const grossLine = grossDec ?? new Decimal(0);
     const netLine = netDec ?? grossLine;
+    if (feeDec != null) {
+      feeTotal = feeTotal.plus(feeDec);
+      hasFeeData = true;
+    }
+    if (shippingDec != null) {
+      shippingTotal = shippingTotal.plus(shippingDec);
+      hasShippingData = true;
+    }
+    if (taxDec != null) {
+      taxTotal = taxTotal.plus(taxDec);
+      hasTaxData = true;
+    }
 
     const taxProfile = resolveTaxForLine(item, order);
     const productId =
@@ -481,7 +517,18 @@ export async function buildSaleExecutiveSummary(supabase, userId, filters, optio
     grossTotal = grossTotal.plus(grossLine);
     netTotal = netTotal.plus(netLine);
     unitsTotal += qty;
-    if (oid) uniqueOrders.add(oid);
+    if (oid) {
+      uniqueOrders.add(oid);
+      const orderStatus = order?.order_status != null ? String(order.order_status).trim().toLowerCase() : "";
+      if (
+        orderStatus &&
+        orderStatus !== "delivered" &&
+        orderStatus !== "closed" &&
+        orderStatus !== "fulfilled"
+      ) {
+        inProgressOrders.add(oid);
+      }
+    }
 
     // Distribuição por conta — contagem de pedidos e itens por marketplace_account.
     {
@@ -607,10 +654,30 @@ export async function buildSaleExecutiveSummary(supabase, userId, filters, optio
   }
 
   const ordersCount = uniqueOrders.size;
+  const ordersInProgressCount = inProgressOrders.size;
   let contributionMargin = new Decimal(0);
   if (profitLinesWithValue > 0 && !grossTotal.isZero()) {
     contributionMargin = profitTotal.div(grossTotal).mul(100).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
   }
+  const avgTicket =
+    ordersCount > 0
+      ? grossTotal.div(ordersCount).toDecimalPlaces(2, Decimal.ROUND_HALF_UP)
+      : null;
+  const grossProfit =
+    hasFeeData || hasShippingData || hasTaxData || hasAdsData
+      ? grossTotal
+          .minus(hasFeeData ? feeTotal : new Decimal(0))
+          .minus(hasShippingData ? shippingTotal : new Decimal(0))
+          .minus(hasTaxData ? taxTotal : new Decimal(0))
+          .minus(hasAdsData ? adsTotal : new Decimal(0))
+      : null;
+  const totalCosts =
+    hasFeeData || hasShippingData || hasTaxData || hasAdsData
+      ? (hasFeeData ? feeTotal : new Decimal(0))
+          .plus(hasShippingData ? shippingTotal : new Decimal(0))
+          .plus(hasTaxData ? taxTotal : new Decimal(0))
+          .plus(hasAdsData ? adsTotal : new Decimal(0))
+      : null;
 
   /** @type {string[]} */
   const warnings = [];
@@ -867,6 +934,28 @@ export async function buildSaleExecutiveSummary(supabase, userId, filters, optio
     elapsedMs: executiveSummaryElapsedMs(startedAt),
   });
 
+  if (isExecutiveSummaryDevAutoDebugEnabled()) {
+    let accountsConsidered = filters.marketplace_account_id ? 1 : null;
+    if (!filters.marketplace_account_id) {
+      const { count } = await supabase
+        .from("marketplace_accounts")
+        .select("id", { count: "exact", head: true })
+        .eq("user_id", userId);
+      accountsConsidered = count ?? null;
+    }
+    console.info("[S7][executive-summary][multi_account_scope]", {
+      seller_id: userId,
+      marketplace_account_id: filters.marketplace_account_id ?? null,
+      period_start: filters.period?.start_date ?? null,
+      period_end: filters.period?.end_date ?? null,
+      order_ids_in_period: sourceOrdersCount,
+      source_items_count: sourceItemsCount,
+      accounts_considered: accountsConsidered,
+      orders_count: ordersCount,
+      gross_sales_brl: moneyDecimal(grossTotal) ?? "0.00",
+    });
+  }
+
   if (sourceItemsCount > 0 && ordersCount === 0 && unitsTotal === 0 && grossTotal.isZero()) {
     logExecutiveSummaryZeroDebug({
       sellerId: userId,
@@ -907,10 +996,20 @@ export async function buildSaleExecutiveSummary(supabase, userId, filters, optio
     summary: {
       gross_sales_brl: moneyDecimal(grossTotal) ?? "0.00",
       orders_count: ordersCount,
+      orders_in_progress_count: ordersInProgressCount,
       items_quantity_sold: unitsTotal,
+      average_ticket_brl: avgTicket != null ? moneyDecimal(avgTicket) ?? null : null,
       net_received_brl: moneyDecimal(netTotal) ?? "0.00",
+      gross_profit_brl: grossProfit != null ? moneyDecimal(grossProfit) ?? null : null,
+      net_profit_brl: moneyDecimal(profitTotal) ?? "0.00",
       contribution_profit_brl: moneyDecimal(profitTotal) ?? "0.00",
       contribution_margin_percent: contributionMargin.toFixed(2),
+      marketplace_fee_brl: hasFeeData ? moneyDecimal(feeTotal) ?? "0.00" : null,
+      shipping_cost_brl: hasShippingData ? moneyDecimal(shippingTotal) ?? "0.00" : null,
+      tax_cost_brl: hasTaxData ? moneyDecimal(taxTotal) ?? "0.00" : null,
+      ads_cost_brl: hasAdsData ? moneyDecimal(adsTotal) ?? "0.00" : null,
+      total_costs_brl: totalCosts != null ? moneyDecimal(totalCosts) ?? null : null,
+      you_receive_brl: moneyDecimal(netTotal) ?? "0.00",
       visits_count: null,
       sales_conversion_rate_percent: null,
       conversion_data_status: "unavailable",

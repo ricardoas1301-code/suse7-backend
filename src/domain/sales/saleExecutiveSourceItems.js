@@ -168,22 +168,46 @@ function buildExecutiveSourceItemsQuery(supabase, userId, filters, selectExpr) {
 
   }
 
-  const period = filters.period;
-
-  if (period?.start_ms != null && Number.isFinite(period.start_ms)) {
-
-    itemsQuery = itemsQuery.gte("created_at", new Date(period.start_ms).toISOString());
-
-  }
-
-  if (period?.end_ms_exclusive != null && Number.isFinite(period.end_ms_exclusive)) {
-
-    itemsQuery = itemsQuery.lt("created_at", new Date(period.end_ms_exclusive).toISOString());
-
-  }
-
   return itemsQuery;
 
+}
+
+/**
+ * @param {import("@supabase/supabase-js").SupabaseClient} supabase
+ * @param {string} userId
+ * @param {{
+ *   marketplace?: string | null;
+ *   marketplace_account_id?: string | null;
+ *   seller_company_id?: string | null;
+ *   period?: { start_ms: number | null; end_ms_exclusive: number | null };
+ * }} filters
+ */
+async function fetchExecutiveSummaryOrderIdsByPeriod(supabase, userId, filters) {
+  const period = filters.period;
+  const hasPeriod =
+    (period?.start_ms != null && Number.isFinite(period.start_ms)) ||
+    (period?.end_ms_exclusive != null && Number.isFinite(period.end_ms_exclusive));
+  if (!hasPeriod) return null;
+
+  let q = supabase.from("sales_orders").select("id").eq("user_id", userId);
+
+  if (filters.marketplace) q = q.eq("marketplace", filters.marketplace);
+  if (filters.marketplace_account_id) q = q.eq("marketplace_account_id", filters.marketplace_account_id);
+  if (filters.seller_company_id) q = q.eq("seller_company_id", filters.seller_company_id);
+
+  if (period?.start_ms != null && Number.isFinite(period.start_ms)) {
+    q = q.gte("date_created_marketplace", new Date(period.start_ms).toISOString());
+  }
+  if (period?.end_ms_exclusive != null && Number.isFinite(period.end_ms_exclusive)) {
+    q = q.lt("date_created_marketplace", new Date(period.end_ms_exclusive).toISOString());
+  }
+
+  const { data, error } = await q
+    .order("date_created_marketplace", { ascending: false, nullsFirst: false })
+    .limit(Math.min(1200, EXECUTIVE_SUMMARY_MAX_ITEMS_SCAN * 4));
+  if (error) throw error;
+  const ids = Array.isArray(data) ? data.map((r) => String(r?.id ?? "")).filter(Boolean) : [];
+  return ids;
 }
 
 
@@ -234,7 +258,14 @@ export async function fetchExecutiveSummarySourceItems(supabase, userId, filters
 
   }
 
+  const orderIdsForPeriod = await fetchExecutiveSummaryOrderIdsByPeriod(supabase, userId, filters);
+  if (Array.isArray(orderIdsForPeriod) && orderIdsForPeriod.length === 0) return [];
 
+
+
+  // Chunk no `.in(sales_order_id)`: muitos UUIDs num único filtro estouram o header HTTP
+  // do PostgREST (Bad Request / HeadersOverflowError) — cenário típico em “Todas as contas”.
+  const ORDER_IDS_IN_CHUNK_SIZE = 100;
 
   /**
 
@@ -243,25 +274,60 @@ export async function fetchExecutiveSummarySourceItems(supabase, userId, filters
    */
 
   async function runSelect(selectExpr) {
+    const cap = EXECUTIVE_SUMMARY_MAX_ITEMS_SCAN;
 
-    let itemsQuery = buildExecutiveSourceItemsQuery(supabase, userId, filters, selectExpr);
-
-    if (qNormalized) {
-
+    /**
+     * @param {ReturnType<typeof buildExecutiveSourceItemsQuery>} baseQuery
+     */
+    function applySearchOr(baseQuery) {
+      if (!qNormalized) return baseQuery;
       const tokens = splitSearchTokens(qNormalized);
-
       const orExpr = buildVendasSalesItemQOrFilter(tokens, orderIdsForSearch);
-
-      if (!orExpr) return { data: [], error: null };
-
-      itemsQuery = itemsQuery.or(orExpr);
-
+      if (!orExpr) return null;
+      return baseQuery.or(orExpr);
     }
 
+    if (Array.isArray(orderIdsForPeriod) && orderIdsForPeriod.length > 0) {
+      /** @type {Record<string, unknown>[]} */
+      const merged = [];
+      /** @type {Set<string>} */
+      const seenItemIds = new Set();
 
+      for (const chunk of chunkIds(orderIdsForPeriod, ORDER_IDS_IN_CHUNK_SIZE)) {
+        let itemsQuery = buildExecutiveSourceItemsQuery(supabase, userId, filters, selectExpr);
+        itemsQuery = itemsQuery.in("sales_order_id", chunk);
+        const withSearch = applySearchOr(itemsQuery);
+        if (withSearch === null) return { data: [], error: null };
+        itemsQuery = withSearch;
 
-    return itemsQuery.order("created_at", { ascending: false }).limit(EXECUTIVE_SUMMARY_MAX_ITEMS_SCAN);
+        const { data, error } = await itemsQuery.order("created_at", { ascending: false }).limit(cap);
+        if (error) return { data: null, error };
 
+        for (const row of data || []) {
+          const id = row?.id != null ? String(row.id) : "";
+          if (!id || seenItemIds.has(id)) continue;
+          seenItemIds.add(id);
+          merged.push(row);
+        }
+
+        if (merged.length >= cap) break;
+      }
+
+      merged.sort((a, b) => {
+        const ta = Date.parse(String(a?.created_at ?? ""));
+        const tb = Date.parse(String(b?.created_at ?? ""));
+        return (Number.isFinite(tb) ? tb : 0) - (Number.isFinite(ta) ? ta : 0);
+      });
+
+      return { data: merged.slice(0, cap), error: null };
+    }
+
+    let itemsQuery = buildExecutiveSourceItemsQuery(supabase, userId, filters, selectExpr);
+    const withSearch = applySearchOr(itemsQuery);
+    if (withSearch === null) return { data: [], error: null };
+    itemsQuery = withSearch;
+
+    return itemsQuery.order("created_at", { ascending: false }).limit(cap);
   }
 
 
