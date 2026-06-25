@@ -1,0 +1,242 @@
+﻿node.exe : Retrieving projectÔÇª
+No C:\nvm4w\nodejs\vercel.ps1:16 caractere:5
++     & "$basedir/node$exe"  "$basedir/node_modules/vercel/dist/vc.js"  ...
++     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (Retrieving projectÔÇª:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+Resolving deployment "suse7-backend-dev.vercel.app"
+Streaming logs for deployment dpl_8RZWJ7ZVqMLxMRUwQLPqqV3VCUiV starting from 03:40:26.22
+
+waiting for new logs...
+03:41:04.09  Ôä╣´©Å  POST  ---  suse7-backend-dev.vercel.app  ãÆ  /api/jobs/daily-sales-summary-automation
+-----------------------------------------------------------------------------------------------------
+[S7 API Router] resolved path {
+  path: '/api/jobs/daily-sales-summary-automation',
+  pathNorm: '/api/jobs/daily-sales-summary-automation',
+  rawUrl: '/api/jobs/daily-sales-summary-automation?__path=jobs%2Fdaily-sales-summary-automation&path=jobs%2Fdaily-sale
+s-summary-automation',
+  method: 'POST',
+  router_version: 'ml-webhook-job-top-route-v1'
+}
+
+waiting for new logs...
+03:41:04.09  Ôä╣´©Å  POST  ---  suse7-backend-dev.vercel.app  ãÆ  /api/jobs/daily-sales-summary-automation
+-----------------------------------------------------------------------------------------------------
+[S7_NOTIFICATION]_DAILY_SALES_SUMMARY_MOTOR_START {
+  now_utc: '2026-06-20T06:41:04.090Z',
+  now_brt: '2026-06-20 03:41 BRT (wd=6)',
+  tolerance_min: 3,
+  limit: 200
+}
+
+waiting for new logs...
+03:41:04.24  Ôä╣´©Å  POST  ---  suse7-backend-dev.vercel.app  ãÆ  /api/jobs/daily-sales-summary-automation
+-----------------------------------------------------------------------------------------------------
+[S7_NOTIFICATION]_DAILY_SALES_SUMMARY_MOTOR_RULES { active_rules: 2, scanning: 2 }
+
+waiting for new logs...
+03:41:04.24  Ôä╣´©Å  POST  ---  suse7-backend-dev.vercel.app  ãÆ  /api/jobs/daily-sales-summary-automation
+-----------------------------------------------------------------------------------------------------
+[S7_NOTIFICATION]_DAILY_SALES_SUMMARY_RULE_SCAN {
+  seller_id: 'c8a62ec6-cfbe-4ad9-98ea-49fadebeda50',
+  enabled: true,
+  weekdays: [ 1, 2, 3, 4, 5, 6 ],
+  times: [ '03:43', '20:06' ],
+  channels: { email: true, popup: false, in_app: true, whatsapp: true },
+  timezone: 'America/Sao_Paulo',
+  last_successful_run_at: '2026-06-20T06:43:00+00:00',
+  now_utc: '2026-06-20T06:41:04.090Z',
+  now_brt: '2026-06-20 03:41 BRT (wd=6)',
+  tolerance_min: 3
+}
+
+waiting for new logs...
+03:41:04.53  Ôä╣´©Å  POST  ---  suse7-backend-dev.vercel.app  ãÆ  /api/jobs/daily-sales-summary-automation
+-----------------------------------------------------------------------------------------------------
+[S7_NOTIFICATION]_DAILY_SALES_SUMMARY_RULE_SKIP {
+  seller_id: 'c8a62ec6-cfbe-4ad9-98ea-49fadebeda50',
+  reason: 'already_completed',
+  scheduled_at: '2026-06-20T06:43:00.000Z',
+  run_id: '28d49d26-f9ec-43fd-be10-31af9a39631c'
+}
+
+waiting for new logs...
+03:41:49.69  Ôä╣´©Å  POST  ---  suse7-backend-dev.vercel.app  ãÆ  /api/ml/webhook
+----------------------------------------------------------------------------
+[ml/webhook] route_matched {
+  pathNorm: '/api/ml/webhook',
+  pathResolved: '/api/ml/webhook',
+  rawUrl: '/api/ml/webhook?__path=ml%2Fwebhook&path=ml%2Fwebhook',
+  method: 'POST'
+}
+
+waiting for new logs...
+03:41:50.15  Ôä╣´©Å  POST  ---  suse7-backend-dev.vercel.app  ãÆ  /api/ml/webhook
+----------------------------------------------------------------------------
+[ML_WEBHOOK_RECEIVED] {
+  topic: 'public_candidates',
+  resource: '/seller-promotions/candidates/CANDIDATE-MLB4506268747-76326093509',
+  user_id: '2350765542',
+  timestamp: '2026-06-20T06:41:50.155Z'
+}
+
+waiting for new logs...
+03:42:04.65  Ôä╣´©Å  POST  ---  suse7-backend-dev.vercel.app  ãÆ  /api/jobs/daily-sales-summary-automation
+-----------------------------------------------------------------------------------------------------
+[S7 API Router] resolved path {
+  path: '/api/jobs/daily-sales-summary-automation',
+  pathNorm: '/api/jobs/daily-sales-summary-automation',
+  rawUrl: '/api/jobs/daily-sales-summary-automation?__path=jobs%2Fdaily-sales-summary-automation&path=jobs%2Fdaily-sale
+s-summary-automation',
+  method: 'POST',
+  router_version: 'ml-webhook-job-top-route-v1'
+}
+
+waiting for new logs...
+03:42:04.65  Ôä╣´©Å  POST  ---  suse7-backend-dev.vercel.app  ãÆ  /api/jobs/daily-sales-summary-automation
+-----------------------------------------------------------------------------------------------------
+[S7_NOTIFICATION]_DAILY_SALES_SUMMARY_MOTOR_START {
+  now_utc: '2026-06-20T06:42:04.652Z',
+  now_brt: '2026-06-20 03:42 BRT (wd=6)',
+  tolerance_min: 3,
+  limit: 200
+}
+
+waiting for new logs...
+03:42:04.77  Ôä╣´©Å  POST  ---  suse7-backend-dev.vercel.app  ãÆ  /api/jobs/daily-sales-summary-automation
+-----------------------------------------------------------------------------------------------------
+[S7_NOTIFICATION]_DAILY_SALES_SUMMARY_MOTOR_RULES { active_rules: 2, scanning: 2 }
+
+waiting for new logs...
+03:43:04.20  Ôä╣´©Å  POST  ---  suse7-backend-dev.vercel.app  ãÆ  /api/jobs/daily-sales-summary-automation
+-----------------------------------------------------------------------------------------------------
+[S7 API Router] resolved path {
+  path: '/api/jobs/daily-sales-summary-automation',
+  pathNorm: '/api/jobs/daily-sales-summary-automation',
+  rawUrl: '/api/jobs/daily-sales-summary-automation?__path=jobs%2Fdaily-sales-summary-automation&path=jobs%2Fdaily-sale
+s-summary-automation',
+  method: 'POST',
+  router_version: 'ml-webhook-job-top-route-v1'
+}
+
+waiting for new logs...
+03:43:04.54  Ôä╣´©Å  POST  ---  suse7-backend-dev.vercel.app  ãÆ  /api/jobs/daily-sales-summary-automation
+-----------------------------------------------------------------------------------------------------
+[S7_NOTIFICATION]_DAILY_SALES_SUMMARY_MOTOR_RULES { active_rules: 2, scanning: 2 }
+
+waiting for new logs...
+03:44:04.81  Ôä╣´©Å  POST  ---  suse7-backend-dev.vercel.app  ãÆ  /api/jobs/daily-sales-summary-automation
+-----------------------------------------------------------------------------------------------------
+[S7 API Router] resolved path {
+  path: '/api/jobs/daily-sales-summary-automation',
+  pathNorm: '/api/jobs/daily-sales-summary-automation',
+  rawUrl: '/api/jobs/daily-sales-summary-automation?__path=jobs%2Fdaily-sales-summary-automation&path=jobs%2Fdaily-sale
+s-summary-automation',
+  method: 'POST',
+  router_version: 'ml-webhook-job-top-route-v1'
+}
+
+waiting for new logs...
+03:44:04.92  Ôä╣´©Å  POST  ---  suse7-backend-dev.vercel.app  ãÆ  /api/jobs/daily-sales-summary-automation
+-----------------------------------------------------------------------------------------------------
+[S7_NOTIFICATION]_DAILY_SALES_SUMMARY_MOTOR_RULES { active_rules: 2, scanning: 2 }
+
+waiting for new logs...
+03:44:05.04  Ôä╣´©Å  POST  ---  suse7-backend-dev.vercel.app  ãÆ  /api/jobs/daily-sales-summary-automation
+-----------------------------------------------------------------------------------------------------
+[S7_NOTIFICATION]_DAILY_SALES_SUMMARY_RULE_SKIP {
+  seller_id: 'c8a62ec6-cfbe-4ad9-98ea-49fadebeda50',
+  reason: 'already_completed',
+  scheduled_at: '2026-06-20T06:43:00.000Z',
+  run_id: '28d49d26-f9ec-43fd-be10-31af9a39631c'
+}
+
+waiting for new logs...
+03:44:05.33  Ôä╣´©Å  POST  ---  suse7-backend-dev.vercel.app  ãÆ  /api/jobs/daily-sales-summary-automation
+-----------------------------------------------------------------------------------------------------
+[S7_NOTIFICATION]_DAILY_SALES_SUMMARY_RULE_SKIP {
+  seller_id: '7f351439-ea13-44de-8a9c-a2413713f6e4',
+  reason: 'already_completed',
+  scheduled_at: '2026-06-20T06:46:00.000Z',
+  run_id: 'cdda039a-b7bc-4fba-b3c6-32b6d634429b'
+}
+
+waiting for new logs...
+03:45:11.54  Ôä╣´©Å  POST  ---  suse7-backend-dev.vercel.app  ãÆ  /api/jobs/daily-sales-summary-automation
+-----------------------------------------------------------------------------------------------------
+[S7 API Router] resolved path {
+  path: '/api/jobs/daily-sales-summary-automation',
+  pathNorm: '/api/jobs/daily-sales-summary-automation',
+  rawUrl: '/api/jobs/daily-sales-summary-automation?__path=jobs%2Fdaily-sales-summary-automation&path=jobs%2Fdaily-sale
+s-summary-automation',
+  method: 'POST',
+  router_version: 'ml-webhook-job-top-route-v1'
+}
+
+waiting for new logs...
+03:45:11.90  Ôä╣´©Å  POST  ---  suse7-backend-dev.vercel.app  ãÆ  /api/jobs/daily-sales-summary-automation
+-----------------------------------------------------------------------------------------------------
+[S7_NOTIFICATION]_DAILY_SALES_SUMMARY_MOTOR_RULES { active_rules: 2, scanning: 2 }
+
+waiting for new logs...
+03:45:12.04  Ôä╣´©Å  POST  ---  suse7-backend-dev.vercel.app  ãÆ  /api/jobs/daily-sales-summary-automation
+-----------------------------------------------------------------------------------------------------
+[S7_NOTIFICATION]_DAILY_SALES_SUMMARY_RULE_SKIP {
+  seller_id: 'c8a62ec6-cfbe-4ad9-98ea-49fadebeda50',
+  reason: 'already_completed',
+  scheduled_at: '2026-06-20T06:43:00.000Z',
+  run_id: '28d49d26-f9ec-43fd-be10-31af9a39631c'
+}
+
+waiting for new logs...
+03:45:12.04  Ôä╣´©Å  POST  ---  suse7-backend-dev.vercel.app  ãÆ  /api/jobs/daily-sales-summary-automation
+-----------------------------------------------------------------------------------------------------
+[S7_NOTIFICATION]_DAILY_SALES_SUMMARY_RULE_SCAN {
+  seller_id: '7f351439-ea13-44de-8a9c-a2413713f6e4',
+  enabled: true,
+  weekdays: [ 1, 2, 3, 4, 5, 6 ],
+  times: [ '03:46', '16:00' ],
+  channels: { email: false, popup: true, in_app: true, whatsapp: false },
+  timezone: 'America/Sao_Paulo',
+  last_successful_run_at: '2026-06-20T06:46:00+00:00',
+  now_utc: '2026-06-20T06:45:11.545Z',
+  now_brt: '2026-06-20 03:45 BRT (wd=6)',
+  tolerance_min: 3
+}
+
+waiting for new logs...
+03:45:12.33  Ôä╣´©Å  POST  ---  suse7-backend-dev.vercel.app  ãÆ  /api/jobs/daily-sales-summary-automation
+-----------------------------------------------------------------------------------------------------
+[S7_NOTIFICATION]_DAILY_SALES_SUMMARY_RULE_SKIP {
+  seller_id: '7f351439-ea13-44de-8a9c-a2413713f6e4',
+  reason: 'already_completed',
+  scheduled_at: '2026-06-20T06:46:00.000Z',
+  run_id: 'cdda039a-b7bc-4fba-b3c6-32b6d634429b'
+}
+
+waiting for new logs...
+03:45:12.33  Ôä╣´©Å  POST  ---  suse7-backend-dev.vercel.app  ãÆ  /api/jobs/daily-sales-summary-automation
+-----------------------------------------------------------------------------------------------------
+[S7_NOTIFICATION]_DAILY_SALES_SUMMARY_MOTOR_OK {
+  scanned: 2,
+  completed: 0,
+  failed: 0,
+  skipped: 2,
+  results: [
+    {
+      seller_id: 'c8a62ec6-cfbe-4ad9-98ea-49fadebeda50',
+      status: 'skipped',
+      reason: 'already_completed'
+    },
+    {
+      seller_id: '7f351439-ea13-44de-8a9c-a2413713f6e4',
+      status: 'skipped',
+      reason: 'already_completed'
+    }
+  ]
+}
+
+waiting for new logs...
+WARN! Command automatically interrupted after 5 minutes.
+

@@ -1,10 +1,13 @@
 -- ======================================================================
--- S7 | Revogar grants do papel anon em tabelas sensíveis marketplace/vendas
--- Complemento de 20260513153000_s7_marketplace_sales_rls_hardening.sql
+-- ARQUIVADA — não usar via supabase db push
 --
--- Objetivo: anon sem privilégios de tabela; authenticated + RLS; service_role total.
--- Idempotente: ignora tabelas ausentes.
+-- Motivo: timestamp duplicado com 20260513160000_s7_billing_042_limits_enforcement.sql
+-- No DEV remoto, o slot 20260513160000 já foi consumido pelo billing_042.
+-- Conteúdo superseded por: migrations/20260624120000_s7_rls_public_schema_hardening_s4.sql
+--   (REVOKE anon + RLS via apply_user_id_tenant_rls / lockdown helpers)
 -- ======================================================================
+
+-- (conteúdo original preservado abaixo para referência)
 
 CREATE SCHEMA IF NOT EXISTS s7_private;
 

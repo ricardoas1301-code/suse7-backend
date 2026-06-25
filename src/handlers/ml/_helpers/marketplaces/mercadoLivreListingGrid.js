@@ -439,6 +439,8 @@ const MERCADO_LIVRE_GRID_DEFAULTS = {
   promotional_price_brl: null,
   effective_sale_price_brl: null,
   sold_quantity: 0,
+  /** Estoque do anúncio no ML (snapshot persistido em marketplace_listings). */
+  available_quantity: null,
   /** Total de vendas no anúncio segundo o ML (snapshot); pode divergir de sold_quantity (pedidos importados). */
   sold_quantity_ml_listing: null,
   gross_revenue_brl: null,
@@ -854,6 +856,10 @@ export function buildMercadoLivreListingGridRow(input) {
     promotional_price_brl: gridPricing.promotion_price_brl,
     effective_sale_price_brl: gridPricing.effective_sale_price_brl,
     sold_quantity: soldQty,
+    available_quantity:
+      listing.available_quantity != null && Number.isFinite(Number(listing.available_quantity))
+        ? Math.trunc(Number(listing.available_quantity))
+        : null,
     sold_quantity_ml_listing: soldQtyMlPublic,
     gross_revenue_brl: grossStr,
     gross_revenue_missing: grossMissing,

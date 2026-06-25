@@ -3,6 +3,7 @@
 // =============================================================================
 
 import { config } from "../../../../infra/config.js";
+import { S7_MAIL_LOGO_DATA_URI } from "../email/s7MailLogoDataUri.js";
 import { isWhatsAppLiveDeliveryActive } from "../whatsapp/sendWhatsAppMessage.js";
 import {
   resolveWhatsAppProviderName,
@@ -366,6 +367,9 @@ export function resolveWhatsAppProcessorSendPolicy(input) {
  *   mimeType?: string;
  *   deliveryFormat?: string;
  *   shareCacheKey?: string | null;
+ *   documentBase64?: string | null;
+ *   documentFilename?: string | null;
+ *   documentMimeType?: string | null;
  * }} share
  */
 export async function patchManualRayxWhatsAppOutboxShare(supabase, dispatchId, share) {
@@ -380,6 +384,19 @@ export async function patchManualRayxWhatsAppOutboxShare(supabase, dispatchId, s
   const dataUri = imageBase64.startsWith("data:")
     ? imageBase64
     : `data:${mimeType};base64,${imageBase64}`;
+
+  const documentBase64 = String(share.documentBase64 ?? "").trim();
+  const documentFilename =
+    String(share.documentFilename ?? "").trim() || "relatorio.xlsx";
+  const documentMimeType =
+    share.documentMimeType != null
+      ? String(share.documentMimeType)
+      : "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+  const documentDataUri = documentBase64
+    ? documentBase64.startsWith("data:")
+      ? documentBase64
+      : `data:${documentMimeType};base64,${documentBase64}`
+    : "";
 
   const { data: row, error } = await supabase
     .from("s7_notification_whatsapp_outbox")
@@ -406,6 +423,13 @@ export async function patchManualRayxWhatsAppOutboxShare(supabase, dispatchId, s
         share_image_mime: mimeType,
         share_cache_key: share.shareCacheKey ?? null,
         share_caption: caption || null,
+        ...(documentDataUri
+          ? {
+              share_document_data_uri: documentDataUri,
+              share_document_filename: documentFilename,
+              share_document_mime: documentMimeType,
+            }
+          : {}),
       },
       updated_at: new Date().toISOString(),
     })
@@ -423,7 +447,11 @@ export async function patchManualRayxWhatsAppOutboxShare(supabase, dispatchId, s
  *   html: string;
  *   text: string;
  *   imageDataUri?: string | null;
+ *   imageFilename?: string | null;
  *   shareCacheKey?: string | null;
+ *   documentBase64?: string | null;
+ *   documentFilename?: string | null;
+ *   documentMimeType?: string | null;
  * }} rendered
  */
 export async function patchManualRayxEmailOutboxShare(supabase, dispatchId, rendered) {
@@ -443,6 +471,17 @@ export async function patchManualRayxEmailOutboxShare(supabase, dispatchId, rend
     row.metadata && typeof row.metadata === "object"
       ? /** @type {Record<string, unknown>} */ (row.metadata)
       : {};
+  const documentBase64 = String(rendered.documentBase64 ?? "").trim();
+  const documentFilename = String(rendered.documentFilename ?? "").trim() || "raio-x-venda.xlsx";
+  const documentMimeType =
+    rendered.documentMimeType != null
+      ? String(rendered.documentMimeType)
+      : "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+  const documentDataUri = documentBase64
+    ? documentBase64.startsWith("data:")
+      ? documentBase64
+      : `data:${documentMimeType};base64,${documentBase64}`
+    : "";
 
   const { error: updErr } = await supabase
     .from("s7_notification_email_outbox")
@@ -454,8 +493,19 @@ export async function patchManualRayxEmailOutboxShare(supabase, dispatchId, rend
         ...prev,
         sale_rayx_premium_email: true,
         delivery_format: "image",
+        share_email_file_attachments: true,
+        s7_mail_logo_data_uri: S7_MAIL_LOGO_DATA_URI,
+        s7_mail_logo_filename: "suse7-logo-abreviada.png",
         share_image_data_uri: rendered.imageDataUri ?? null,
+        share_image_filename: String(rendered.imageFilename ?? "").trim() || "raio-x-venda.png",
         share_cache_key: rendered.shareCacheKey ?? null,
+        ...(documentDataUri
+          ? {
+              share_document_data_uri: documentDataUri,
+              share_document_filename: documentFilename,
+              share_document_mime: documentMimeType,
+            }
+          : {}),
       },
       updated_at: new Date().toISOString(),
     })

@@ -1,5 +1,7 @@
 import Decimal from "decimal.js";
 
+export const S7_INTERNAL_COSTS_SNAPSHOT_VERSION = "s7_internal_costs_v1";
+
 /** @param {unknown} v */
 function toDecimal(v) {
   if (v == null || v === "") return null;
@@ -15,6 +17,127 @@ function toDecimal(v) {
 function moneyDecimal(d) {
   if (d == null) return null;
   return d.toDecimalPlaces(2, Decimal.ROUND_HALF_UP).toFixed(2);
+}
+
+/**
+ * @param {Record<string, unknown> | null | undefined} item
+ */
+function resolveInternalCostsSnapshot(item) {
+  const raw =
+    item?.raw_json && typeof item.raw_json === "object"
+      ? /** @type {Record<string, unknown>} */ (item.raw_json)
+      : null;
+  const fin =
+    raw?._s7_financial && typeof raw._s7_financial === "object"
+      ? /** @type {Record<string, unknown>} */ (raw._s7_financial)
+      : null;
+  const snap =
+    fin?.internal_costs_snapshot && typeof fin.internal_costs_snapshot === "object"
+      ? /** @type {Record<string, unknown>} */ (fin.internal_costs_snapshot)
+      : null;
+
+  const productSnap =
+    fin?.product_cost_snapshot && typeof fin.product_cost_snapshot === "object"
+      ? /** @type {Record<string, unknown>} */ (fin.product_cost_snapshot)
+      : null;
+  const taxSnap =
+    fin?.tax_snapshot && typeof fin.tax_snapshot === "object"
+      ? /** @type {Record<string, unknown>} */ (fin.tax_snapshot)
+      : null;
+  const operationalSnap =
+    fin?.operational_cost_snapshot && typeof fin.operational_cost_snapshot === "object"
+      ? /** @type {Record<string, unknown>} */ (fin.operational_cost_snapshot)
+      : null;
+
+  const productCostRaw =
+    snap?.product_cost_brl ?? productSnap?.amount_brl ?? productSnap?.product_cost_brl ?? null;
+  const internalTaxRaw = snap?.internal_tax_brl ?? taxSnap?.amount_brl ?? taxSnap?.tax_amount_brl ?? null;
+  const operationPackagingRaw =
+    snap?.operation_packaging_cost_brl ??
+    operationalSnap?.operation_packaging_cost_brl ??
+    operationalSnap?.amount_brl ??
+    null;
+  const packagingRaw = snap?.packaging_cost_brl ?? operationalSnap?.packaging_cost_brl ?? null;
+  const operationRaw = snap?.operation_cost_brl ?? operationalSnap?.operation_cost_brl ?? null;
+  const totalInternalRaw =
+    snap?.total_internal_cost_brl ??
+    (toDecimal(productCostRaw) != null ||
+    toDecimal(internalTaxRaw) != null ||
+    toDecimal(operationPackagingRaw) != null
+      ? moneyDecimal(
+          [productCostRaw, internalTaxRaw, operationPackagingRaw]
+            .map((v) => toDecimal(v))
+            .filter((v) => v != null)
+            .reduce((acc, v) => acc.plus(/** @type {Decimal} */ (v)), new Decimal(0)),
+        )
+      : null);
+  if (!snap && !productSnap && !taxSnap && !operationalSnap) return null;
+
+  const hasAnyAmount =
+    toDecimal(productCostRaw) != null ||
+    toDecimal(internalTaxRaw) != null ||
+    toDecimal(operationPackagingRaw) != null;
+  if (!hasAnyAmount) return null;
+
+  const qualityRaw = String(
+    snap?.snapshot_quality ?? fin?.snapshot_quality ?? "historical",
+  )
+    .trim()
+    .toLowerCase();
+  const snapshot_quality =
+    qualityRaw === "reconstructed" || qualityRaw === "estimated" ? "reconstructed" : "historical";
+  const confidenceRaw = String(snap?.confidence ?? "").trim().toLowerCase();
+  const confidence =
+    confidenceRaw === "persisted" || confidenceRaw === "partial" || confidenceRaw === "missing_tax_profile"
+      ? confidenceRaw
+      : "persisted";
+
+  return {
+    product_cost_brl: moneyDecimal(toDecimal(productCostRaw)),
+    internal_tax_brl: moneyDecimal(toDecimal(internalTaxRaw)),
+    packaging_cost_brl: moneyDecimal(toDecimal(packagingRaw)),
+    operation_cost_brl: moneyDecimal(toDecimal(operationRaw)),
+    operation_packaging_cost_brl: moneyDecimal(toDecimal(operationPackagingRaw)),
+    total_internal_cost_brl:
+      moneyDecimal(toDecimal(totalInternalRaw)) ??
+      moneyDecimal(
+        [productCostRaw, internalTaxRaw, operationPackagingRaw]
+          .map((v) => toDecimal(v))
+          .filter((v) => v != null)
+          .reduce((acc, v) => acc.plus(/** @type {Decimal} */ (v)), new Decimal(0)),
+      ),
+    tax_percent_applied:
+      toDecimal(snap?.tax_percent_applied ?? taxSnap?.tax_percent_applied) != null
+        ? /** @type {Decimal} */ (
+            toDecimal(snap?.tax_percent_applied ?? taxSnap?.tax_percent_applied)
+          )
+            .toDecimalPlaces(2, Decimal.ROUND_HALF_UP)
+            .toFixed(2)
+        : null,
+    seller_company_id:
+      snap?.seller_company_id != null && String(snap.seller_company_id).trim() !== ""
+        ? String(snap.seller_company_id).trim()
+        : null,
+    marketplace_account_id:
+      snap?.marketplace_account_id != null && String(snap.marketplace_account_id).trim() !== ""
+        ? String(snap.marketplace_account_id).trim()
+        : null,
+    source: {
+      product_cost: "financial_snapshot.internal_costs",
+      internal_tax: "financial_snapshot.internal_costs",
+      operation_packaging: "financial_snapshot.internal_costs",
+    },
+    confidence,
+    snapshot: {
+      source: "historical_financial_snapshot",
+      snapshot_quality,
+      snapshot_version:
+        snap?.snapshot_version != null && String(snap.snapshot_version).trim() !== ""
+          ? String(snap.snapshot_version).trim()
+          : S7_INTERNAL_COSTS_SNAPSHOT_VERSION,
+      estimated: snapshot_quality === "reconstructed",
+    },
+  };
 }
 
 /** @param {unknown} v */
@@ -158,6 +281,9 @@ export async function fetchSellerInternalTaxPercent(supabase, userId, sellerComp
  * }} ctx
  */
 export function buildSaleDetailInternalCostsContract(ctx) {
+  const snapshotContract = resolveInternalCostsSnapshot(ctx.item ?? null);
+  if (snapshotContract) return snapshotContract;
+
   const qty = ctx.qty != null && ctx.qty > 0 ? Math.trunc(ctx.qty) : 1;
   const product = ctx.product && typeof ctx.product === "object" ? ctx.product : null;
   const productId = ctx.productId != null ? String(ctx.productId).trim() : "";
@@ -233,6 +359,12 @@ export function buildSaleDetailInternalCostsContract(ctx) {
       operation_packaging: hasProductLink ? "product_registration" : null,
     },
     confidence,
+    snapshot: {
+      source: "reconstructed_runtime",
+      snapshot_quality: "reconstructed",
+      snapshot_version: S7_INTERNAL_COSTS_SNAPSHOT_VERSION,
+      estimated: true,
+    },
   };
 }
 

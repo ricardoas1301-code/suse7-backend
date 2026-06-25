@@ -135,7 +135,7 @@ async function main() {
     record("http_error_mapping_503", mapZapiHttpError(503, {}) === "PROVIDER_UNAVAILABLE", "");
 
     const adapter = new ZapiWhatsAppAdapter();
-    delete process.env.S7_ZAPI_BASE_URL;
+    process.env.S7_ZAPI_BASE_URL = "";
     const healthNoConfig = await adapter.health();
     record(
       "health_without_zapi_config",

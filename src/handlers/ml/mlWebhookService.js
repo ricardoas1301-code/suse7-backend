@@ -40,8 +40,23 @@ function validateMinimumPayload(payload) {
  * @param {{ payload: unknown; req: import("http").IncomingMessage; marketplace?: string }} input
  */
 export async function receiveMlWebhook(input) {
+  const payloadObj = asMlWebhookObject(input.payload);
+  const receivedTopic =
+    payloadObj.topic != null && String(payloadObj.topic).trim() !== ""
+      ? String(payloadObj.topic).trim().toLowerCase()
+      : null;
+  console.info("[ML_WEBHOOK_TOPIC_RECEIVED]", {
+    topic: receivedTopic,
+    resource: payloadObj.resource != null ? String(payloadObj.resource) : null,
+    user_id: payloadObj.user_id != null ? String(payloadObj.user_id) : null,
+  });
   const validation = validateMinimumPayload(input.payload);
   if (!validation.ok) {
+    console.warn("[ML_WEBHOOK_EVENT_SKIPPED]", {
+      reason: validation.reason,
+      topic: receivedTopic,
+      resource: payloadObj.resource != null ? String(payloadObj.resource) : null,
+    });
     return {
       ok: false,
       saved: false,
@@ -52,6 +67,19 @@ export async function receiveMlWebhook(input) {
       user_id: null,
       reason: validation.reason,
     };
+  }
+
+  if (receivedTopic === "orders_v2") {
+    console.info("[ML_WEBHOOK_ORDERS_TRIGGER]", {
+      topic: receivedTopic,
+      resource: payloadObj.resource != null ? String(payloadObj.resource) : null,
+    });
+  } else {
+    console.info("[ML_WEBHOOK_EVENT_SKIPPED]", {
+      reason: "NON_ORDERS_TOPIC_AT_INGEST",
+      topic: receivedTopic,
+      resource: payloadObj.resource != null ? String(payloadObj.resource) : null,
+    });
   }
 
   const ip = extractRequestIp(input.req);

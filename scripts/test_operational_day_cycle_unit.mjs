@@ -10,6 +10,10 @@ import {
   normalizeOperationalDayClosesAt,
   resolveOperationalDayCycle,
 } from "../../suse7-frontend/src/features/dashboard/operationalDayCycle.js";
+import {
+  DEFAULT_OPERATIONAL_WORKING_DAYS,
+  normalizeOperationalWorkingDays,
+} from "../../suse7-frontend/src/features/dashboard/operationalWorkingDays.js";
 
 function assertIsoClose(actual, expectedIso) {
   const a = new Date(actual).getTime();
@@ -22,6 +26,9 @@ console.log("[DASH.5] test_operational_day_cycle_unit");
 assert.equal(normalizeOperationalDayClosesAt(null), DEFAULT_OPERATIONAL_DAY_CLOSES_AT);
 assert.equal(normalizeOperationalDayClosesAt("18:00:00"), "18:00");
 assert.equal(normalizeOperationalDayClosesAt("17:30:00"), "17:30");
+assert.deepEqual(normalizeOperationalWorkingDays(null), DEFAULT_OPERATIONAL_WORKING_DAYS);
+assert.deepEqual(normalizeOperationalWorkingDays([]), DEFAULT_OPERATIONAL_WORKING_DAYS);
+assert.deepEqual(normalizeOperationalWorkingDays([1, 2, 3, 4, 5]), [1, 2, 3, 4, 5]);
 
 {
   const now = new Date("2026-06-20T08:00:00.000-03:00");
@@ -49,6 +56,42 @@ assert.equal(normalizeOperationalDayClosesAt("17:30:00"), "17:30");
   const now = new Date("2026-06-20T11:00:00.000-03:00");
   const cycle = resolveOperationalDayCycle({ now, closesAt: "17:00", timezone: "America/Sao_Paulo" });
   assertIsoClose(cycle.startDatetimeIso, "2026-06-19T20:00:00.000Z");
+}
+
+{
+  const now = new Date("2026-06-22T09:23:00.000-03:00");
+  const cycle = resolveOperationalDayCycle({
+    now,
+    closesAt: "17:00",
+    timezone: "America/Sao_Paulo",
+    workingDays: DEFAULT_OPERATIONAL_WORKING_DAYS,
+  });
+  assertIsoClose(cycle.startDatetimeIso, "2026-06-21T20:00:00.000Z");
+  assert.match(cycle.labelCompact, /21\/06 17:00 – 22\/06 09:23/);
+}
+
+{
+  const now = new Date("2026-06-22T09:23:00.000-03:00");
+  const cycle = resolveOperationalDayCycle({
+    now,
+    closesAt: "17:00",
+    timezone: "America/Sao_Paulo",
+    workingDays: [1, 2, 3, 4, 5],
+  });
+  assertIsoClose(cycle.startDatetimeIso, "2026-06-19T20:00:00.000Z");
+  assert.match(cycle.labelCompact, /19\/06 17:00 – 22\/06 09:23/);
+}
+
+{
+  const now = new Date("2026-06-22T09:23:00.000-03:00");
+  const cycle = resolveOperationalDayCycle({
+    now,
+    closesAt: "17:00",
+    timezone: "America/Sao_Paulo",
+    workingDays: [1, 2, 3, 4, 5, 6],
+  });
+  assertIsoClose(cycle.startDatetimeIso, "2026-06-20T20:00:00.000Z");
+  assert.match(cycle.labelCompact, /20\/06 17:00 – 22\/06 09:23/);
 }
 
 {

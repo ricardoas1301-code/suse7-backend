@@ -4,6 +4,18 @@ import { persistMercadoLibreOrder } from "../../../../handlers/ml/_helpers/mlSal
 import { extractBuyerThumbFromOrderRaw } from "../../../../handlers/sales/_vendasSalesRows.js";
 import { enrichMercadoLivreSaleFinancialSnapshot } from "../../../../services/marketplace/mercadoLivreSaleFinancialEnrichment.js";
 
+/**
+ * @param {string | null | undefined} syncType
+ */
+function resolveSnapshotOriginForSyncType(syncType) {
+  const t = syncType != null ? String(syncType).trim().toLowerCase() : "";
+  if (!t) return "post_suse7_sale";
+  if (t.startsWith("ml_initial_") || t.startsWith("ml_historical_")) {
+    return "onboarding_import";
+  }
+  return "post_suse7_sale";
+}
+
 function isColumnError(error) {
   return (
     String(error?.code ?? "") === "42703" ||
@@ -84,6 +96,9 @@ async function applyOrderScopeColumns(supabase, salesOrderId, marketplaceAccount
  * Aplica um pedido ML no storage transacional de vendas do Suse7.
  * Mantém idempotência por (marketplace, marketplace_account_id, external_order_id) e tenta anexar escopo
  * de conta/empresa quando colunas já existem no schema.
+ * `options.syncType` controla a origem do snapshot financeiro:
+ * - ml_initial_* / ml_historical_* => onboarding_import (reconstructed)
+ * - demais => post_suse7_sale (historical)
  */
 export async function applyMlOrderDetailToMarketplaceSales(
   supabase,
@@ -94,8 +109,26 @@ export async function applyMlOrderDetailToMarketplaceSales(
   nowIso,
   summary,
   accessToken,
-  traceCtx = {}
+  traceCtx = {},
+  options = {}
 ) {
+  const syncTypeRaw =
+    options?.syncType != null && String(options.syncType).trim() !== ""
+      ? String(options.syncType).trim()
+      : traceCtx?.syncType != null && String(traceCtx.syncType).trim() !== ""
+        ? String(traceCtx.syncType).trim()
+        : null;
+  const snapshotOrigin =
+    options?.snapshotOrigin != null && String(options.snapshotOrigin).trim() !== ""
+      ? String(options.snapshotOrigin).trim()
+      : resolveSnapshotOriginForSyncType(syncTypeRaw);
+  const reconstructionReferenceDate =
+    snapshotOrigin === "onboarding_import"
+      ? options?.reconstructionReferenceDate != null && String(options.reconstructionReferenceDate).trim() !== ""
+        ? String(options.reconstructionReferenceDate).trim()
+        : new Date().toISOString()
+      : null;
+
   void nowIso;
 
   const extOrderId = orderDetail?.id != null ? String(orderDetail.id) : null;
@@ -145,6 +178,7 @@ export async function applyMlOrderDetailToMarketplaceSales(
     marketplace: ML_MARKETPLACE_SLUG,
     marketplaceAccountId: marketplaceAccountId || null,
     sellerCompanyId: sellerCompanyId || null,
+    accessToken: accessToken && String(accessToken).trim() !== "" ? String(accessToken).trim() : undefined,
     traceCtx,
     log: (msg, extra) => {
       console.log("[Suse7][API][ml-sales-apply]", msg, extra ?? {});
@@ -160,6 +194,8 @@ export async function applyMlOrderDetailToMarketplaceSales(
         marketplaceAccountId: marketplaceAccountId || null,
         salesOrderId: String(out.salesOrderId),
         logContext: "ml_sales_sync",
+        snapshotOrigin,
+        reconstructionReferenceDate,
       });
     } catch (enrichErr) {
       console.warn("[Suse7][API][ml-sales-apply] financial_enrichment_failed", {

@@ -9,6 +9,21 @@ import { logNotificationPref } from "./sellerNotificationObservability.js";
 const RULE_CHANNELS = new Set([S7_NOTIFICATION_CHANNEL.EMAIL, S7_NOTIFICATION_CHANNEL.WHATSAPP]);
 
 /**
+ * @param {Array<Record<string, unknown>>} rules
+ */
+function buildRulesVersionMeta(rules) {
+  const rows = rules ?? [];
+  let updated_at = null;
+  for (const row of rows) {
+    const ts = row?.updated_at != null ? String(row.updated_at) : null;
+    if (!ts) continue;
+    if (!updated_at || ts > updated_at) updated_at = ts;
+  }
+  const rules_version = `${rows.length}:${updated_at ?? "none"}`;
+  return { updated_at, rules_version };
+}
+
+/**
  * @param {import("@supabase/supabase-js").SupabaseClient} supabase
  * @param {string} sellerId
  */
@@ -19,7 +34,8 @@ export async function listSellerEventDeliveryRules(supabase, sellerId) {
     .eq("seller_id", sellerId);
 
   if (error) throw error;
-  return { rules: data ?? [] };
+  const rules = data ?? [];
+  return { rules, ...buildRulesVersionMeta(rules) };
 }
 
 /**
@@ -48,6 +64,19 @@ export async function listRulesForEvent(supabase, sellerId, categoryCode, typeKe
 export async function patchSellerEventDeliveryRules(supabase, sellerId, updates) {
   const now = new Date().toISOString();
 
+  logNotificationPref("EVENT_RULE_TOGGLE", {
+    seller_id: sellerId,
+    count: updates?.length ?? 0,
+    updates: (updates ?? []).map((u) => ({
+      category_code: u?.category_code,
+      type_key: u?.type_key,
+      recipient_group_id: u?.recipient_group_id,
+      channel: u?.channel,
+      enabled: Boolean(u?.enabled),
+    })),
+  });
+  logNotificationPref("persist_started", { seller_id: sellerId });
+
   for (const raw of updates ?? []) {
     const category_code = String(raw.category_code ?? "").trim();
     const type_key = String(raw.type_key ?? "").trim();
@@ -56,12 +85,15 @@ export async function patchSellerEventDeliveryRules(supabase, sellerId, updates)
     const enabled = Boolean(raw.enabled);
 
     if (!isValidNotificationCategory(category_code) || !type_key) {
+      logNotificationPref("persist_failed", { seller_id: sellerId, error: "INVALID_EVENT" });
       return { ok: false, error: "INVALID_EVENT", message: "Evento inválido." };
     }
     if (!RULE_CHANNELS.has(channel)) {
+      logNotificationPref("persist_failed", { seller_id: sellerId, error: "INVALID_CHANNEL" });
       return { ok: false, error: "INVALID_CHANNEL", message: "Canal inválido para regra." };
     }
     if (!recipient_group_id) {
+      logNotificationPref("persist_failed", { seller_id: sellerId, error: "INVALID_GROUP" });
       return { ok: false, error: "INVALID_GROUP", message: "Destinatário inválido." };
     }
 
@@ -96,6 +128,17 @@ export async function patchSellerEventDeliveryRules(supabase, sellerId, updates)
     }
   }
 
-  logNotificationPref("EVENT_RULES_PATCH_OK", { seller_id: sellerId, count: updates?.length ?? 0 });
-  return { ok: true, ...(await listSellerEventDeliveryRules(supabase, sellerId)) };
+  const listed = await listSellerEventDeliveryRules(supabase, sellerId);
+  logNotificationPref("persist_success", {
+    seller_id: sellerId,
+    count: updates?.length ?? 0,
+    rules_version: listed.rules_version,
+    updated_at: listed.updated_at,
+  });
+  logNotificationPref("EVENT_RULES_PATCH_OK", {
+    seller_id: sellerId,
+    count: updates?.length ?? 0,
+    rules_version: listed.rules_version,
+  });
+  return { ok: true, ...listed };
 }

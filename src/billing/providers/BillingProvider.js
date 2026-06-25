@@ -1,5 +1,8 @@
 // ======================================================================
-// BillingProvider — interface para gateways (Asaas, Stripe, Mercado Pago, …)
+// BillingProvider — interface strategy multi-provider (Fase 3.0)
+//
+// Implementações: AsaasBillingProvider (ativo), Stripe/Mercado Pago/Pagar.me (futuro).
+// O domínio billing importa apenas getBillingProvider() — nunca SDK do gateway.
 // ======================================================================
 
 /**
@@ -60,5 +63,11 @@ export class BillingProvider {
   async getPayment(providerPaymentId) {
     void providerPaymentId;
     throw new Error(`getPayment not implemented for ${this.name}`);
+  }
+
+  /** @param {string} providerPaymentId */
+  async cancelPayment(providerPaymentId) {
+    void providerPaymentId;
+    throw new Error(`cancelPayment not implemented for ${this.name}`);
   }
 }

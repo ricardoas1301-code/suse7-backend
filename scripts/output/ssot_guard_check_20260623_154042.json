@@ -1,0 +1,226 @@
+{
+  "generated_at": "2026-06-23T18:40:43.224Z",
+  "script": "scripts/ssot_guard_check.mjs",
+  "scope": {
+    "roots": [
+      "suse7-backend/src",
+      "suse7-backend/api",
+      "suse7-backend/scripts",
+      "suse7-frontend/src"
+    ],
+    "blocked_paths_policy": "Areas de notificacoes/exportacoes rebaixam ERROR para WARNING ate checkout completo",
+    "critical_rules": [
+      "S7-HIST-001",
+      "S7-HIST-002",
+      "S7-HIST-003",
+      "S7-HIST-004"
+    ]
+  },
+  "summary": {
+    "errors": 0,
+    "warnings": 22,
+    "infos": 0,
+    "total": 22,
+    "scanned_files": 762
+  },
+  "findings": [
+    {
+      "file": "suse7-backend/src/domain/notifications/central/competition/triggerManualCompetitionReportNotification.js",
+      "line": 189,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Lookup potencial de configuracao atual em fluxo financeiro",
+      "severity": "WARNING",
+      "snippet": ".from(\"profiles\")",
+      "suggestion": "Evitar lookup vivo em historico; usar snapshot persistido e marcar snapshot_missing quando ausente."
+    },
+    {
+      "file": "suse7-backend/src/domain/notifications/central/recipients/resolveCentralRecipients.js",
+      "line": 14,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Lookup potencial de configuracao atual em fluxo financeiro",
+      "severity": "WARNING",
+      "snippet": ".from(\"profiles\")",
+      "suggestion": "Evitar lookup vivo em historico; usar snapshot persistido e marcar snapshot_missing quando ausente."
+    },
+    {
+      "file": "suse7-backend/src/domain/notifications/central/sales/buildDailySalesSummaryTemplatePayload.js",
+      "line": 43,
+      "rule_id": "S7-HIST-002",
+      "rule_title": "Number(...) em valor monetario",
+      "severity": "WARNING",
+      "snippet": "const lowMarginCount = Number(health.low_margin_count ?? 0);",
+      "suggestion": "Usar Decimal para parse e operacoes financeiras."
+    },
+    {
+      "file": "suse7-backend/src/domain/notifications/central/sales/triggerManualSaleRayxNotification.js",
+      "line": 323,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Lookup potencial de configuracao atual em fluxo financeiro",
+      "severity": "WARNING",
+      "snippet": ".from(\"profiles\")",
+      "suggestion": "Evitar lookup vivo em historico; usar snapshot persistido e marcar snapshot_missing quando ausente."
+    },
+    {
+      "file": "suse7-backend/src/domain/notifications/central/sales/triggerManualSaleRayxNotification.js",
+      "line": 365,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Lookup potencial de configuracao atual em fluxo financeiro",
+      "severity": "WARNING",
+      "snippet": ".from(\"profiles\")",
+      "suggestion": "Evitar lookup vivo em historico; usar snapshot persistido e marcar snapshot_missing quando ausente."
+    },
+    {
+      "file": "suse7-backend/src/domain/notifications/central/sales/triggerManualSalesReportNotification.js",
+      "line": 192,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Lookup potencial de configuracao atual em fluxo financeiro",
+      "severity": "WARNING",
+      "snippet": ".from(\"profiles\")",
+      "suggestion": "Evitar lookup vivo em historico; usar snapshot persistido e marcar snapshot_missing quando ausente."
+    },
+    {
+      "file": "suse7-backend/src/domain/notifications/central/sales/triggerManualSalesReportNotification.js",
+      "line": 420,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Lookup potencial de configuracao atual em fluxo financeiro",
+      "severity": "WARNING",
+      "snippet": ".from(\"profiles\")",
+      "suggestion": "Evitar lookup vivo em historico; usar snapshot persistido e marcar snapshot_missing quando ausente."
+    },
+    {
+      "file": "suse7-backend/src/domain/sales/saleDetailInternalCosts.js",
+      "line": 91,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Referencia a custo/imposto/configuracao atual",
+      "severity": "WARNING",
+      "snippet": "confidenceRaw === \"persisted\" || confidenceRaw === \"partial\" || confidenceRaw === \"missing_tax_profile\"",
+      "suggestion": "Revisar se a origem e historica (_s7_financial). Se for legado permitido, documentar com ssot-guard:ignore."
+    },
+    {
+      "file": "suse7-backend/src/domain/sales/saleDetailInternalCosts.js",
+      "line": 158,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Lookup potencial de configuracao atual em fluxo financeiro",
+      "severity": "WARNING",
+      "snippet": ".from(\"seller_companies\")",
+      "suggestion": "Evitar lookup vivo em historico; usar snapshot persistido e marcar snapshot_missing quando ausente."
+    },
+    {
+      "file": "suse7-backend/src/domain/sales/saleDetailInternalCosts.js",
+      "line": 215,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Referencia a custo/imposto/configuracao atual",
+      "severity": "WARNING",
+      "snippet": "internalTaxSource = \"marketplace_account_seller_company_tax_profile\";",
+      "suggestion": "Revisar se a origem e historica (_s7_financial). Se for legado permitido, documentar com ssot-guard:ignore."
+    },
+    {
+      "file": "suse7-backend/src/domain/sales/saleDetailInternalCosts.js",
+      "line": 224,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Referencia a custo/imposto/configuracao atual",
+      "severity": "WARNING",
+      "snippet": "source: internalTaxSource ?? \"seller_company_tax_profile\",",
+      "suggestion": "Revisar se a origem e historica (_s7_financial). Se for legado permitido, documentar com ssot-guard:ignore."
+    },
+    {
+      "file": "suse7-backend/src/domain/sales/saleDetailInternalCosts.js",
+      "line": 232,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Referencia a custo/imposto/configuracao atual",
+      "severity": "WARNING",
+      "snippet": "source: \"missing_tax_profile\",",
+      "suggestion": "Revisar se a origem e historica (_s7_financial). Se for legado permitido, documentar com ssot-guard:ignore."
+    },
+    {
+      "file": "suse7-backend/src/domain/sales/saleDetailInternalCosts.js",
+      "line": 240,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Lookup potencial de configuracao atual em fluxo financeiro",
+      "severity": "WARNING",
+      "snippet": ".from(\"profiles\")",
+      "suggestion": "Evitar lookup vivo em historico; usar snapshot persistido e marcar snapshot_missing quando ausente."
+    },
+    {
+      "file": "suse7-backend/src/domain/sales/saleDetailInternalCosts.js",
+      "line": 259,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Referencia a custo/imposto/configuracao atual",
+      "severity": "WARNING",
+      "snippet": "source: \"missing_tax_profile\",",
+      "suggestion": "Revisar se a origem e historica (_s7_financial). Se for legado permitido, documentar com ssot-guard:ignore."
+    },
+    {
+      "file": "suse7-backend/src/domain/sales/saleDetailInternalCosts.js",
+      "line": 268,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Uso de perfil fiscal atual em fluxo historico",
+      "severity": "WARNING",
+      "snippet": "return resolveSaleInternalTaxProfile(supabase, userId, { seller_company_id: sellerCompanyId });",
+      "suggestion": "Substituir por leitura exclusiva de _s7_financial (tax_snapshot/internal_costs_snapshot)."
+    },
+    {
+      "file": "suse7-backend/src/domain/sales/saleDetailInternalCosts.js",
+      "line": 327,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Referencia a custo/imposto/configuracao atual",
+      "severity": "WARNING",
+      "snippet": "const hasTaxProfile = taxPctDec != null && taxSource !== \"missing_tax_profile\";",
+      "suggestion": "Revisar se a origem e historica (_s7_financial). Se for legado permitido, documentar com ssot-guard:ignore."
+    },
+    {
+      "file": "suse7-backend/src/domain/sales/saleDetailInternalCosts.js",
+      "line": 334,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Referencia a custo/imposto/configuracao atual",
+      "severity": "WARNING",
+      "snippet": "else if (!hasTaxProfile) confidence = \"missing_tax_profile\";",
+      "suggestion": "Revisar se a origem e historica (_s7_financial). Se for legado permitido, documentar com ssot-guard:ignore."
+    },
+    {
+      "file": "suse7-backend/src/domain/sales/saleDetailInternalCosts.js",
+      "line": 338,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Referencia a custo/imposto/configuracao atual",
+      "severity": "WARNING",
+      "snippet": "taxSource === \"missing_tax_profile\"",
+      "suggestion": "Revisar se a origem e historica (_s7_financial). Se for legado permitido, documentar com ssot-guard:ignore."
+    },
+    {
+      "file": "suse7-backend/src/domain/sales/saleDetailInternalCosts.js",
+      "line": 339,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Referencia a custo/imposto/configuracao atual",
+      "severity": "WARNING",
+      "snippet": "? \"missing_tax_profile\"",
+      "suggestion": "Revisar se a origem e historica (_s7_financial). Se for legado permitido, documentar com ssot-guard:ignore."
+    },
+    {
+      "file": "suse7-backend/src/handlers/notifications/notificationEventDetail.js",
+      "line": 67,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Lookup potencial de configuracao atual em fluxo financeiro",
+      "severity": "WARNING",
+      "snippet": ".from(\"seller_companies\")",
+      "suggestion": "Evitar lookup vivo em historico; usar snapshot persistido e marcar snapshot_missing quando ausente."
+    },
+    {
+      "file": "suse7-frontend/src/services/notificationEventScanner.js",
+      "line": 120,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Lookup potencial de configuracao atual em fluxo financeiro",
+      "severity": "WARNING",
+      "snippet": ".from(\"products\")",
+      "suggestion": "Evitar lookup vivo em historico; usar snapshot persistido e marcar snapshot_missing quando ausente."
+    },
+    {
+      "file": "suse7-frontend/src/services/notificationUserResolver.js",
+      "line": 41,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Lookup potencial de configuracao atual em fluxo financeiro",
+      "severity": "WARNING",
+      "snippet": ".from(\"profiles\")",
+      "suggestion": "Evitar lookup vivo em historico; usar snapshot persistido e marcar snapshot_missing quando ausente."
+    }
+  ]
+}

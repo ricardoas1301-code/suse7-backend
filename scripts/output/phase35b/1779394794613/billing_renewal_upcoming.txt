@@ -1,0 +1,6 @@
+📣 Suse7
+
+A renovação do plano Plano Pro (sandbox 3.5B) está se aproximando.
+
+Abra:
+http://localhost:5173/perfil/assinatura/historico

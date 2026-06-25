@@ -6,11 +6,13 @@
 
 import { ML_MARKETPLACE_SLUG, ML_MARKETPLACE_LISTING_ALIASES } from "./mlMarketplace.js";
 import { extractSellerSku, ATTENTION_REASON_SKU_PENDING_ML } from "./mlItemSkuExtract.js";
-import { normalizeAdTitles } from "../../../utils/normalizeAdTitles.js";
 import { normalizeProductPayload } from "../../../domain/ProductDomainService.js";
 import { normalizeSkuForDbLookup, resolveCatalogCompleteness } from "../../../domain/productCatalogCompleteness.js";
 import { buildProductInsertPayload } from "../../products/create.js";
 import { syncListingHealthProductSnapshot } from "./syncListingHealthProductSnapshot.js";
+import { normalizeMarketplaceProductData } from "../../../domain/marketplace/normalizeMarketplaceProductData.js";
+import { pickPrimaryListingForSkuGroup } from "../../../domain/marketplace/pickPrimaryListingForSkuGroup.js";
+import { enrichProductsFromPreparedListingBatch } from "./marketplaceProductEnrichmentPersist.js";
 
 const PRODUCT_INSERT_CHUNK = Math.min(
   100,
@@ -106,6 +108,9 @@ export function buildMarketplaceImportProductRow(userId, item, description, reso
     missing_required_costs: true,
     source_marketplace: ML_MARKETPLACE_SLUG,
     source_external_listing_id: String(extId).trim(),
+    marketplace_imported_at: new Date().toISOString(),
+    marketplace_last_synced_at: new Date().toISOString(),
+    stock_source: draft.stock_source != null ? String(draft.stock_source) : "marketplace",
     cost_price: null,
     packaging_cost: null,
     operational_cost: null,
@@ -254,26 +259,7 @@ async function hydrateProductIdByNormForSkus(supabase, userId, uniqueNorms, norm
 }
 
 /**
- * @param {Record<string, unknown>} item
- */
-function pickAttrValue(item, ids) {
-  const attrs = Array.isArray(item?.attributes) ? item.attributes : [];
-  for (const id of ids) {
-    const a = attrs.find((x) => x && typeof x === "object" && String(x.id) === id);
-    const vn = a?.value_name;
-    if (vn != null && String(vn).trim() !== "") return String(vn).trim();
-  }
-  return null;
-}
-
-function digitsOrNull(v) {
-  if (v == null || v === "") return null;
-  const d = String(v).replace(/\D/g, "");
-  return d === "" ? null : d;
-}
-
-/**
- * Monta draft normalizado (sem colunas finais de import).
+ * Monta draft normalizado (sem colunas finais de import) — delega ao adapter multi-marketplace.
  * @param {string} externalListingId — MLB… para source_external_listing_id no raw
  */
 export function buildMarketplaceDraftProductPayload(
@@ -284,68 +270,44 @@ export function buildMarketplaceDraftProductPayload(
   externalListingId
 ) {
   void userId;
-  const title = item?.title != null ? String(item.title).trim() : "";
-  const plainDesc =
-    description && typeof description === "object" && description.plain_text != null
-      ? String(description.plain_text).trim()
-      : "";
-
-  const pics = Array.isArray(item?.pictures) ? item.pictures : [];
-  const product_images = pics.length
-    ? pics
-        .map((p) => {
-          const u = p?.secure_url || p?.url;
-          return u && String(u).startsWith("http") ? { url: String(u) } : null;
-        })
-        .filter(Boolean)
-    : null;
-
-  const brand = pickAttrValue(item, ["BRAND", "MANUFACTURER"]);
-  const model = pickAttrValue(item, ["MODEL", "MODEL_NAME"]);
-  const gtin =
-    digitsOrNull(pickAttrValue(item, ["GTIN", "EAN", "BARCODE", "ISBN"])) ??
-    digitsOrNull(item?.catalog_product_id);
-
-  const weightNum = (() => {
-    const w = pickAttrValue(item, ["WEIGHT", "PACKAGE_WEIGHT"]);
-    if (!w) return null;
-    const n = parseFloat(String(w).replace(",", "."));
-    return Number.isFinite(n) ? n : null;
-  })();
-
-  const height = pickAttrValue(item, ["HEIGHT", "SELLER_PACKAGE_HEIGHT"]);
-  const width = pickAttrValue(item, ["WIDTH", "SELLER_PACKAGE_WIDTH"]);
-  const length = pickAttrValue(item, ["LENGTH", "SELLER_PACKAGE_LENGTH"]);
-  const toDim = (x) => {
-    if (x == null) return null;
-    const n = parseFloat(String(x).replace(",", "."));
-    return Number.isFinite(n) ? n : null;
-  };
-
-  const ext = externalListingId != null ? String(externalListingId).trim() : "";
+  const normalized = normalizeMarketplaceProductData(
+    ML_MARKETPLACE_SLUG,
+    item,
+    description,
+    null,
+    { resolvedSku, externalListingId: externalListingId != null ? String(externalListingId).trim() : "" }
+  );
 
   const raw = {
-    product_name: title || resolvedSku || "Produto importado",
+    product_name: normalized.product_name,
     format: "simple",
     sku: resolvedSku,
-    description: plainDesc || null,
-    brand: brand || null,
-    model: model || null,
-    gtin: gtin || null,
-    category_ml_id: item?.category_id != null ? String(item.category_id) : null,
-    ad_titles: normalizeAdTitles([{ value: title || resolvedSku }]),
-    product_images,
-    weight: weightNum,
-    height: toDim(height),
-    width: toDim(width),
-    length: toDim(length),
+    description: normalized.description,
+    brand: normalized.brand,
+    model: normalized.model,
+    gtin: normalized.gtin,
+    ncm: normalized.ncm,
+    seo_keywords: normalized.seo_keywords,
+    category_ml_id: normalized.category_ml_id,
+    ad_titles: normalized.ad_titles,
+    product_images: normalized.product_images,
+    stock_quantity: normalized.stock_quantity,
+    stock_source: normalized.stock_source,
+    weight: normalized.weight,
+    height: normalized.height,
+    width: normalized.width,
+    length: normalized.length,
+    assembled_width: normalized.assembled_width,
+    assembled_height: normalized.assembled_height,
+    assembled_length: normalized.assembled_length,
+    assembled_weight: normalized.assembled_weight,
     imported_from_channel: ML_MARKETPLACE_SLUG,
     cost_price: null,
     packaging_cost: null,
     operational_cost: null,
     catalog_source: "marketplace_import",
     catalog_completeness: "draft_imported_from_marketplace",
-    source_external_listing_id: ext || null,
+    source_external_listing_id: normalized.source_external_listing_id,
   };
 
   return normalizeProductPayload(raw);
@@ -497,6 +459,7 @@ export async function batchEnsureProductsForListings(supabase, userId, entries, 
     listings_skipped_no_sku: 0,
     listings_update_applied: 0,
     listings_entries_invalid: 0,
+    products_enriched: 0,
     errors: /** @type {object[]} */ ([]),
   };
 
@@ -620,12 +583,22 @@ export async function batchEnsureProductsForListings(supabase, userId, entries, 
   /** Normas que já tinham produto antes de qualquer INSERT (métricas de vínculo) */
   const normsExistingBeforeCreate = new Set(productIdByNorm.keys());
 
-  /** norm → primeira entrada (define dados do insert) */
+  /** norm → todas entradas do SKU (prioridade S1) */
+  /** @type {Map<string, (typeof prepared)[0][]>} */
+  const entriesByNorm = new Map();
+  for (let i = 0; i < prepared.length; i += 1) {
+    const p = prepared[i];
+    if (!entriesByNorm.has(p.norm)) entriesByNorm.set(p.norm, []);
+    entriesByNorm.get(p.norm).push({ ...p, importOrder: i });
+  }
+
+  /** norm → entrada principal (anúncio ativo / mais vendido / mais recente) */
   /** @type {Map<string, (typeof prepared)[0]>} */
   const firstByNorm = new Map();
-  for (const p of prepared) {
-    if (!productIdByNorm.has(p.norm) && !firstByNorm.has(p.norm)) {
-      firstByNorm.set(p.norm, p);
+  for (const [norm, group] of entriesByNorm) {
+    const primary = pickPrimaryListingForSkuGroup(group);
+    if (primary && !productIdByNorm.has(norm)) {
+      firstByNorm.set(norm, primary);
     }
   }
 
@@ -791,6 +764,20 @@ export async function batchEnsureProductsForListings(supabase, userId, entries, 
     }
   }
 
+  const enrichmentStats = await enrichProductsFromPreparedListingBatch(
+    supabase,
+    userId,
+    productIdByNorm,
+    prepared
+  );
+  tracePush(opts, "batch_enrichment", enrichmentStats);
+  log("batch_products_enrichment", enrichmentStats);
+
+  out.products_enriched = enrichmentStats?.enriched ?? 0;
+  if (enrichmentStats?.errors?.length) {
+    out.errors.push(...enrichmentStats.errors.map((e) => ({ ...e, stage: e.stage || "enrichment" })));
+  }
+
   log("batch_products_done", {
     userId,
     ...out,
@@ -804,6 +791,7 @@ export async function batchEnsureProductsForListings(supabase, userId, entries, 
     listings_linked_new_product: out.listings_linked_new_product,
     listings_update_applied: out.listings_update_applied,
     listings_skipped_no_sku: out.listings_skipped_no_sku,
+    products_enriched: enrichmentStats?.enriched ?? 0,
     errors_count: out.errors.length,
   });
 
@@ -813,6 +801,7 @@ export async function batchEnsureProductsForListings(supabase, userId, entries, 
     listings_linked_new_product: out.listings_linked_new_product,
     listings_update_applied: out.listings_update_applied,
     listings_skipped_no_sku: out.listings_skipped_no_sku,
+    products_enriched: enrichmentStats?.enriched ?? 0,
     errors_count: out.errors.length,
   });
 

@@ -9,7 +9,7 @@ import { S7_PROVIDER_CHANNEL } from "../../abstraction/providerChannels.js";
 import { toProviderResponse } from "../../abstraction/providerResponse.js";
 import { buildProviderHealthResult } from "../../abstraction/providerHealthResult.js";
 import { assertWhatsAppLiveDeliveryEnabled } from "../../abstraction/providerLiveDeliveryGate.js";
-import { evaluateProviderSmokePolicy } from "../../abstraction/providerSmokePolicy.js";
+import { resolveZapiProviderSmokeGate } from "../../../sales/manualSaleRayxLiveDelivery.js";
 import {
   logProviderBlocked,
   logProviderFail,
@@ -58,24 +58,39 @@ export class ZapiWhatsAppAdapter extends ProviderAdapter {
       });
     }
 
-    const result = await zapiFetch("/status", { method: "GET" });
+    let result = await zapiFetch("/status", { method: "GET" });
+    if (!result.ok && result.error_code === "INVALID_PAYLOAD") {
+      result = await zapiFetch("/status-connection", { method: "GET" });
+    }
+
+    const data =
+      result.data && typeof result.data === "object"
+        ? /** @type {{ connected?: boolean; smartphoneConnected?: boolean; error?: string }} */ (
+            result.data
+          )
+        : null;
+
     const connected =
-      result.ok &&
-      result.data &&
-      typeof result.data === "object" &&
-      /** @type {{ connected?: boolean }} */ (result.data).connected === true;
+      data != null &&
+      (data.connected === true ||
+        (typeof data.smartphoneConnected === "boolean" && data.smartphoneConnected === true));
+
+    const instanceMissing = result.error_code === "ZAPI_INSTANCE_NOT_FOUND";
 
     return buildProviderHealthResult({
       provider: this.providerName,
-      ok: connected,
+      ok: connected && !instanceMissing,
       latency_ms: result.duration_ms,
-      error_code: connected ? null : result.error_code ?? "PROVIDER_UNAVAILABLE",
+      error_code:
+        connected && !instanceMissing
+          ? null
+          : instanceMissing
+            ? "ZAPI_INSTANCE_NOT_FOUND"
+            : result.error_code ?? "PROVIDER_UNAVAILABLE",
       metadata: {
         http_status: result.http_status,
-        smartphone_connected:
-          result.data && typeof result.data === "object"
-            ? /** @type {{ smartphoneConnected?: boolean }} */ (result.data).smartphoneConnected
-            : undefined,
+        smartphone_connected: data?.smartphoneConnected,
+        zapi_error: data?.error ?? null,
       },
     });
   }
@@ -114,20 +129,34 @@ export class ZapiWhatsAppAdapter extends ProviderAdapter {
       });
     }
 
-    const smoke = evaluateProviderSmokePolicy({ sellerId, phone: input.to });
-    if (!smoke.allowed) {
+    const rowMetadata =
+      input.metadata && typeof input.metadata === "object"
+        ? /** @type {Record<string, unknown>} */ (input.metadata)
+        : {};
+
+    const smokeGate = resolveZapiProviderSmokeGate({
+      sellerId,
+      phone: input.to,
+      metadata: rowMetadata,
+    });
+
+    if (!smokeGate.allowed) {
       logProviderBlocked({
         provider_name: this.providerName,
         delivery_mode: S7_DELIVERY_MODE.LIVE,
         dispatch_id: dispatchId,
         attempt,
-        error_code: smoke.reason ?? "BLOCKED_BY_SMOKE_POLICY",
+        error_code: smokeGate.reason ?? "BLOCKED_BY_SMOKE_POLICY",
         to: String(input.to ?? ""),
+        provider_smoke_policy_applied: smokeGate.provider_smoke_policy_applied,
+        provider_live_bypass_respected: smokeGate.provider_live_bypass_respected,
+        provider_final_send_allowed: false,
+        zapi_request_called: false,
       });
       return toProviderResponse({
         ok: false,
         provider: this.providerName,
-        error: smoke.reason ?? "BLOCKED_BY_SMOKE_POLICY",
+        error: smokeGate.reason ?? "BLOCKED_BY_SMOKE_POLICY",
         blocked: true,
       });
     }
@@ -138,13 +167,55 @@ export class ZapiWhatsAppAdapter extends ProviderAdapter {
       dispatch_id: dispatchId,
       attempt,
       to: String(input.to ?? ""),
+      provider_smoke_policy_applied: smokeGate.provider_smoke_policy_applied,
+      provider_live_bypass_respected: smokeGate.provider_live_bypass_respected,
+      provider_final_send_allowed: smokeGate.provider_final_send_allowed,
+      zapi_request_called: true,
     });
 
     const phone = String(input.to ?? "").replace(/\D/g, "");
-    const result = await zapiFetch("/send-text", {
-      method: "POST",
-      body: { phone, message: String(input.message ?? "") },
-    });
+    const deliveryFormat =
+      rowMetadata.delivery_format != null ? String(rowMetadata.delivery_format) : "text";
+    const shareImageDataUri =
+      rowMetadata.share_image_data_uri != null ? String(rowMetadata.share_image_data_uri) : "";
+    const caption = String(input.message ?? "");
+
+    const sendImage = deliveryFormat === "image" && shareImageDataUri.length > 0;
+
+    let result;
+    if (sendImage) {
+      result = await zapiFetch("/send-image", {
+        method: "POST",
+        body: {
+          phone,
+          image: shareImageDataUri,
+          caption,
+          viewOnce: false,
+        },
+      });
+      if (!result.ok && result.http_status === 404) {
+        result = await zapiFetch("/message/send-image", {
+          method: "POST",
+          body: {
+            phone,
+            image: shareImageDataUri,
+            caption,
+            viewOnce: false,
+          },
+        });
+      }
+    } else {
+      result = await zapiFetch("/send-text", {
+        method: "POST",
+        body: { phone, message: caption },
+      });
+      if (!result.ok && result.http_status === 404) {
+        result = await zapiFetch("/message/send-text", {
+          method: "POST",
+          body: { phone, message: caption },
+        });
+      }
+    }
 
     if (!result.ok) {
       logProviderFail({
@@ -165,6 +236,51 @@ export class ZapiWhatsAppAdapter extends ProviderAdapter {
       });
     }
 
+    const shareDocumentDataUri =
+      rowMetadata.share_document_data_uri != null
+        ? String(rowMetadata.share_document_data_uri)
+        : "";
+    const shareDocumentFilename =
+      rowMetadata.share_document_filename != null
+        ? String(rowMetadata.share_document_filename)
+        : "relatorio.xlsx";
+
+    if (shareDocumentDataUri.length > 0) {
+      const ext = shareDocumentFilename.includes(".")
+        ? shareDocumentFilename.split(".").pop()
+        : "xlsx";
+      let docResult = await zapiFetch(`/send-document/${ext}`, {
+        method: "POST",
+        body: {
+          phone,
+          document: shareDocumentDataUri,
+          fileName: shareDocumentFilename,
+        },
+      });
+      if (!docResult.ok && docResult.http_status === 404) {
+        docResult = await zapiFetch("/send-document", {
+          method: "POST",
+          body: {
+            phone,
+            document: shareDocumentDataUri,
+            fileName: shareDocumentFilename,
+          },
+        });
+      }
+      if (!docResult.ok) {
+        logProviderFail({
+          provider_name: this.providerName,
+          delivery_mode: S7_DELIVERY_MODE.LIVE,
+          dispatch_id: dispatchId,
+          attempt,
+          duration_ms: docResult.duration_ms,
+          http_status: docResult.http_status,
+          error_code: docResult.error_code ?? "DOCUMENT_SEND_FAILED",
+          to: phone,
+        });
+      }
+    }
+
     const data = result.data && typeof result.data === "object" ? result.data : {};
     const providerMessageId = String(
       /** @type {{ messageId?: string; id?: string; zaapId?: string }} */ (data).messageId ??
@@ -182,6 +298,10 @@ export class ZapiWhatsAppAdapter extends ProviderAdapter {
       http_status: result.http_status,
       provider_message_id: providerMessageId || null,
       to: phone,
+      provider_smoke_policy_applied: smokeGate.provider_smoke_policy_applied,
+      provider_live_bypass_respected: smokeGate.provider_live_bypass_respected,
+      provider_final_send_allowed: true,
+      zapi_request_called: true,
     });
 
     return toProviderResponse({

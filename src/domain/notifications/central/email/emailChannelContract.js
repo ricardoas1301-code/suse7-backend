@@ -3,7 +3,7 @@
 // Contrato operacional do canal — infraestrutura, sem template de negócio.
 //
 // O envio real continua em S7EmailProvider + outbox + worker.
-// O fluxo "Fale Conosco" permanece SEPARADO (Edge Function Supabase) até migração futura.
+// Fale Conosco: integrado ao Motor Central (S5.13) via API pública /api/public/fale-conosco/contact.
 // =============================================================================
 
 /** Provider de envio suportado pelo motor central. */

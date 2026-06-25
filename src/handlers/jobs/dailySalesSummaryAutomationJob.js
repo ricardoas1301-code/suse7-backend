@@ -68,10 +68,19 @@ function parseDailySalesSummaryJobInput(req) {
     overrideNow = new Date(rawOverride.trim());
   }
 
-  return { limit, overrideNow };
+  let concurrency;
+  const rawConcurrency = body.concurrency ?? req.query?.concurrency;
+  if (rawConcurrency != null) {
+    const parsed = Number.parseInt(String(rawConcurrency), 10);
+    if (Number.isFinite(parsed) && parsed > 0) concurrency = parsed;
+  }
+
+  return { limit, overrideNow, concurrency };
 }
 
 export async function handleJobsDailySalesSummaryAutomation(req, res) {
+  const jobStartedAtIso = new Date().toISOString();
+  const jobStartedAtMs = Date.now();
   const traceId = getTraceId(req);
   const method = String(req.method || "GET").toUpperCase();
   if (method !== "POST" && method !== "GET") {
@@ -102,7 +111,7 @@ export async function handleJobsDailySalesSummaryAutomation(req, res) {
     return fail(res, { code: "CONFIG_ERROR", message: "Configuração do banco indisponível" }, 503, traceId);
   }
 
-  const { limit, overrideNow } = parseDailySalesSummaryJobInput(req);
+  const { limit, overrideNow, concurrency } = parseDailySalesSummaryJobInput(req);
 
   const motorNow =
     overrideNow instanceof Date && Number.isFinite(overrideNow.getTime()) ? overrideNow : undefined;
@@ -122,6 +131,30 @@ export async function handleJobsDailySalesSummaryAutomation(req, res) {
     const result = await processDailySalesSummaryAutomationMotor(supabase, {
       limit,
       now: motorNow,
+      concurrency,
+    });
+    const jobFinishedAtIso = new Date().toISOString();
+    logCentralNotification("DAILY_SALES_SUMMARY_JOB_PERF", {
+      traceId,
+      scheduled_time: motorNow?.toISOString?.() ?? null,
+      started_at: jobStartedAtIso,
+      finished_at: jobFinishedAtIso,
+      processed_count: Number(result.processed_count ?? result.scanned ?? 0),
+      success_count: Number(result.success_count ?? result.completed ?? 0),
+      failed_count: Number(result.failed_count ?? result.failed ?? 0),
+      duration_ms: Date.now() - jobStartedAtMs,
+      sellers: Array.isArray(result.seller_executions)
+        ? result.seller_executions.map((row) => ({
+            seller_id: row?.seller_id ?? null,
+            started_at: row?.started_at ?? null,
+            finished_at: row?.finished_at ?? null,
+            duration_ms: row?.duration_ms ?? null,
+            processed_count: row?.processed_count ?? null,
+            success_count: row?.success_count ?? null,
+            failed_count: row?.failed_count ?? null,
+            scheduled_time: row?.scheduled_time ?? null,
+          }))
+        : [],
     });
     logCentralNotification("DAILY_SALES_SUMMARY_JOB_OK", { traceId, ...result });
     return ok(res, { ok: true, job: "daily-sales-summary-automation", ...result, traceId });

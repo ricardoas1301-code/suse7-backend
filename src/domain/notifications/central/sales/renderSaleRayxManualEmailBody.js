@@ -1,12 +1,8 @@
 // =============================================================================
-// E-mail manual Raio-X — saudação personalizada + resumo textual padronizado.
+// E-mail manual Raio-X — padrão S7 Mail v1.
 // =============================================================================
 
-import { config } from "../../../../infra/config.js";
-import { resolveInAppDeepLink } from "../inbox/resolveInAppDeepLink.js";
-
 const EMAIL_TITLE = "Raio-X da Venda";
-const INTRO_LINE = "Segue o resumo do Raio-X da venda:";
 
 const TECHNICAL_LABEL_PATTERN =
   /^(manual[_\s-]?sale[_\s-]?rayx|manual_sale_rayx|MANUAL_SALE_RAYX)$/i;
@@ -23,13 +19,6 @@ function escapeHtml(value) {
 }
 
 /**
- * @param {string} value
- */
-function escapeAttr(value) {
-  return escapeHtml(value).replace(/'/g, "&#39;");
-}
-
-/**
  * @param {unknown} raw
  * @returns {string | null}
  */
@@ -40,85 +29,41 @@ function sanitizeRecipientName(raw) {
 }
 
 /**
- * @param {unknown} raw
- * @returns {string}
- */
-function normalizeSummaryText(raw) {
-  const lines = String(raw ?? "")
-    .replace(/\r\n/g, "\n")
-    .split("\n");
-
-  while (lines.length > 0 && lines[0].trim() === "") {
-    lines.shift();
-  }
-
-  const first = lines[0]?.trim() ?? "";
-  if (/^Raio-X da Venda/i.test(first)) {
-    lines.shift();
-    while (lines.length > 0 && lines[0].trim() === "") {
-      lines.shift();
-    }
-  }
-
-  return lines.join("\n").trim();
-}
-
-/**
  * @param {{
  *   recipientName?: string | null;
- *   saleId?: string | null;
- *   summaryText?: string | null;
- *   plainTextFallback?: string | null;
- *   imageDataUri?: string | null;
- *   caption?: string | null;
  * }} input
  */
 export function renderSaleRayxManualEmailBody(input) {
   const recipientName = sanitizeRecipientName(input.recipientName);
   const greeting = recipientName ? `Olá, ${recipientName}.` : "Olá.";
-  const summaryBody = normalizeSummaryText(input.summaryText ?? input.plainTextFallback ?? input.caption);
   const title = EMAIL_TITLE;
-  const subject = `[Suse7] ${title}`;
-
-  const saleId = input.saleId != null ? String(input.saleId).trim() : "";
-  const deepLink = resolveInAppDeepLink({
-    category: "SALES",
-    type: "MANUAL_SALE_RAYX",
-    entityId: saleId || null,
-    payload: {},
-  });
-  const baseUrl = (config.frontendUrl || "https://suse7.com.br").replace(/\/+$/, "");
-  const ctaHref =
-    deepLink != null
-      ? deepLink.startsWith("http")
-        ? deepLink
-        : `${baseUrl}${deepLink.startsWith("/") ? deepLink : `/${deepLink}`}`
-      : `${baseUrl}/vendas`;
+  const subject = title;
+  const logoSrc = "cid:s7_mail_logo";
 
   const text = [
     greeting,
     "",
-    INTRO_LINE,
+    "Seu relatório foi gerado com sucesso e está disponível nos anexos deste e-mail.",
     "",
-    summaryBody,
+    "O material inclui um resumo executivo para análise rápida e uma planilha detalhada para acompanhamento completo das informações.",
     "",
-    ...(ctaHref ? ["Ver detalhes no Suse7:", ctaHref] : []),
+    "Em anexo:",
     "",
-    "Abraço,",
+    "• Resumo executivo",
+    "",
+    "• Planilha Excel detalhada",
+    "",
+    "Gerado por Suse7 Precifica.",
+    "Inteligência em Vendas.",
+    "",
+    title,
+    "",
+    "Um forte abraço,",
     "Equipe Suse7",
+    "",
+    "E-mail operacional automático.",
+    "Não responda esta mensagem.",
   ].join("\n");
-
-  const imageDataUri = String(input.imageDataUri ?? "").trim();
-  const safeImageSrc =
-    imageDataUri.startsWith("data:image/") && !imageDataUri.includes('"') ? imageDataUri : "";
-
-  const summaryHtml = summaryBody
-    ? `<p style="margin:0;font-size:14px;line-height:1.55;color:#475569;white-space:pre-wrap;">${escapeHtml(summaryBody)}</p>`
-    : "";
-
-  const imageHtml = safeImageSrc
-    ? `<div style="margin-top:20px;"><img src="${safeImageSrc}" alt="${escapeAttr(title)}" width="608" style="display:block;width:100%;max-width:608px;height:auto;border:0;border-radius:12px;" /></div>`
-    : "";
 
   const html = `<!DOCTYPE html>
 <html lang="pt-BR">
@@ -128,23 +73,28 @@ export function renderSaleRayxManualEmailBody(input) {
     <tr><td align="center">
       <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:640px;background:#ffffff;border-radius:14px;overflow:hidden;box-shadow:0 8px 24px rgba(15,23,42,0.08);">
         <tr><td style="background:linear-gradient(135deg,#2563eb,#1d4ed8);padding:22px 24px;">
-          <p style="margin:0;font-size:12px;font-weight:600;letter-spacing:0.06em;text-transform:uppercase;color:rgba(255,255,255,0.85);">Suse7 Precifica</p>
-          <h1 style="margin:8px 0 0;font-size:20px;font-weight:700;color:#ffffff;line-height:1.35;">${escapeHtml(title)}</h1>
+          <table role="presentation" cellpadding="0" cellspacing="0">
+            <tr>
+              <td style="vertical-align:middle;">
+                <img src="${escapeHtml(logoSrc)}" alt="Suse7" width="34" height="34" style="display:block;width:34px;height:34px;border-radius:999px;object-fit:cover;background:rgba(255,255,255,0.16);" />
+              </td>
+              <td style="padding-left:10px;vertical-align:middle;">
+                <h1 style="margin:0;font-size:20px;font-weight:700;color:#ffffff;line-height:1.35;">${escapeHtml(title)}</h1>
+              </td>
+            </tr>
+          </table>
         </td></tr>
         <tr><td style="padding:28px 24px 20px;background:#ffffff;">
           <p style="margin:0 0 12px;font-size:15px;color:#334155;">${escapeHtml(greeting)}</p>
-          <p style="margin:0 0 16px;font-size:15px;line-height:1.55;color:#475569;">${escapeHtml(INTRO_LINE)}</p>
-          ${summaryHtml}
-          ${imageHtml}
-          ${
-            ctaHref
-              ? `<p style="margin:24px 0 0;"><a href="${escapeAttr(ctaHref)}" style="display:inline-block;background:#2563eb;color:#ffffff;text-decoration:none;font-size:14px;font-weight:600;padding:12px 22px;border-radius:10px;">Ver detalhes no Suse7</a></p>`
-              : ""
-          }
-          <p style="margin:24px 0 0;font-size:14px;line-height:1.55;color:#334155;white-space:pre-wrap;">Abraço,<br/>Equipe Suse7</p>
+          <p style="margin:0 0 16px;font-size:15px;line-height:1.55;color:#475569;">Seu relatório foi gerado com sucesso e está disponível nos anexos deste e-mail.</p>
+          <p style="margin:0 0 16px;font-size:15px;line-height:1.55;color:#475569;">O material inclui um resumo executivo para análise rápida e uma planilha detalhada para acompanhamento completo das informações.</p>
+          <p style="margin:0 0 8px;font-size:15px;line-height:1.55;color:#475569;">Em anexo:</p>
+          <p style="margin:0 0 2px;font-size:15px;line-height:1.55;color:#334155;">• Resumo executivo</p>
+          <p style="margin:0 0 16px;font-size:15px;line-height:1.55;color:#334155;">• Planilha Excel detalhada</p>
+          <p style="margin:20px 0 0;font-size:14px;line-height:1.55;color:#334155;white-space:pre-wrap;">Gerado por Suse7 Precifica.<br/>Inteligência em Vendas.<br/><br/>${escapeHtml(title)}<br/><br/>Um forte abraço,<br/>Equipe Suse7</p>
         </td></tr>
-        <tr><td style="padding:14px 24px 20px;border-top:1px solid #e2e8f0;background:#ffffff;">
-          <p style="margin:0;font-size:12px;line-height:1.45;color:#94a3b8;">E-mail operacional automático. Não responda a esta mensagem.</p>
+        <tr><td style="background:linear-gradient(135deg,#2563eb,#1d4ed8);padding:14px 24px 18px;">
+          <p style="margin:0;font-size:12px;line-height:1.45;color:rgba(255,255,255,0.92);">E-mail operacional automático.<br/>Não responda esta mensagem.</p>
         </td></tr>
       </table>
     </td></tr>
@@ -152,5 +102,5 @@ export function renderSaleRayxManualEmailBody(input) {
 </body>
 </html>`;
 
-  return { subject, html, text, title, cta_href: ctaHref };
+  return { subject, html, text, title, cta_href: null };
 }

@@ -16,6 +16,28 @@ import { triggerDailySalesSummaryNotification } from "./triggerDailySalesSummary
 import { logCentralNotification } from "../observability/centralNotificationLog.js";
 
 const DAILY_SALES_SUMMARY_SLOT_LOOKBACK_MIN = 90;
+const DAILY_SALES_SUMMARY_MOTOR_DEFAULT_CONCURRENCY = 4;
+
+/**
+ * @param {Array<Record<string, unknown>>} rules
+ * @param {number} concurrency
+ * @param {(rule: Record<string, unknown>) => Promise<void>} handler
+ */
+async function processRulesWithConcurrency(rules, concurrency, handler) {
+  if (!Array.isArray(rules) || rules.length === 0) return;
+  const workers = Math.max(1, Math.min(Number(concurrency) || 1, rules.length));
+  let nextIndex = 0;
+
+  const workerRuns = Array.from({ length: workers }, async () => {
+    while (true) {
+      const current = nextIndex;
+      nextIndex += 1;
+      if (current >= rules.length) break;
+      await handler(rules[current]);
+    }
+  });
+  await Promise.all(workerRuns);
+}
 
 /**
  * @param {Date} startUtc
@@ -74,6 +96,8 @@ function resolveDueDailySalesSlots(input) {
  * @param {Date} nowUtc
  */
 async function processDailySalesSummaryRule(supabase, rule, nowUtc) {
+  const ruleStartedAtIso = new Date().toISOString();
+  const ruleStartedAtMs = Date.now();
   const config = rule.config && typeof rule.config === "object" ? rule.config : {};
   const weekdays = Array.isArray(config.weekdays) ? config.weekdays : [];
   const times = Array.isArray(config.times) ? config.times : [];
@@ -132,14 +156,26 @@ async function processDailySalesSummaryRule(supabase, rule, nowUtc) {
     due_slots: dueSlots.map((s) => s.scheduled_at.toISOString()),
     slot_probe_reason: slotExplain.debug?.reason ?? null,
   });
+  const dueScheduledTimes = dueSlots.map((slot) => slot.scheduled_at.toISOString());
 
   if (dueSlots.length === 0) {
+    const finishedAtIso = new Date().toISOString();
+    logCentralNotification("DAILY_SALES_SUMMARY_RULE_PERF", {
+      seller_id: sellerId,
+      started_at: ruleStartedAtIso,
+      finished_at: finishedAtIso,
+      duration_ms: Date.now() - ruleStartedAtMs,
+      processed_count: 0,
+      success_count: 0,
+      failed_count: 0,
+      scheduled_time: null,
+    });
     logCentralNotification("DAILY_SALES_SUMMARY_RULE_SKIP", {
       seller_id: sellerId,
       reason: "no_due_slot",
       ...slotExplain.debug,
     });
-    return { status: "skipped", reason: "no_due_slot" };
+    return { status: "skipped", reason: "no_due_slot", scheduled_times: [] };
   }
 
   let rollingLastSuccessfulAt = rule.last_successful_run_at;
@@ -296,14 +332,41 @@ async function processDailySalesSummaryRule(supabase, rule, nowUtc) {
         error: message,
       });
 
-      return { status: "failed", error: message };
+      return { status: "failed", error: message, scheduled_times: dueScheduledTimes };
     }
   }
 
   if (completedCount > 0) {
-    return { status: "completed", completed_slots: completedCount, events: eventIds };
+    const finishedAtIso = new Date().toISOString();
+    logCentralNotification("DAILY_SALES_SUMMARY_RULE_PERF", {
+      seller_id: sellerId,
+      started_at: ruleStartedAtIso,
+      finished_at: finishedAtIso,
+      duration_ms: Date.now() - ruleStartedAtMs,
+      processed_count: dueSlots.length,
+      success_count: completedCount,
+      failed_count: 0,
+      scheduled_time: dueSlots.map((slot) => slot.scheduled_at.toISOString()),
+    });
+    return {
+      status: "completed",
+      completed_slots: completedCount,
+      events: eventIds,
+      scheduled_times: dueScheduledTimes,
+    };
   }
-  return { status: "skipped", reason: "no_new_slot" };
+  const finishedAtIso = new Date().toISOString();
+  logCentralNotification("DAILY_SALES_SUMMARY_RULE_PERF", {
+    seller_id: sellerId,
+    started_at: ruleStartedAtIso,
+    finished_at: finishedAtIso,
+    duration_ms: Date.now() - ruleStartedAtMs,
+    processed_count: dueSlots.length,
+    success_count: 0,
+    failed_count: 0,
+    scheduled_time: dueSlots.map((slot) => slot.scheduled_at.toISOString()),
+  });
+  return { status: "skipped", reason: "no_new_slot", scheduled_times: dueScheduledTimes };
 }
 
 /**
@@ -311,8 +374,13 @@ async function processDailySalesSummaryRule(supabase, rule, nowUtc) {
  * @param {{ now?: Date; limit?: number }} [options]
  */
 export async function processDailySalesSummaryAutomationMotor(supabase, options = {}) {
+  const startedAtIso = new Date().toISOString();
+  const startedAtMs = Date.now();
   const nowUtc = options.now instanceof Date ? options.now : new Date();
   const limit = Number.isFinite(options.limit) ? Number(options.limit) : 200;
+  const concurrency = Number.isFinite(options.concurrency)
+    ? Math.max(1, Number(options.concurrency))
+    : DAILY_SALES_SUMMARY_MOTOR_DEFAULT_CONCURRENCY;
 
   logCentralNotification("DAILY_SALES_SUMMARY_MOTOR_START", {
     now_utc: nowUtc.toISOString(),
@@ -320,6 +388,7 @@ export async function processDailySalesSummaryAutomationMotor(supabase, options 
     tolerance_min: DAILY_SALES_SUMMARY_SCHEDULE_TOLERANCE_MIN,
     lookback_min: DAILY_SALES_SUMMARY_SLOT_LOOKBACK_MIN,
     limit,
+    concurrency,
   });
 
   const rules = await listActiveDailySalesSummaryAutomationRules(supabase);
@@ -332,10 +401,32 @@ export async function processDailySalesSummaryAutomationMotor(supabase, options 
 
   /** @type {Array<Record<string, unknown>>} */
   const results = [];
-  for (const rule of slice) {
+  /** @type {Array<Record<string, unknown>>} */
+  const sellerExecutions = [];
+  await processRulesWithConcurrency(slice, concurrency, async (rule) => {
+    const sellerStartedAtIso = new Date().toISOString();
+    const sellerStartedAtMs = Date.now();
     try {
       const outcome = await processDailySalesSummaryRule(supabase, rule, nowUtc);
-      results.push({ seller_id: rule.seller_id, ...outcome });
+      const sellerFinishedAtIso = new Date().toISOString();
+      const sellerResult = { seller_id: rule.seller_id, ...outcome };
+      results.push(sellerResult);
+      sellerExecutions.push({
+        seller_id: rule.seller_id,
+        started_at: sellerStartedAtIso,
+        finished_at: sellerFinishedAtIso,
+        duration_ms: Date.now() - sellerStartedAtMs,
+        status: outcome.status,
+        processed_count:
+          outcome.status === "completed"
+            ? Number(outcome.completed_slots ?? 0)
+            : outcome.status === "failed"
+              ? 1
+              : 0,
+        success_count: outcome.status === "completed" ? Number(outcome.completed_slots ?? 0) : 0,
+        failed_count: outcome.status === "failed" ? 1 : 0,
+        scheduled_time: Array.isArray(outcome.scheduled_times) ? outcome.scheduled_times : null,
+      });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       logCentralNotification("DAILY_SALES_SUMMARY_RULE_ERR", {
@@ -343,14 +434,33 @@ export async function processDailySalesSummaryAutomationMotor(supabase, options 
         message,
       });
       results.push({ seller_id: rule.seller_id, status: "failed", error: message });
+      sellerExecutions.push({
+        seller_id: rule.seller_id,
+        started_at: sellerStartedAtIso,
+        finished_at: new Date().toISOString(),
+        duration_ms: Date.now() - sellerStartedAtMs,
+        status: "failed",
+        processed_count: 1,
+        success_count: 0,
+        failed_count: 1,
+        scheduled_time: null,
+      });
     }
-  }
+  });
 
+  const finishedAtIso = new Date().toISOString();
   const summary = {
+    started_at: startedAtIso,
+    finished_at: finishedAtIso,
+    duration_ms: Date.now() - startedAtMs,
     scanned: slice.length,
+    processed_count: results.length,
+    success_count: results.filter((r) => r.status === "completed").length,
+    failed_count: results.filter((r) => r.status === "failed").length,
     completed: results.filter((r) => r.status === "completed").length,
     failed: results.filter((r) => r.status === "failed").length,
     skipped: results.filter((r) => r.status === "skipped").length,
+    seller_executions: sellerExecutions,
     results,
   };
 

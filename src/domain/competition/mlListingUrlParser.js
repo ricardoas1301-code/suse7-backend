@@ -16,7 +16,9 @@ export const MLB_ITEM_DIGITS_MIN = 10;
 export const MLB_ITEM_DIGITS_MAX = 13;
 
 const ITEM_ID_RE = /ML([ABCU])[-_]?(\d{8,13})/gi;
-const CATALOG_P_RE = /\/p\/(ML[ABCU]\d+)/i;
+const CATALOG_ID_RE = /(ML[ABCU](?:[A-Z])?\d+)/i;
+const CATALOG_P_RE = new RegExp(`/p/${CATALOG_ID_RE.source}`, "i");
+const CATALOG_UP_RE = new RegExp(`/up/${CATALOG_ID_RE.source}`, "i");
 
 /**
  * @typedef {'item' | 'catalog_product' | 'slug_only' | 'unknown'} MlListingIdType
@@ -91,7 +93,8 @@ function bestItemIdInText(text) {
 }
 
 function catalogIdInText(text) {
-  const m = String(text || "").match(CATALOG_P_RE);
+  const src = String(text || "");
+  const m = src.match(CATALOG_P_RE) || src.match(CATALOG_UP_RE);
   if (!m?.[1]) return null;
   return String(m[1]).toUpperCase();
 }
@@ -151,12 +154,41 @@ function detectIdType(url, catalogProductId, itemId) {
 }
 
 function itemIdFromQueryParams(url) {
-  for (const key of ["item_id", "wid", "item"]) {
+  const safeDecode = (value) => {
+    try {
+      return decodeURIComponent(String(value ?? ""));
+    } catch {
+      return String(value ?? "");
+    }
+  };
+
+  const directItem = url.searchParams.get("item_id");
+  if (directItem) {
+    const fromDirect = bestItemIdInText(directItem);
+    if (fromDirect) return { itemId: fromDirect, parseStrategy: "query_item_id" };
+  }
+
+  // Mercado Livre catálogo: /p/MLB... com item real em pdp_filters=item_id:MLB...
+  const pdpFiltersRaw = url.searchParams.get("pdp_filters");
+  if (pdpFiltersRaw) {
+    const decoded = safeDecode(pdpFiltersRaw);
+    const fromPdp = bestItemIdInText(decoded);
+    if (fromPdp) return { itemId: fromPdp, parseStrategy: "query_pdp_filters_item_id" };
+  }
+
+  // Guard-rail para casos em que a string encoded chega fora do parser padrão.
+  const hrefDecoded = safeDecode(url.href || "");
+  const fromHrefPdp = bestItemIdInText(hrefDecoded.match(/pdp_filters=[^&#]*/i)?.[0] ?? "");
+  if (fromHrefPdp) return { itemId: fromHrefPdp, parseStrategy: "href_pdp_filters_item_id" };
+
+  // wid/item entram como fallback para confirmar item real quando não veio no pdp_filters.
+  for (const key of ["wid", "item"]) {
     const q = url.searchParams.get(key);
     if (!q) continue;
     const fromQ = bestItemIdInText(q);
     if (fromQ) return { itemId: fromQ, parseStrategy: `query_${key}` };
   }
+
   const idQ = url.searchParams.get("id");
   if (idQ) {
     const fromQ = bestItemIdInText(idQ);

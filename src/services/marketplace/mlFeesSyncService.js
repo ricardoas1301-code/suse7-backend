@@ -5,6 +5,7 @@
 // ======================================================================
 
 import { extractOrderLinePricing } from "../../handlers/ml/_helpers/mlSalesPersist.js";
+import { extractMercadoLivrePositiveAdjustmentsFromSaleFeeDetails } from "../../handlers/ml/_helpers/mlItemMoneyExtract.js";
 
 const PAGE_SIZE = 500;
 const EPSILON = 0.000001;
@@ -123,6 +124,9 @@ export async function runMlInitialFeesSyncTurn(supabase, ctx) {
       let recomputedNet = null;
       if (grossCandidate != null && feeCandidate != null) {
         recomputedNet = grossCandidate - feeCandidate;
+        if (shippingCandidate != null) recomputedNet -= shippingCandidate;
+        const positiveAdj = extractMercadoLivrePositiveAdjustmentsFromSaleFeeDetails(line?.sale_fee_details);
+        if (positiveAdj != null) recomputedNet += positiveAdj;
       } else if (netCandidate != null) {
         recomputedNet = netCandidate;
       }

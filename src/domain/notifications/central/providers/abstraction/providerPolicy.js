@@ -5,6 +5,10 @@
 import { config } from "../../../../../infra/config.js";
 import { S7_DELIVERY_MODE, parseDeliveryMode } from "./deliveryMode.js";
 import { S7_PROVIDER_CHANNEL } from "./providerChannels.js";
+import {
+  resolveWhatsAppProviderName,
+  WHATSAPP_PROVIDER_NAMES,
+} from "../whatsapp/whatsappProviderEnv.js";
 
 export const S7_APP_TIER = Object.freeze({
   DEV: "dev",
@@ -64,16 +68,20 @@ export function resolveChannelDeliveryMode(channel) {
  * @returns {boolean}
  */
 export function hasWhatsAppLiveCredentials() {
-  const provider = String(
-    envFlag("S7_WHATSAPP_PROVIDER", config.s7WhatsAppProvider)
-  ).toLowerCase();
-  if (provider === "zapi") {
+  const provider = resolveWhatsAppProviderName();
+  if (provider === WHATSAPP_PROVIDER_NAMES.ZAPI) {
     const base = envFlag("S7_ZAPI_BASE_URL", config.s7ZapiBaseUrl);
     return Boolean(base);
   }
-  if (provider === "evolution" && config.evolutionApiKey) return true;
-  if (provider === "meta" && config.metaWhatsAppToken) return true;
-  if (provider === "twilio" && config.twilioAuthToken) return true;
+  if (provider === WHATSAPP_PROVIDER_NAMES.EVOLUTION && config.evolutionApiKey) return true;
+  if (
+    (provider === WHATSAPP_PROVIDER_NAMES.META ||
+      provider === WHATSAPP_PROVIDER_NAMES.META_CLOUD) &&
+    config.metaWhatsAppToken
+  ) {
+    return true;
+  }
+  if (provider === WHATSAPP_PROVIDER_NAMES.TWILIO && config.twilioAuthToken) return true;
   return false;
 }
 

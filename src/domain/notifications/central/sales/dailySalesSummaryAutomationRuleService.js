@@ -22,6 +22,17 @@ export function mapDailySalesSummaryAutomationRule(row) {
       ? /** @type {Record<string, unknown>} */ (row.config)
       : { ...DEFAULT_DAILY_SALES_SUMMARY_CONFIG };
 
+  const channelsRaw =
+    config.channels && typeof config.channels === "object"
+      ? /** @type {Record<string, unknown>} */ (config.channels)
+      : DEFAULT_DAILY_SALES_SUMMARY_CONFIG.channels;
+  const channels = {
+    whatsapp: channelsRaw.whatsapp !== false,
+    email: channelsRaw.email !== false,
+    in_app: true,
+    popup: channelsRaw.popup !== false,
+  };
+
   return {
     id: row.id,
     seller_id: row.seller_id,
@@ -29,7 +40,7 @@ export function mapDailySalesSummaryAutomationRule(row) {
     type_key: row.type_key,
     enabled: Boolean(row.enabled),
     config: {
-      channels: config.channels ?? DEFAULT_DAILY_SALES_SUMMARY_CONFIG.channels,
+      channels,
       weekdays: config.weekdays ?? DEFAULT_DAILY_SALES_SUMMARY_CONFIG.weekdays,
       times: config.times ?? DEFAULT_DAILY_SALES_SUMMARY_CONFIG.times,
       timezone: config.timezone ?? DEFAULT_DAILY_SALES_SUMMARY_CONFIG.timezone,
@@ -112,7 +123,8 @@ export async function patchDailySalesSummaryAutomationRule(supabase, sellerId, p
  */
 async function syncDailySalesSummaryChannelPreferences(supabase, sellerId, channels) {
   const updates = [
-    { channel: "in_app", enabled: channels.in_app !== false },
+    // Regra fixa: sempre habilitado para DAILY_SALES_SUMMARY.
+    { channel: "in_app", enabled: true },
     { channel: "push", enabled: channels.popup !== false },
   ];
 

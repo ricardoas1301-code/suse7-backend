@@ -1,0 +1,6 @@
+⚠️ Suse7
+
+Indicadores de margem ou estoque em SKU Margem Baixa.
+
+Abra:
+http://localhost:5173/produtos

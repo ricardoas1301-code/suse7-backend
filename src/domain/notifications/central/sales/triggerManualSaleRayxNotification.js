@@ -223,6 +223,9 @@ async function loadIdempotentManualContext(supabase, sellerId, idempotencyKey) {
  *   shareCacheKey?: string | null;
  *   shareTextFallback?: string | null;
  *   recipientName?: string | null;
+ *   shareDocumentBase64?: string | null;
+ *   shareDocumentFilename?: string | null;
+ *   shareDocumentMimeType?: string | null;
  * }} input
  */
 
@@ -738,6 +741,8 @@ export async function triggerManualSaleRayxNotification(supabase, input) {
 
   const shareImageBase64 =
     input.shareImageBase64 != null ? String(input.shareImageBase64).trim() : "";
+  const shareDocumentBase64 =
+    input.shareDocumentBase64 != null ? String(input.shareDocumentBase64).trim() : "";
   const shareCaption =
     input.shareCaption != null ? String(input.shareCaption).trim() : "";
   const deliveryFormat =
@@ -781,7 +786,11 @@ export async function triggerManualSaleRayxNotification(supabase, input) {
     await patchManualRayxEmailOutboxShare(supabase, dispatchId, {
       ...rendered,
       imageDataUri,
+      imageFilename: input.shareImageFilename ?? null,
       shareCacheKey: input.shareCacheKey ?? null,
+      documentBase64: shareDocumentBase64 || null,
+      documentFilename: input.shareDocumentFilename ?? null,
+      documentMimeType: input.shareDocumentMimeType ?? null,
     });
     outbox = await loadOutboxByDispatch(supabase, dispatchId, channel);
   }
@@ -1034,6 +1043,11 @@ export async function triggerManualSaleRayxNotification(supabase, input) {
  *   shareCaption?: string | null;
  *   deliveryFormat?: string | null;
  *   shareCacheKey?: string | null;
+ *   shareTextFallback?: string | null;
+ *   recipientName?: string | null;
+ *   shareDocumentBase64?: string | null;
+ *   shareDocumentFilename?: string | null;
+ *   shareDocumentMimeType?: string | null;
  * }} input
  */
 export async function triggerManualSaleRayxNotificationsBatch(supabase, input) {
@@ -1082,6 +1096,10 @@ export async function triggerManualSaleRayxNotificationsBatch(supabase, input) {
       deliveryFormat: input.deliveryFormat ?? null,
       shareCacheKey: input.shareCacheKey ?? null,
       shareTextFallback: input.shareTextFallback ?? null,
+      recipientName: input.recipientName ?? null,
+      shareDocumentBase64: input.shareDocumentBase64 ?? null,
+      shareDocumentFilename: input.shareDocumentFilename ?? null,
+      shareDocumentMimeType: input.shareDocumentMimeType ?? null,
     });
 
     results.push(one);

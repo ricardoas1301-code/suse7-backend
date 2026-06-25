@@ -5,16 +5,11 @@
 
 import { computeProductReadiness } from "../../domain/productReadiness.js";
 import { hasRequiredProductCosts, normalizeSkuForDbLookup } from "../../domain/productCatalogCompleteness.js";
-import { buildSaleDetailInternalCostsContract } from "../../domain/sales/saleDetailInternalCosts.js";
 import { resolveSaleOperationalStatusLabel, attachFreshMercadoLivreShipmentSnapshot } from "../../domain/sales/saleDetailGeneral.js";
+import { buildSaleDetailFinancialBreakdown } from "./saleDetailFinancial.js";
+import { finalizeSaleDetailFinancialWithContingency } from "../../domain/sales/saleDetailContingencyMargin.js";
 import { getValidMLToken } from "../ml/_helpers/mlToken.js";
-import {
-  resolveEffectiveMercadoLivreSaleLine,
-  resolveListingTypeId,
-} from "../../domain/sales/saleDetailMarketplaceRevenue.js";
-import { buildMercadoLivreMarketplaceFeeContract } from "../../domain/sales/mercadoLivreMarketplaceFee.js";
 import { extractMlLineThumbnail } from "../ml/_helpers/mlSalesPersist.js";
-import Decimal from "decimal.js";
 
 /** @param {unknown} v */
 export function toNum(v) {
@@ -643,160 +638,151 @@ export function productCostLineTotalBrl(product, qty) {
 
 /**
  * @param {Record<string, unknown>} item
- * @param {number | null} productCostLine
+ * @param {Record<string, unknown> | null | undefined} order
  */
-export function buildFinancialsBlock(item, productCostLine) {
-  const gross = item.gross_amount;
-  const fee = item.fee_amount;
-  const ship = item.shipping_share_amount;
-  const tax = item.tax_amount;
-  const net = item.net_amount;
+function resolveContingencySnapshot(item, order) {
+  const itemRaw =
+    item?.raw_json && typeof item.raw_json === "object"
+      ? /** @type {Record<string, unknown>} */ (item.raw_json)
+      : null;
+  const itemFin =
+    itemRaw?._s7_financial && typeof itemRaw._s7_financial === "object"
+      ? /** @type {Record<string, unknown>} */ (itemRaw._s7_financial)
+      : null;
+  const orderRaw =
+    order?.raw_json && typeof order.raw_json === "object"
+      ? /** @type {Record<string, unknown>} */ (order.raw_json)
+      : null;
+  const orderFin =
+    orderRaw?._s7_financial && typeof orderRaw._s7_financial === "object"
+      ? /** @type {Record<string, unknown>} */ (orderRaw._s7_financial)
+      : null;
+  const snap =
+    (itemFin?.contingency_margin_snapshot &&
+    typeof itemFin.contingency_margin_snapshot === "object"
+      ? /** @type {Record<string, unknown>} */ (itemFin.contingency_margin_snapshot)
+      : null) ??
+    (orderFin?.contingency_margin_snapshot &&
+    typeof orderFin.contingency_margin_snapshot === "object"
+      ? /** @type {Record<string, unknown>} */ (orderFin.contingency_margin_snapshot)
+      : null);
 
-  const sale_price = toMoneyString(gross);
-  const commission = toMoneyString(fee);
-  const shipping_cost = toMoneyString(ship);
-  const taxes = toMoneyString(tax);
-  const net_received = toMoneyString(net);
-
-  const netN = toNum(net);
-  const grossN = toNum(gross);
-  const costN = productCostLine != null && Number.isFinite(productCostLine) ? productCostLine : null;
-
-  let profit_brl = null;
-  let margin_percent = null;
-  /** @type {'healthy' | 'critical' | 'attention' | 'unknown'} */
-  let health = "unknown";
-
-  if (netN != null && costN != null) {
-    profit_brl = (netN - costN).toFixed(2);
-    if (grossN != null && grossN > 0) {
-      margin_percent = (((netN - costN) / grossN) * 100).toFixed(2);
-    }
-    const p = Number(profit_brl);
-    const m = margin_percent != null ? Number(margin_percent) : null;
-    if (Number.isFinite(p) && p < 0) health = "critical";
-    else if (Number.isFinite(m) && m < 5) health = "attention";
-    else health = "healthy";
-  } else if (netN != null) {
-    health = "attention";
+  /** @type {Array<Record<string, unknown>>} */
+  const lines = [];
+  if (snap?.ml_ads_brl != null && String(snap.ml_ads_brl).trim() !== "") {
+    lines.push({
+      key: "ml_ads",
+      label: "ML Ads",
+      amount_brl: String(snap.ml_ads_brl),
+      percent: snap.ml_ads_percent != null ? String(snap.ml_ads_percent) : null,
+    });
   }
-
-  return {
-    sale_price,
-    commission,
-    shipping_cost,
-    taxes,
-    net_received,
-    profit_brl,
-    margin_percent,
-    health,
-  };
-}
-
-/**
- * Expõe `internal_costs.internal_tax_brl` na lista — mesma função de domínio do Raio-X.
- * @param {Record<string, unknown>} financials
- * @param {{
- *   item: Record<string, unknown>;
- *   product: Record<string, unknown> | null | undefined;
- *   sellerCompany: Record<string, unknown> | null | undefined;
- *   sellerCompanyId: string | null;
- *   marketplaceAccountId: string | null;
- * }} ctx
- */
-function attachListFinancialsInternalCosts(financials, ctx) {
-  const { item, product, sellerCompany, sellerCompanyId, marketplaceAccountId } = ctx;
-  const qty = Number.parseInt(String(item.quantity ?? "1"), 10) || 1;
-  const grossN = toNum(item.gross_amount);
-  const grossDec = grossN != null ? new Decimal(grossN) : null;
-
-  const productId =
-    item.product_id != null
-      ? String(item.product_id).trim()
-      : product?.id != null
-        ? String(product.id).trim()
-        : "";
-
-  let taxPercent = null;
-  /** @type {string | null} */
-  let taxPercentSource = "missing_tax_profile";
-  const rateN = toNum(sellerCompany?.default_tax_rate);
-  if (rateN != null && rateN >= 0 && rateN <= 100) {
-    taxPercent = String(rateN);
-    taxPercentSource = "seller_company_tax_profile";
+  const reserveAmount = snap?.reserve_brl ?? snap?.safety_reserve_brl ?? snap?.reserve_amount_brl ?? null;
+  const reservePercent = snap?.reserve_percent ?? snap?.safety_reserve_percent ?? null;
+  if (reserveAmount != null && String(reserveAmount).trim() !== "") {
+    lines.push({
+      key: "safety_reserve",
+      label: "Reserva perdas e devolucoes",
+      amount_brl: String(reserveAmount),
+      percent: reservePercent != null ? String(reservePercent) : null,
+    });
   }
-
-  const internalCosts = buildSaleDetailInternalCostsContract({
-    product: product ?? null,
-    productId: productId || null,
-    qty,
-    grossDec,
-    taxPercent,
-    taxPercentSource,
-    seller_company_id: sellerCompanyId,
-    marketplace_account_id: marketplaceAccountId,
-  });
-
-  financials.internal_costs = internalCosts;
-  financials.internal_taxes = internalCosts.internal_tax_brl;
-  financials.internal_tax_amount = internalCosts.internal_tax_brl;
-  return financials;
-}
-
-/**
- * Tarifa/comissão e tipo do anúncio — mesmo contrato do Raio-X (buildMercadoLivreMarketplaceFeeContract).
- * @param {Record<string, unknown>} financials
- * @param {{
- *   item: Record<string, unknown>;
- *   order: Record<string, unknown> | null | undefined;
- *   listing: Record<string, unknown> | null | undefined;
- *   marketplace: string;
- * }} ctx
- */
-function attachListFinancialsMarketplaceFee(financials, ctx) {
-  const { item, order, listing, marketplace } = ctx;
-  const mp = String(marketplace ?? "").trim().toLowerCase();
-  if (mp !== "mercado_livre" && mp !== "mercadolivre") return financials;
-
-  const saleLine = resolveEffectiveMercadoLivreSaleLine(item, order ?? null);
-  const listingTypeId = resolveListingTypeId(saleLine, listing ?? null);
-  const salePrice = financials.sale_price ?? toMoneyString(item.gross_amount);
-  const qty = Number.parseInt(String(item.quantity ?? "1"), 10) || 1;
-  const extItem =
-    item.external_order_item_id != null
-      ? String(item.external_order_item_id).trim()
-      : item.external_item_id != null
-        ? String(item.external_item_id).trim()
+  if (lines.findIndex((line) => String(line.key) === "ml_ads") === -1) {
+    const adsSnap =
+      itemFin?.ads_snapshot && typeof itemFin.ads_snapshot === "object"
+        ? /** @type {Record<string, unknown>} */ (itemFin.ads_snapshot)
         : null;
+    const adsAmount = adsSnap?.amount_brl ?? adsSnap?.ml_ads_brl ?? null;
+    if (adsAmount != null && String(adsAmount).trim() !== "") {
+      lines.push({
+        key: "ml_ads",
+        label: "ML Ads",
+        amount_brl: String(adsAmount),
+        percent: adsSnap?.percent != null ? String(adsSnap.percent) : null,
+      });
+    }
+  }
+  if (lines.findIndex((line) => String(line.key) === "safety_reserve") === -1) {
+    const operationalSnap =
+      itemFin?.operational_cost_snapshot && typeof itemFin.operational_cost_snapshot === "object"
+        ? /** @type {Record<string, unknown>} */ (itemFin.operational_cost_snapshot)
+        : null;
+    const reserveAmount =
+      operationalSnap?.reserve_brl ?? operationalSnap?.operational_costs_brl ?? null;
+    const reservePercent = operationalSnap?.reserve_percent ?? null;
+    if (reserveAmount != null && String(reserveAmount).trim() !== "") {
+      lines.push({
+        key: "safety_reserve",
+        label: "Reserva perdas e devolucoes",
+        amount_brl: String(reserveAmount),
+        percent: reservePercent != null ? String(reservePercent) : null,
+      });
+    }
+  }
+  if (lines.length === 0) return null;
+  return lines;
+}
 
-  const contract = buildMercadoLivreMarketplaceFeeContract({
-    item,
-    order: order ?? null,
-    listing: listing ?? null,
-    line: saleLine,
-    listing_type_id: listingTypeId,
-    sale_price_brl: salePrice,
-    qty,
-    external_order_item_id: extItem,
-  });
-
-  if (!contract || typeof contract !== "object") return financials;
-
-  financials.marketplace_fee = {
-    amount_brl: contract.amount_brl ?? financials.commission ?? null,
-    percentage: contract.percentage ?? null,
-    listing_type_label: contract.listing_type_label ?? null,
-    listing_type: contract.listing_type ?? null,
+/**
+ * @param {Record<string, unknown>} item
+ */
+function resolveFinancialSnapshotMetadata(item) {
+  const raw =
+    item?.raw_json && typeof item.raw_json === "object"
+      ? /** @type {Record<string, unknown>} */ (item.raw_json)
+      : null;
+  const fin =
+    raw?._s7_financial && typeof raw._s7_financial === "object"
+      ? /** @type {Record<string, unknown>} */ (raw._s7_financial)
+      : null;
+  if (!fin) {
+    return {
+      snapshot_origin: null,
+      snapshot_quality: null,
+      estimated: null,
+    };
+  }
+  const estimatedRaw = fin.estimated;
+  return {
+    snapshot_origin: fin.snapshot_origin != null ? String(fin.snapshot_origin) : null,
+    snapshot_quality: fin.snapshot_quality != null ? String(fin.snapshot_quality) : null,
+    estimated: typeof estimatedRaw === "boolean" ? estimatedRaw : null,
   };
-  if (contract.percentage != null) financials.marketplace_fee_percent = String(contract.percentage);
-  if (contract.listing_type_label != null) {
-    financials.listing_type_label = String(contract.listing_type_label);
-    financials.marketplace_fee_tier_label = String(contract.listing_type_label);
+}
+
+/**
+ * Fonte financeira unica para a linha da lista /vendas:
+ * - receita de marketplace + custos internos vindos do snapshot historico quando existir;
+ * - sem recalculo com configuracao viva de contingencia.
+ *
+ * @param {Record<string, unknown>} item
+ * @param {Record<string, unknown> | null | undefined} order
+ * @param {Record<string, unknown> | null | undefined} listing
+ */
+function buildVendasListFinancials(item, order, listing) {
+  let financials = buildSaleDetailFinancialBreakdown(item, null, order ?? null, listing ?? null, {});
+  const snapshotMeta = resolveFinancialSnapshotMetadata(item);
+  const contingencyLines = resolveContingencySnapshot(item, order);
+  if (contingencyLines) {
+    financials = {
+      ...financials,
+      commercial_adjustment_lines: contingencyLines,
+      pricing_variables_source: "historical_financial_snapshot",
+      snapshot_origin: snapshotMeta.snapshot_origin,
+      snapshot_quality: snapshotMeta.snapshot_quality,
+      estimated: snapshotMeta.estimated,
+    };
+  } else {
+    financials = {
+      ...financials,
+      commercial_adjustment_lines: [],
+      pricing_variables_source: "snapshot_missing_no_live_recalculation",
+      snapshot_origin: snapshotMeta.snapshot_origin,
+      snapshot_quality: snapshotMeta.snapshot_quality,
+      estimated: snapshotMeta.estimated,
+    };
   }
-  if (contract.amount_brl != null && String(contract.amount_brl).trim() !== "") {
-    financials.commission = String(contract.amount_brl);
-  }
-  return financials;
+  return finalizeSaleDetailFinancialWithContingency(financials);
 }
 
 /**
@@ -861,36 +847,7 @@ export function buildVendasListRow(ctx) {
   });
 
   const qty = Number.parseInt(String(item.quantity ?? "1"), 10) || 1;
-  const costLine = productCostLineTotalBrl(product, qty);
-
-  const seller_company_id_early =
-    item.seller_company_id != null && String(item.seller_company_id).trim() !== ""
-      ? String(item.seller_company_id).trim()
-      : order?.seller_company_id != null && String(order.seller_company_id).trim() !== ""
-        ? String(order.seller_company_id).trim()
-        : null;
-
-  const marketplace_account_id_early =
-    item.marketplace_account_id != null && String(item.marketplace_account_id).trim() !== ""
-      ? String(item.marketplace_account_id).trim()
-      : order?.marketplace_account_id != null && String(order.marketplace_account_id).trim() !== ""
-        ? String(order.marketplace_account_id).trim()
-        : null;
-
-  const financials = buildFinancialsBlock(item, costLine);
-  attachListFinancialsInternalCosts(financials, {
-    item,
-    product,
-    sellerCompany,
-    sellerCompanyId: seller_company_id_early,
-    marketplaceAccountId: marketplace_account_id_early,
-  });
-  attachListFinancialsMarketplaceFee(financials, {
-    item,
-    order,
-    listing,
-    marketplace: item.marketplace != null ? String(item.marketplace) : "",
-  });
+  const financials = buildVendasListFinancials(item, order, listing);
 
   const sale_status_label =
     resolveSaleOperationalStatusLabel(
@@ -997,7 +954,8 @@ export function buildVendasListRow(ctx) {
     product_id: product?.id != null ? String(product.id) : listing?.product_id != null ? String(listing.product_id) : null,
     needs_product_completion,
     quantity: qty,
-    product_cost_only_brl: costLine != null ? costLine.toFixed(2) : null,
+    product_cost_only_brl:
+      financials?.product_cost_only_brl != null ? String(financials.product_cost_only_brl) : null,
     financials,
     raw_json: item.raw_json ?? null,
     order_raw_json: order?.raw_json ?? null,

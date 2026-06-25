@@ -1,91 +1,94 @@
 import Decimal from "decimal.js";
 import { buildSaleDetailMarketplaceRevenue } from "../../domain/sales/saleDetailMarketplaceRevenue.js";
-import { toNum } from "./_vendasSalesRows.js";
-
-/** @param {unknown} v */
-function toDecimal(v) {
-  const n = toNum(v);
-  if (n == null) return null;
-  return new Decimal(n);
-}
-
-/** @param {Decimal | null} d */
-function moneyDecimal(d) {
-  if (!d) return null;
-  return d.toDecimalPlaces(2, Decimal.ROUND_HALF_UP).toFixed(2);
-}
-
-/**
- * @param {Record<string, unknown> | null | undefined} product
- * @param {number} qty
- */
-function internalCostsFromProduct(product, qty) {
-  const q = new Decimal(qty > 0 ? qty : 1);
-  const cost = toDecimal(product?.cost_price);
-  const pack = toDecimal(product?.packaging_cost);
-  const op = toDecimal(product?.operational_cost);
-  const productCost = cost ? cost.mul(q) : null;
-  const packaging = pack ? pack.mul(q) : null;
-  const operation = op ? op.mul(q) : null;
-  let opPack = null;
-  if (operation && packaging) opPack = operation.plus(packaging);
-  else if (operation) opPack = operation;
-  else if (packaging) opPack = packaging;
-  return { productCost, packaging, operation, opPack };
-}
+import {
+  buildSaleDetailInternalCostsContract,
+  computeSaleDetailRealResult,
+  saleDetailMoneyToDecimal as toDecimal,
+  saleDetailMoneyDecimal as moneyDecimal,
+  saleDetailToQty as toQty,
+} from "../../domain/sales/saleDetailInternalCosts.js";
+import { classifySaleRayxResultHealth } from "../../domain/sales/saleDetailResultHealth.js";
 
 /**
  * @param {Record<string, unknown>} item
  * @param {Record<string, unknown> | null | undefined} product
  * @param {Record<string, unknown> | null | undefined} [order]
  * @param {Record<string, unknown> | null | undefined} [listing]
+ * @param {{
+ *   tax_percent?: string | null;
+ *   tax_percent_source?: string | null;
+ *   seller_company_id?: string | null;
+ *   marketplace_account_id?: string | null;
+ * }} [taxCtx]
  */
-export function buildSaleDetailFinancialBreakdown(item, product, order = null, listing = null) {
-  const qty = toNum(item.quantity) ?? 1;
+export function buildSaleDetailFinancialBreakdown(item, product, order = null, listing = null, taxCtx = {}) {
+  const qty = toQty(item.quantity);
   const revenue = buildSaleDetailMarketplaceRevenue(item, order, listing);
 
   const grossDec = toDecimal(revenue.gross_amount);
-  const feeDec = toDecimal(revenue.marketplace_fee_amount);
-  const shipDec = toDecimal(revenue.shipping_cost_amount);
   const netDec = toDecimal(revenue.net_received_amount);
-  const taxDec = toDecimal(item.tax_amount);
 
-  const { productCost, packaging, operation, opPack } = internalCostsFromProduct(product, qty);
-  const internalTaxDec = taxDec;
+  const productId =
+    item.product_id != null
+      ? String(item.product_id).trim()
+      : product?.id != null
+        ? String(product.id).trim()
+        : "";
 
-  let profitDec = null;
-  if (netDec != null) {
-    profitDec = netDec;
-    if (productCost) profitDec = profitDec.minus(productCost);
-    if (internalTaxDec) profitDec = profitDec.minus(internalTaxDec);
-    if (opPack) profitDec = profitDec.minus(opPack);
-  }
+  const internalCosts = buildSaleDetailInternalCostsContract({
+    item,
+    product,
+    productId: productId || null,
+    qty,
+    grossDec,
+    taxPercent: taxCtx.tax_percent ?? null,
+    taxPercentSource: taxCtx.tax_percent_source ?? null,
+    seller_company_id: taxCtx.seller_company_id ?? null,
+    marketplace_account_id: taxCtx.marketplace_account_id ?? null,
+  });
+
+  const { profitDec, is_definitive, confidence: resultConfidence } = computeSaleDetailRealResult({
+    netReceivedDec: netDec,
+    internalCosts,
+  });
 
   let marginStr = null;
   if (profitDec != null && grossDec != null && !grossDec.isZero()) {
     marginStr = profitDec.div(grossDec).mul(100).toDecimalPlaces(2, Decimal.ROUND_HALF_UP).toFixed(2);
   }
 
+  const healthUi =
+    profitDec != null || marginStr != null
+      ? classifySaleRayxResultHealth(profitDec, marginStr)
+      : {
+          health_label: null,
+          health_status: "unknown",
+          health: "unknown",
+          offer_status_key: null,
+          offer_status_label: null,
+          offer_status_semantic: null,
+          offer_status_title: null,
+          offer_status_subtitle: null,
+          offer_status_message: null,
+        };
+
   /** @type {"healthy" | "critical" | "attention" | "unknown"} */
-  let health = "unknown";
-  if (profitDec != null) {
-    if (profitDec.isNegative()) health = "critical";
-    else if (marginStr != null && new Decimal(marginStr).lt(5)) health = "attention";
-    else health = "healthy";
-  } else if (netDec != null) {
-    health = "attention";
+  let health = healthUi.health_status;
+  if (!is_definitive && health === "healthy") {
+    health = profitDec != null ? "attention" : "unknown";
   }
 
   return {
     ...revenue,
-    product_cost_amount: moneyDecimal(productCost),
-    product_cost_only_brl: moneyDecimal(productCost),
-    internal_tax_amount: moneyDecimal(internalTaxDec),
-    internal_taxes: moneyDecimal(internalTaxDec),
-    taxes: moneyDecimal(internalTaxDec),
-    operation_cost_amount: moneyDecimal(operation),
-    packaging_cost_amount: moneyDecimal(packaging),
-    operation_packaging_cost: moneyDecimal(opPack),
+    internal_costs: internalCosts,
+    product_cost_amount: internalCosts.product_cost_brl,
+    product_cost_only_brl: internalCosts.product_cost_brl,
+    internal_tax_amount: internalCosts.internal_tax_brl,
+    internal_taxes: internalCosts.internal_tax_brl,
+    taxes: internalCosts.internal_tax_brl,
+    operation_cost_amount: internalCosts.operation_cost_brl,
+    packaging_cost_amount: internalCosts.packaging_cost_brl,
+    operation_packaging_cost: internalCosts.operation_packaging_cost_brl,
     other_cost_amount: null,
     other_operational_costs: null,
     profit_amount: moneyDecimal(profitDec),
@@ -93,5 +96,27 @@ export function buildSaleDetailFinancialBreakdown(item, product, order = null, l
     margin_percent: marginStr,
     health_status: health,
     health,
+    health_label: healthUi.health_label,
+    offer_status_key: healthUi.offer_status_key,
+    offer_status_label: healthUi.offer_status_label,
+    offer_status_semantic: healthUi.offer_status_semantic,
+    result: {
+      profit_brl: moneyDecimal(profitDec),
+      margin_percent: marginStr,
+      health_status: health,
+      health_label: healthUi.health_label,
+      offer_status_semantic: healthUi.offer_status_semantic,
+      is_definitive,
+      confidence: resultConfidence,
+      formula:
+        "net_received - contingency_ml_ads - contingency_reserve - product_cost - internal_tax - operation_packaging",
+      margin_formula: "profit_brl / gross_sale_amount * 100",
+    },
+    snapshot_version:
+      item.raw_json &&
+      typeof item.raw_json === "object" &&
+      /** @type {Record<string, unknown>} */ (item.raw_json)._s7_financial?.snapshot_version
+        ? String(/** @type {Record<string, unknown>} */ (item.raw_json)._s7_financial.snapshot_version)
+        : null,
   };
 }

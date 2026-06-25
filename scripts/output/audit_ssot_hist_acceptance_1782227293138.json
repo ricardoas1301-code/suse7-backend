@@ -1,0 +1,749 @@
+{
+  "generated_at": "2026-06-23T15:09:46.401Z",
+  "api_base": "http://localhost:3001",
+  "skip_mutation": false,
+  "directives": [
+    "S7-HIST-001",
+    "S7-HIST-002",
+    "S7-HIST-003",
+    "S7-HIST-004"
+  ],
+  "cases": [
+    {
+      "label": "Venda onboarding_import",
+      "item_id": "8060d178-d0b8-410b-8ee9-60961c75872e",
+      "order_id": "0256a616-2255-4008-9b56-ebb5ceaaeb8c",
+      "external_order_id": "2000014640034148",
+      "expected_snapshot": {
+        "snapshot_origin": "onboarding_import",
+        "snapshot_quality": "reconstructed",
+        "estimated": true
+      },
+      "metadata_check": {
+        "checks": [
+          {
+            "field": "snapshot_origin",
+            "pass": true,
+            "got": "onboarding_import"
+          },
+          {
+            "field": "snapshot_quality",
+            "pass": true,
+            "got": "reconstructed"
+          },
+          {
+            "field": "estimated",
+            "pass": true,
+            "got": true
+          },
+          {
+            "field": "immutable_since",
+            "pass": true,
+            "got": "2026-06-23T15:07:44.284Z"
+          },
+          {
+            "field": "reconstructed_at",
+            "pass": true,
+            "got": "2026-06-23T15:07:44.284Z"
+          },
+          {
+            "field": "reconstruction_reference_date",
+            "pass": true,
+            "got": "2026-06-23T15:07:43.208Z"
+          }
+        ],
+        "pass": true
+      },
+      "api_http": {
+        "list_status": 200,
+        "detail_status": 200,
+        "executive_status": 400,
+        "ok": false
+      },
+      "api_values_before": {
+        "detail": {
+          "preco_vendido": "220.83",
+          "tarifa_marketplace": "36.44",
+          "frete": "44.45",
+          "valor_recebido": "139.94",
+          "custo_produto": "129.00",
+          "imposto": "13.25",
+          "custos_operacionais": "1.16",
+          "lucro": "-3.47",
+          "margem": "-1.57",
+          "saude": "critical",
+          "snapshot_origin": null,
+          "snapshot_quality": null,
+          "estimated": null
+        },
+        "list": {
+          "preco_vendido": null,
+          "tarifa_marketplace": null,
+          "frete": null,
+          "valor_recebido": null,
+          "custo_produto": "129.00",
+          "imposto": "13.25",
+          "custos_operacionais": null,
+          "lucro": "10.94",
+          "margem": "4.95",
+          "saude": "attention",
+          "snapshot_origin": null,
+          "snapshot_quality": null,
+          "estimated": null
+        },
+        "executive": {
+          "preco_vendido": null,
+          "tarifa_marketplace": null,
+          "frete": null,
+          "valor_recebido": null,
+          "custo_produto": null,
+          "imposto": null,
+          "custos_operacionais": null,
+          "lucro": null,
+          "margem": null,
+          "saude": null,
+          "snapshot_origin": null,
+          "snapshot_quality": null,
+          "estimated": null
+        }
+      },
+      "consistency_before": {
+        "detail_vs_list": {
+          "label": "detail_vs_list",
+          "checks": [
+            {
+              "field": "preco_vendido",
+              "pass": false,
+              "ref": "220.83",
+              "got": null
+            },
+            {
+              "field": "tarifa_marketplace",
+              "pass": false,
+              "ref": "36.44",
+              "got": null
+            },
+            {
+              "field": "frete",
+              "pass": false,
+              "ref": "44.45",
+              "got": null
+            },
+            {
+              "field": "valor_recebido",
+              "pass": false,
+              "ref": "139.94",
+              "got": null
+            },
+            {
+              "field": "custo_produto",
+              "pass": true,
+              "ref": "129.00",
+              "got": "129.00"
+            },
+            {
+              "field": "imposto",
+              "pass": true,
+              "ref": "13.25",
+              "got": "13.25"
+            },
+            {
+              "field": "custos_operacionais",
+              "pass": false,
+              "ref": "1.16",
+              "got": null
+            },
+            {
+              "field": "lucro",
+              "pass": false,
+              "ref": "-3.47",
+              "got": "10.94"
+            },
+            {
+              "field": "margem",
+              "pass": false,
+              "ref": "-1.57",
+              "got": "4.95"
+            },
+            {
+              "field": "saude",
+              "pass": false,
+              "ref": "critical",
+              "got": "attention"
+            },
+            {
+              "field": "snapshot_origin",
+              "pass": true,
+              "ref": null,
+              "got": null
+            },
+            {
+              "field": "snapshot_quality",
+              "pass": true,
+              "ref": null,
+              "got": null
+            },
+            {
+              "field": "estimated",
+              "pass": true,
+              "ref": null,
+              "got": null
+            }
+          ],
+          "pass": false
+        },
+        "detail_vs_executive": {
+          "label": "detail_vs_executive",
+          "checks": [
+            {
+              "field": "preco_vendido",
+              "pass": false,
+              "ref": "220.83",
+              "got": null
+            },
+            {
+              "field": "tarifa_marketplace",
+              "pass": false,
+              "ref": "36.44",
+              "got": null
+            },
+            {
+              "field": "frete",
+              "pass": false,
+              "ref": "44.45",
+              "got": null
+            },
+            {
+              "field": "valor_recebido",
+              "pass": false,
+              "ref": "139.94",
+              "got": null
+            },
+            {
+              "field": "custo_produto",
+              "pass": false,
+              "ref": "129.00",
+              "got": null
+            },
+            {
+              "field": "imposto",
+              "pass": false,
+              "ref": "13.25",
+              "got": null
+            },
+            {
+              "field": "custos_operacionais",
+              "pass": false,
+              "ref": "1.16",
+              "got": null
+            },
+            {
+              "field": "lucro",
+              "pass": false,
+              "ref": "-3.47",
+              "got": null
+            },
+            {
+              "field": "margem",
+              "pass": false,
+              "ref": "-1.57",
+              "got": null
+            },
+            {
+              "field": "saude",
+              "pass": false,
+              "ref": "critical",
+              "got": null
+            },
+            {
+              "field": "snapshot_origin",
+              "pass": true,
+              "ref": null,
+              "got": null
+            },
+            {
+              "field": "snapshot_quality",
+              "pass": true,
+              "ref": null,
+              "got": null
+            },
+            {
+              "field": "estimated",
+              "pass": true,
+              "ref": null,
+              "got": null
+            }
+          ],
+          "pass": false
+        }
+      },
+      "mutation": {
+        "attempted": true,
+        "skipped": false,
+        "applied": true,
+        "mutations": [],
+        "restore_results": [],
+        "error": null
+      },
+      "immutability": {
+        "checks": [
+          {
+            "field": "gross_sale_amount_brl",
+            "pass": true,
+            "before": "220.83",
+            "after": "220.83"
+          },
+          {
+            "field": "marketplace_fee_amount_brl",
+            "pass": true,
+            "before": "36.44",
+            "after": "36.44"
+          },
+          {
+            "field": "shipping_amount_brl",
+            "pass": true,
+            "before": "44.45",
+            "after": "44.45"
+          },
+          {
+            "field": "net_received_amount_brl",
+            "pass": true,
+            "before": "139.94",
+            "after": "139.94"
+          },
+          {
+            "field": "product_cost_only_brl",
+            "pass": true,
+            "before": null,
+            "after": null
+          },
+          {
+            "field": "internal_tax_brl",
+            "pass": true,
+            "before": null,
+            "after": null
+          },
+          {
+            "field": "operation_packaging_cost_brl",
+            "pass": true,
+            "before": null,
+            "after": null
+          },
+          {
+            "field": "profit_brl",
+            "pass": true,
+            "before": null,
+            "after": null
+          },
+          {
+            "field": "margin_percent",
+            "pass": true,
+            "before": null,
+            "after": null
+          },
+          {
+            "field": "health",
+            "pass": true,
+            "before": null,
+            "after": null
+          },
+          {
+            "field": "health_status",
+            "pass": true,
+            "before": null,
+            "after": null
+          },
+          {
+            "field": "snapshot_origin",
+            "pass": true,
+            "before": null,
+            "after": null
+          },
+          {
+            "field": "snapshot_quality",
+            "pass": true,
+            "before": null,
+            "after": null
+          },
+          {
+            "field": "estimated",
+            "pass": true,
+            "before": null,
+            "after": null
+          }
+        ],
+        "pass": true,
+        "skipped": false
+      },
+      "pass": false
+    },
+    {
+      "label": "Venda post_suse7_sale",
+      "item_id": "dc487d36-d393-4bad-a717-2a531c2664f5",
+      "order_id": "1c24b2bd-33c9-4d06-8710-cccb45a4215a",
+      "external_order_id": "2000017072651640",
+      "expected_snapshot": {
+        "snapshot_origin": "post_suse7_sale",
+        "snapshot_quality": "historical",
+        "estimated": false
+      },
+      "metadata_check": {
+        "checks": [
+          {
+            "field": "snapshot_origin",
+            "pass": true,
+            "got": "post_suse7_sale"
+          },
+          {
+            "field": "snapshot_quality",
+            "pass": true,
+            "got": "historical"
+          },
+          {
+            "field": "estimated",
+            "pass": true,
+            "got": false
+          },
+          {
+            "field": "immutable_since",
+            "pass": true,
+            "got": "2026-06-23T15:07:47.425Z"
+          },
+          {
+            "field": "snapshot_created_at",
+            "pass": true,
+            "got": "2026-06-23T15:07:47.425Z"
+          }
+        ],
+        "pass": true
+      },
+      "api_http": {
+        "list_status": 200,
+        "detail_status": 200,
+        "executive_status": 400,
+        "ok": false
+      },
+      "api_values_before": {
+        "detail": {
+          "preco_vendido": "149.98",
+          "tarifa_marketplace": "24.74",
+          "frete": "31.50",
+          "valor_recebido": "93.74",
+          "custo_produto": "40.00",
+          "imposto": "9.00",
+          "custos_operacionais": "1.32",
+          "lucro": "43.42",
+          "margem": "28.95",
+          "saude": "healthy",
+          "snapshot_origin": null,
+          "snapshot_quality": null,
+          "estimated": null
+        },
+        "list": {
+          "preco_vendido": null,
+          "tarifa_marketplace": null,
+          "frete": null,
+          "valor_recebido": null,
+          "custo_produto": "40.00",
+          "imposto": "9.00",
+          "custos_operacionais": null,
+          "lucro": "53.74",
+          "margem": "35.83",
+          "saude": "healthy",
+          "snapshot_origin": null,
+          "snapshot_quality": null,
+          "estimated": null
+        },
+        "executive": {
+          "preco_vendido": null,
+          "tarifa_marketplace": null,
+          "frete": null,
+          "valor_recebido": null,
+          "custo_produto": null,
+          "imposto": null,
+          "custos_operacionais": null,
+          "lucro": null,
+          "margem": null,
+          "saude": null,
+          "snapshot_origin": null,
+          "snapshot_quality": null,
+          "estimated": null
+        }
+      },
+      "consistency_before": {
+        "detail_vs_list": {
+          "label": "detail_vs_list",
+          "checks": [
+            {
+              "field": "preco_vendido",
+              "pass": false,
+              "ref": "149.98",
+              "got": null
+            },
+            {
+              "field": "tarifa_marketplace",
+              "pass": false,
+              "ref": "24.74",
+              "got": null
+            },
+            {
+              "field": "frete",
+              "pass": false,
+              "ref": "31.50",
+              "got": null
+            },
+            {
+              "field": "valor_recebido",
+              "pass": false,
+              "ref": "93.74",
+              "got": null
+            },
+            {
+              "field": "custo_produto",
+              "pass": true,
+              "ref": "40.00",
+              "got": "40.00"
+            },
+            {
+              "field": "imposto",
+              "pass": true,
+              "ref": "9.00",
+              "got": "9.00"
+            },
+            {
+              "field": "custos_operacionais",
+              "pass": false,
+              "ref": "1.32",
+              "got": null
+            },
+            {
+              "field": "lucro",
+              "pass": false,
+              "ref": "43.42",
+              "got": "53.74"
+            },
+            {
+              "field": "margem",
+              "pass": false,
+              "ref": "28.95",
+              "got": "35.83"
+            },
+            {
+              "field": "saude",
+              "pass": true,
+              "ref": "healthy",
+              "got": "healthy"
+            },
+            {
+              "field": "snapshot_origin",
+              "pass": true,
+              "ref": null,
+              "got": null
+            },
+            {
+              "field": "snapshot_quality",
+              "pass": true,
+              "ref": null,
+              "got": null
+            },
+            {
+              "field": "estimated",
+              "pass": true,
+              "ref": null,
+              "got": null
+            }
+          ],
+          "pass": false
+        },
+        "detail_vs_executive": {
+          "label": "detail_vs_executive",
+          "checks": [
+            {
+              "field": "preco_vendido",
+              "pass": false,
+              "ref": "149.98",
+              "got": null
+            },
+            {
+              "field": "tarifa_marketplace",
+              "pass": false,
+              "ref": "24.74",
+              "got": null
+            },
+            {
+              "field": "frete",
+              "pass": false,
+              "ref": "31.50",
+              "got": null
+            },
+            {
+              "field": "valor_recebido",
+              "pass": false,
+              "ref": "93.74",
+              "got": null
+            },
+            {
+              "field": "custo_produto",
+              "pass": false,
+              "ref": "40.00",
+              "got": null
+            },
+            {
+              "field": "imposto",
+              "pass": false,
+              "ref": "9.00",
+              "got": null
+            },
+            {
+              "field": "custos_operacionais",
+              "pass": false,
+              "ref": "1.32",
+              "got": null
+            },
+            {
+              "field": "lucro",
+              "pass": false,
+              "ref": "43.42",
+              "got": null
+            },
+            {
+              "field": "margem",
+              "pass": false,
+              "ref": "28.95",
+              "got": null
+            },
+            {
+              "field": "saude",
+              "pass": false,
+              "ref": "healthy",
+              "got": null
+            },
+            {
+              "field": "snapshot_origin",
+              "pass": true,
+              "ref": null,
+              "got": null
+            },
+            {
+              "field": "snapshot_quality",
+              "pass": true,
+              "ref": null,
+              "got": null
+            },
+            {
+              "field": "estimated",
+              "pass": true,
+              "ref": null,
+              "got": null
+            }
+          ],
+          "pass": false
+        }
+      },
+      "mutation": {
+        "attempted": true,
+        "skipped": false,
+        "applied": true,
+        "mutations": [],
+        "restore_results": [],
+        "error": null
+      },
+      "immutability": {
+        "checks": [
+          {
+            "field": "gross_sale_amount_brl",
+            "pass": true,
+            "before": "149.98",
+            "after": "149.98"
+          },
+          {
+            "field": "marketplace_fee_amount_brl",
+            "pass": true,
+            "before": "24.74",
+            "after": "24.74"
+          },
+          {
+            "field": "shipping_amount_brl",
+            "pass": true,
+            "before": "31.50",
+            "after": "31.50"
+          },
+          {
+            "field": "net_received_amount_brl",
+            "pass": true,
+            "before": "93.74",
+            "after": "93.74"
+          },
+          {
+            "field": "product_cost_only_brl",
+            "pass": true,
+            "before": null,
+            "after": null
+          },
+          {
+            "field": "internal_tax_brl",
+            "pass": true,
+            "before": null,
+            "after": null
+          },
+          {
+            "field": "operation_packaging_cost_brl",
+            "pass": true,
+            "before": null,
+            "after": null
+          },
+          {
+            "field": "profit_brl",
+            "pass": true,
+            "before": null,
+            "after": null
+          },
+          {
+            "field": "margin_percent",
+            "pass": true,
+            "before": null,
+            "after": null
+          },
+          {
+            "field": "health",
+            "pass": true,
+            "before": null,
+            "after": null
+          },
+          {
+            "field": "health_status",
+            "pass": true,
+            "before": null,
+            "after": null
+          },
+          {
+            "field": "snapshot_origin",
+            "pass": true,
+            "before": null,
+            "after": null
+          },
+          {
+            "field": "snapshot_quality",
+            "pass": true,
+            "before": null,
+            "after": null
+          },
+          {
+            "field": "estimated",
+            "pass": true,
+            "before": null,
+            "after": null
+          }
+        ],
+        "pass": true,
+        "skipped": false
+      },
+      "pass": false
+    }
+  ],
+  "summary": {
+    "onboarding_pass": false,
+    "post_pass": false,
+    "overall_pass": false
+  }
+}

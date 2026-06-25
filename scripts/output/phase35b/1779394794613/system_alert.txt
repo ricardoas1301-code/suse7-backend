@@ -1,0 +1,6 @@
+📣 Suse7
+
+Observabilidade DEV (sandbox 3.5B).
+
+Abra:
+http://localhost:5173/notificacoes

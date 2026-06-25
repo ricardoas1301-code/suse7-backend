@@ -28,3 +28,8 @@ export {
   resolveMercadoLivreBaselineCatalogBrl,
   resolveMercadoLivrePromotionFinancials,
 } from "./pricingScenarioResolver.js";
+export {
+  MercadoLivrePricingSimulator,
+  mapMercadoLivreScenarioToFlatFinancialContract,
+  resolveMarketplacePricingSimulator,
+} from "./marketplacePricingSimulator.js";

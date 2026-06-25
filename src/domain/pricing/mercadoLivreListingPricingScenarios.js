@@ -6,7 +6,7 @@
 import Decimal from "decimal.js";
 import {
   fetchItem,
-  fetchSellerPromotionsByItem,
+  fetchSellerPromotionsByItemDetailed,
   pickPromotionIdFromSalePricePayload,
 } from "../../handlers/ml/_helpers/mercadoLibreItemsApi.js";
 import {
@@ -32,9 +32,28 @@ import { logPricingEvent, PRICING_LOG_LEVEL, PRICING_EVENT_CODE } from "./pricin
 import { inferMercadoLivreShippingContext } from "./mercadoLivreScenarioShipping.js";
 import { resolveMercadoLivreScenarioShippingAsync } from "./mercadoLivreScenarioShippingResolve.js";
 import {
+  deveUsarFreteOficialMercadoLivrePorPreco,
+  resolverTarifaOficialMercadoLivrePorPreco,
+} from "./mercadoLivreOfficialScenarioResolvers.js";
+import {
   resolveMercadoLivreBaselineCatalogBrl,
   resolveMercadoLivrePromotionFinancials,
 } from "./strategies/mercadoLivrePromotionResolverStrategy.js";
+import { logPricingPiOfficialApiCall } from "./pricingFlowDiffLog.js";
+import { getValidMLToken } from "../../handlers/ml/_helpers/mlToken.js";
+import {
+  buildOfficialSellerPromotionIdentityKey,
+  buildPiPromoFlowAuditPayload,
+  evaluateOfficialPromotionUiEligibility,
+  logS7MlPromosAudit,
+  logS7PiPromoFinAuditDeep,
+  logS7PiPromoFlowAudit,
+  logS7PromotionsPiAudit,
+  normalizeOfficialSellerPromotionsFromApi,
+  resolveOfficialPromotionPresentationFinancials,
+  resolveOfficialSellerPromotionFinancials,
+  extractOfficialPromotionFinancialRawFields,
+} from "./mercadoLivreOfficialSellerPromotions.js";
 
 /** @param {unknown} v @returns {Decimal | null} */
 function toDec(v) {
@@ -66,18 +85,37 @@ function cloneHealthForPricingScenario(health) {
     promotion_price: null,
     promotional_price_brl: null,
     sale_fee_amount: null,
+    sale_fee_percent: null,
     shipping_cost: null,
     shipping_cost_amount: null,
+    shipping_cost_amount_brl: null,
+    shipping_cost_context: null,
+    ml_shipping_cost_context: null,
   };
 }
 
 /**
  * @param {Record<string, unknown>} listing
  * @param {Decimal} priceDec
+ * @param {{ stripCatalogPriceHints?: boolean }} [opts]
  */
-function listingWithSalePrice(listing, priceDec) {
+function listingWithSalePrice(listing, priceDec, opts = {}) {
   const s = priceDec.toDecimalPlaces(2, Decimal.ROUND_HALF_UP).toFixed(2);
-  return { ...listing, price: s };
+  const n = Number(s);
+  const out = { ...listing, price: Number.isFinite(n) ? n : s };
+  if (opts.stripCatalogPriceHints === true) {
+    delete out.original_price;
+    delete out.base_price;
+  }
+  if (out.raw_json != null && typeof out.raw_json === "object") {
+    const rj = { .../** @type {Record<string, unknown>} */ (out.raw_json), price: out.price };
+    if (opts.stripCatalogPriceHints === true) {
+      delete rj.original_price;
+      delete rj.base_price;
+    }
+    out.raw_json = rj;
+  }
+  return out;
 }
 
 /**
@@ -122,7 +160,9 @@ function classifyPromotionStatus(meta, row, opts = {}) {
     normalizedRaw === "programado" ||
     normalizedRaw === "pending" ||
     normalizedRaw === "future" ||
-    normalizedRaw === "candidate"
+    normalizedRaw === "candidate" ||
+    normalizedRaw === "eligible" ||
+    normalizedRaw === "available"
   ) {
     return "scheduled";
   }
@@ -279,8 +319,9 @@ function compareScenarioContractRows(a, b) {
  * @param {unknown} startsAt
  * @param {unknown} endsAt
  */
-function buildMlPromotionScenarioId(promId, startsAt, endsAt) {
+function buildMlPromotionScenarioId(promId, startsAt, endsAt, offerId = null) {
   const pid = promId != null && String(promId).trim() !== "" ? String(promId).trim() : "";
+  const oid = offerId != null && String(offerId).trim() !== "" ? String(offerId).trim() : "";
   let s = "";
   let e = "";
   try {
@@ -292,6 +333,9 @@ function buildMlPromotionScenarioId(promId, startsAt, endsAt) {
     e = endsAt != null && String(endsAt).trim() !== "" ? String(endsAt).trim() : "";
   } catch {
     e = "";
+  }
+  if (oid !== "") {
+    return pid !== "" ? `${pid}#offer:${oid}` : `offer:${oid}`;
   }
   if (s === "" && e === "") {
     return pid !== "" ? pid : "unknown_promotion";
@@ -309,25 +353,121 @@ function buildMlPromotionScenarioId(promId, startsAt, endsAt) {
  *   starts_at: string | null;
  *   ends_at: string | null;
  *   final_price_brl: string;
+ *   offer_id?: string | null;
  * }} candidate
  */
 function promotionExtractionMapKey(candidate) {
   let pid = "";
+  let offerId = "";
   let s = "";
   let e = "";
   let sale = "";
   try {
     pid = candidate.promotion_id != null ? String(candidate.promotion_id).trim() : "";
+    offerId = candidate.offer_id != null ? String(candidate.offer_id).trim() : "";
     s = candidate.starts_at != null ? String(candidate.starts_at).trim() : "";
     e = candidate.ends_at != null ? String(candidate.ends_at).trim() : "";
     sale = candidate.final_price_brl != null ? String(candidate.final_price_brl).trim() : "";
   } catch {
     pid = "";
+    offerId = "";
     s = "";
     e = "";
     sale = "";
   }
-  return `${pid}|${s}|${e}|${sale}`;
+  return `${pid}|${offerId}|${s}|${e}|${sale}`;
+}
+
+/**
+ * @param {Record<string, unknown>} row
+ * @returns {string | null}
+ */
+function resolveSellerPromotionCampaignId(row) {
+  const id = row.id ?? row.promotion_id;
+  if (id != null && String(id).trim() !== "") return String(id).trim();
+  const ref = row.ref_id;
+  if (ref != null && String(ref).trim() !== "") return String(ref).trim();
+  return null;
+}
+
+/**
+ * @param {Record<string, unknown>} row
+ * @returns {string | null}
+ */
+function resolveSellerPromotionOfferId(row) {
+  const ref = row.ref_id;
+  if (ref != null && String(ref).trim() !== "") return String(ref).trim();
+  return null;
+}
+
+/**
+ * Preço efetivo da promoção no ML (candidatas costumam vir com price=0 + suggested_discounted_price).
+ * @param {Record<string, unknown>} row
+ * @returns {string | null}
+ */
+function resolveSellerPromotionSalePriceBrl(row) {
+  const direct = mercadoLivreToFiniteGrid(row.price ?? row.amount ?? row.deal_price);
+  if (direct != null && direct > 0) {
+    return new Decimal(direct).toDecimalPlaces(2, Decimal.ROUND_HALF_UP).toFixed(2);
+  }
+  for (const field of [
+    "suggested_discounted_price",
+    "min_discounted_price",
+    "max_discounted_price",
+    "top_deal_price",
+  ]) {
+    const v = mercadoLivreToFiniteGrid(row[field]);
+    if (v != null && v > 0) {
+      return new Decimal(v).toDecimalPlaces(2, Decimal.ROUND_HALF_UP).toFixed(2);
+    }
+  }
+  return null;
+}
+
+/**
+ * @param {Record<string, unknown>} row
+ * @param {Record<string, unknown>} merged
+ * @param {Record<string, unknown>} listing
+ * @param {Record<string, unknown> | null | undefined} health
+ * @returns {number | null}
+ */
+function resolveSellerPromotionOriginalPrice(row, merged, listing, health) {
+  let original = mercadoLivreToFiniteGrid(row.original_price ?? row.regular_amount ?? row.base_price);
+  if (original != null && original > 0) return original;
+  return (
+    mercadoLivreToFiniteGrid(merged.original_price ?? merged.base_price) ??
+    mercadoLivreToFiniteGrid(health?.list_or_original_price_brl) ??
+    mercadoLivreToFiniteGrid(listing.price)
+  );
+}
+
+/**
+ * @param {ReturnType<typeof extractPromotionScenariosUnsafe>} persistedRows
+ * @param {ReturnType<typeof extractPromotionScenariosUnsafe>} liveRows
+ */
+function mergeExtractedPromotionScenarios(persistedRows, liveRows) {
+  /** @type {Map<string, (typeof persistedRows)[number]>} */
+  const map = new Map();
+  for (const p of [...persistedRows, ...liveRows]) {
+    const key = promotionExtractionMapKey(p);
+    const current = map.get(key);
+    if (current == null) {
+      map.set(key, p);
+      continue;
+    }
+    if (current.source === "live" && p.source !== "live") {
+      map.set(key, current);
+      continue;
+    }
+    if (p.source === "live" && current.source !== "live") {
+      map.set(key, p);
+      continue;
+    }
+    map.set(key, pickPreferredPromotionRow(current, p));
+  }
+  const out = Array.from(map.values());
+  out.sort(comparePromotionScenarioRows);
+  return out;
 }
 
 function scenarioSourceReliabilityScore(row) {
@@ -358,18 +498,14 @@ function scenarioSourceReliabilityScore(row) {
  */
 function promotionScenarioIdentityKey(row) {
   try {
+    const official = row.ml_official_identity_key;
+    if (official != null && String(official).trim() !== "") {
+      return `official:${String(official).trim()}`;
+    }
     const pid = row.promotion_id != null ? String(row.promotion_id).trim() : "";
+    const offerId = row.offer_id != null ? String(row.offer_id).trim() : "";
     const starts = row.starts_at != null ? String(row.starts_at).trim() : "";
     const ends = row.ends_at != null ? String(row.ends_at).trim() : "";
-    if (pid !== "") {
-      return `promotion_id:${pid}|${starts}|${ends}`;
-    }
-    const label =
-      row.label != null && String(row.label).trim() !== ""
-        ? String(row.label).trim()
-        : row.promotion_name != null
-          ? String(row.promotion_name).trim()
-          : "";
     const sale =
       row.sale_price_brl != null && String(row.sale_price_brl).trim() !== ""
         ? String(row.sale_price_brl).trim()
@@ -377,6 +513,15 @@ function promotionScenarioIdentityKey(row) {
             typeof row.marketplace === "object" &&
             (/** @type {Record<string, unknown>} */ (row.marketplace)).sale_price_brl != null
           ? String((/** @type {Record<string, unknown>} */ (row.marketplace)).sale_price_brl).trim()
+          : "";
+    if (pid !== "") {
+      return `promotion_id:${pid}|${offerId}|${starts}|${ends}|${sale}`;
+    }
+    const label =
+      row.label != null && String(row.label).trim() !== ""
+        ? String(row.label).trim()
+        : row.promotion_name != null
+          ? String(row.promotion_name).trim()
           : "";
     if (label === "" && starts === "" && ends === "" && sale === "") return null;
     return `fallback:${label}|${starts}|${ends}|${sale}`;
@@ -391,6 +536,10 @@ function promotionScenarioIdentityKey(row) {
  * @returns {{ ok: true } | { ok: false; reason: string }}
  */
 function validatePromotionScenarioRow(row) {
+  const official = row.ml_official_identity_key;
+  if (official != null && String(official).trim() !== "") {
+    return { ok: true };
+  }
   const key = promotionScenarioIdentityKey(row);
   if (key == null) return { ok: false, reason: "missing_identity" };
   const saleRaw =
@@ -518,8 +667,18 @@ function dedupePromotionScenarioRows(rows, listingUuid, counters = null) {
  */
 function evaluatePromotionUiEligibility(p) {
   const status = p.status != null ? String(p.status).trim().toLowerCase() : "";
-  if (status === "expired") return { ok: false, reason: "expired" };
-  if (status !== "active" && status !== "scheduled") return { ok: false, reason: "ended" };
+  if (status === "expired" || status === "finished" || status === "cancelled" || status === "inactive") {
+    return { ok: false, reason: "expired" };
+  }
+  const permitidos = new Set([
+    "active",
+    "scheduled",
+    "candidate",
+    "eligible",
+    "available",
+    "pending",
+  ]);
+  if (!permitidos.has(status)) return { ok: false, reason: "ended" };
   if (p.ends_at != null && String(p.ends_at).trim() !== "") {
     const tEnd = Date.parse(String(p.ends_at));
     if (Number.isFinite(tEnd) && tEnd < Date.now()) return { ok: false, reason: "expired" };
@@ -581,6 +740,7 @@ function extractPromotionScenariosUnsafe(listing, health, opts = { source: "pers
    *   starts_at: string | null;
    *   ends_at: string | null;
    *   source: "persisted" | "live";
+   *   offer_id?: string | null;
    * }} candidate
    */
   function upsertCandidate(candidate) {
@@ -654,17 +814,42 @@ function extractPromotionScenariosUnsafe(listing, health, opts = { source: "pers
     for (const p of rawItemPromotions) {
       if (!p || typeof p !== "object") continue;
       const row = /** @type {Record<string, unknown>} */ (p);
-      const pidRaw = row.ref_id ?? row.promotion_id ?? row.id;
-      const pid = pidRaw != null && String(pidRaw).trim() !== "" ? String(pidRaw).trim() : null;
+      const pid = resolveSellerPromotionCampaignId(row);
       if (!pid) continue;
-      const sale = mercadoLivreToFiniteGrid(row.price ?? row.amount);
-      const original = mercadoLivreToFiniteGrid(row.original_price ?? row.regular_amount);
-      if (sale == null || original == null || original <= sale + TOL) continue;
+      const offerId = resolveSellerPromotionOfferId(row);
+      const saleStr = resolveSellerPromotionSalePriceBrl(row);
+      if (saleStr == null) continue;
+      const originalNum = resolveSellerPromotionOriginalPrice(row, merged, listing, health);
+      if (originalNum != null && originalNum <= Number(saleStr) + TOL) {
+        const rawStatusProbe =
+          row.status != null && String(row.status).trim() !== "" ? String(row.status).trim().toLowerCase() : "";
+        const opportunityLike = new Set([
+          "candidate",
+          "eligible",
+          "available",
+          "pending",
+          "scheduled",
+          "programada",
+          "programado",
+          "future",
+          "started",
+          "active",
+        ]);
+        if (!opportunityLike.has(rawStatusProbe)) continue;
+      }
       const startsAt = toIsoDateStringOrNull(
-        row.start_time ?? row.start_date ?? row.date_from ?? row.starts_at
+        row.start_date ??
+          row.start_time ??
+          row.date_from ??
+          row.starts_at
       );
       const endsAt = toIsoDateStringOrNull(
-        row.finish_time ?? row.end_date ?? row.date_to ?? row.ends_at ?? row.stop_time
+        row.end_date ??
+          row.finish_date ??
+          row.finish_time ??
+          row.date_to ??
+          row.ends_at ??
+          row.stop_time
       );
       const rawStatus = row.status != null && String(row.status).trim() !== "" ? String(row.status).trim() : null;
       const status = classifyPromotionStatus({}, row, { inferActiveFromPriceEvidence: true });
@@ -674,12 +859,13 @@ function extractPromotionScenariosUnsafe(listing, health, opts = { source: "pers
       upsertCandidate({
         promotion_id: pid,
         promotion_name: name,
-        final_price_brl: new Decimal(sale).toDecimalPlaces(2, Decimal.ROUND_HALF_UP).toFixed(2),
+        final_price_brl: saleStr,
         status,
         raw_status: rawStatus,
         starts_at: startsAt,
         ends_at: endsAt,
         source,
+        offer_id: offerId,
       });
     }
   }
@@ -870,20 +1056,58 @@ function decStr(v) {
  * @returns {string | null}
  */
 /**
- * Tarifa em R$ alinhada ao preço da aba: % oficial × preço do cenário (evita herdar valor
- * calculado sobre catálogo/original quando a aba é promocional).
- * Sem % válido: mantém o valor vindo do net_proceeds.
+ * Tarifa em R$ para o preço do cenário.
+ * Nunca reutiliza amount de outra faixa (ex.: 40,49 do catálogo em promo 284,90).
  * @param {Decimal} priceDec
  * @param {string | null | undefined} feePctStr
- * @param {string | null | undefined} feeAmtFromNp
+ * @param {string | null | undefined} feeAmtCandidate
+ * @param {{
+ *   officialSource?: string | null;
+ *   preferOfficialAmount?: boolean;
+ *   trustPercentForScenarioPrice?: boolean;
+ * }} [opts]
  * @returns {string | null}
  */
-function resolveScenarioSaleFeeAmountBrl(priceDec, feePctStr, feeAmtFromNp) {
-  const pct = toDec(feePctStr);
-  if (pct != null && pct.gt(0) && priceDec.isFinite() && priceDec.gt(0)) {
-    return priceDec.mul(pct).div(100).toDecimalPlaces(2, Decimal.ROUND_HALF_UP).toFixed(2);
+function resolveScenarioSaleFeeAmountBrl(priceDec, feePctStr, feeAmtCandidate, opts = {}) {
+  const { officialSource = null, preferOfficialAmount = false, trustPercentForScenarioPrice = false } =
+    opts;
+  const TOL = new Decimal("0.02");
+
+  if (preferOfficialAmount && feeAmtCandidate != null && String(feeAmtCandidate).trim() !== "") {
+    const amtDec = toDec(String(feeAmtCandidate).trim());
+    if (amtDec != null && amtDec.gte(0)) {
+      return decToStr2(amtDec);
+    }
   }
-  return feeAmtFromNp != null && String(feeAmtFromNp).trim() !== "" ? String(feeAmtFromNp).trim() : null;
+
+  const pct = toDec(feePctStr);
+  const fromPct =
+    pct != null && pct.gt(0) && priceDec.isFinite() && priceDec.gt(0)
+      ? priceDec.mul(pct).div(100).toDecimalPlaces(2, Decimal.ROUND_HALF_UP)
+      : null;
+
+  const candDec =
+    feeAmtCandidate != null && String(feeAmtCandidate).trim() !== ""
+      ? toDec(String(feeAmtCandidate).trim())
+      : null;
+
+  if (fromPct != null) {
+    if (candDec != null && candDec.gte(0) && candDec.minus(fromPct).abs().lte(TOL)) {
+      return decToStr2(candDec);
+    }
+    if (
+      trustPercentForScenarioPrice ||
+      officialSource === "ml_listing_prices" ||
+      candDec == null
+    ) {
+      return decToStr2(fromPct);
+    }
+  }
+
+  if (candDec != null && candDec.gte(0)) {
+    return decToStr2(candDec);
+  }
+  return null;
 }
 
 function computeAlignedMarketplacePayoutBrl(priceDec, feeAmtStr, shipStr, npFallbackPayout) {
@@ -929,10 +1153,24 @@ function netProceedsDataQualitySource(np) {
  *   itemMlId?: string | null;
  *   listingUuid?: string | null;
  *   promotionFinancials?: Record<string, unknown> | null;
+ *   officialMlFee?: { amount_brl?: string | null; percent?: string | null; source?: string | null } | null;
+ *   pricingIntelligenceSimulate?: boolean;
+ *   piCustomPriceOfficialApis?: boolean;
  * }} p
  * @returns {Promise<Record<string, unknown>>}
  */
-async function computeOneScenario(p) {
+/**
+ * ENGINE FINANCEIRA HOMOLOGADA
+ *
+ * Alterações exigem:
+ * - Nova trilha
+ * - Nova homologação
+ * - Comparação com simulador oficial ML
+ *
+ * Não alterar sem aprovação explícita.
+ * Doc: docs/precificacao/PI_ENGINE_HOMOLOGADA.md
+ */
+export async function computeOneScenario(p) {
   const {
     listing,
     health,
@@ -948,6 +1186,7 @@ async function computeOneScenario(p) {
     promotion_active,
     is_baseline,
   } = p;
+  const offer_id = p.offer_id != null && String(p.offer_id).trim() !== "" ? String(p.offer_id).trim() : null;
   const scenarioKey = is_baseline
     ? "base"
     : `ml:promotion:${
@@ -987,6 +1226,7 @@ async function computeOneScenario(p) {
       promotion_name,
       promotion_active,
       is_baseline,
+      offer_id,
       marketplace: {
         sale_price_brl: null,
         original_price_brl: null,
@@ -1034,8 +1274,49 @@ async function computeOneScenario(p) {
     };
   }
 
-  const listingSim = listingWithSalePrice(listing, priceDec);
-  const healthSim = cloneHealthForPricingScenario(health);
+  const salePriceStrOfficial = priceDec.toDecimalPlaces(2, Decimal.ROUND_HALF_UP).toFixed(2);
+  const itemMlId =
+    p.itemMlId != null && String(p.itemMlId).trim() !== "" ? String(p.itemMlId).trim() : null;
+  const mlAccessToken =
+    p.mlAccessToken != null && String(p.mlAccessToken).trim() !== "" ? String(p.mlAccessToken).trim() : null;
+
+  const listingSim = listingWithSalePrice(listing, priceDec, {
+    stripCatalogPriceHints:
+      p.pricingIntelligenceSimulate === true ||
+      p.officialMlFee != null ||
+      Boolean(mlAccessToken && itemMlId),
+  });
+  let healthSim = cloneHealthForPricingScenario(health);
+
+  /** @type {{ amount_brl?: string | null; percent?: string | null; source?: string | null } | null} */
+  let officialFee = p.officialMlFee ?? null;
+  if (mlAccessToken && itemMlId) {
+    const fetched = await resolverTarifaOficialMercadoLivrePorPreco({
+      accessToken: mlAccessToken,
+      listing: listingSim,
+      externalListingId: itemMlId,
+      listingTypeId:
+        listingSim.listing_type_id != null ? String(listingSim.listing_type_id).trim() : null,
+      priceDec,
+      listingUuid: p.listingUuid ?? null,
+      scenarioType: scenario_id,
+    });
+    if (fetched != null && fetched.source === "ml_listing_prices") {
+      officialFee = fetched;
+    }
+  }
+
+  if (officialFee?.percent != null && String(officialFee.percent).trim() !== "") {
+    healthSim = {
+      ...healthSim,
+      sale_fee_percent: String(officialFee.percent).trim(),
+      sale_fee_amount:
+        officialFee.amount_brl != null && String(officialFee.amount_brl).trim() !== ""
+          ? String(officialFee.amount_brl).trim()
+          : null,
+    };
+  }
+
   const np = computeMercadoLivreUnitNetProceeds(listingSim, healthSim, metrics);
   const npOk = Boolean(np && /** @type {Record<string, unknown>} */ (np).has_valid_data === true);
 
@@ -1044,16 +1325,48 @@ async function computeOneScenario(p) {
   );
 
   const npRec = np && typeof np === "object" ? /** @type {Record<string, unknown>} */ (np) : {};
+
+  const useOfficialShippingByPrice =
+    p.pricingIntelligenceSimulate === true ||
+    deveUsarFreteOficialMercadoLivrePorPreco({
+      mlAccessToken,
+      itemMlId,
+      referenceZipCode: p.referenceZipCode ?? null,
+    });
+
   const feePctStr =
-    npRec.sale_fee_percent != null && String(npRec.sale_fee_percent).trim() !== ""
-      ? String(npRec.sale_fee_percent).trim()
+    officialFee?.percent != null && String(officialFee.percent).trim() !== ""
+      ? String(officialFee.percent).trim()
+      : p.pricingIntelligenceSimulate !== true &&
+          npRec.sale_fee_percent != null &&
+          String(npRec.sale_fee_percent).trim() !== ""
+        ? String(npRec.sale_fee_percent).trim()
+        : null;
+
+  const feeAmtOficialMl =
+    officialFee?.source === "ml_listing_prices" &&
+    officialFee?.amount_brl != null &&
+    String(officialFee.amount_brl).trim() !== ""
+      ? String(officialFee.amount_brl).trim()
       : null;
 
-  let feeAmtStrResolved =
-    npRec.sale_fee_amount != null && String(npRec.sale_fee_amount).trim() !== ""
-      ? String(npRec.sale_fee_amount).trim()
+  const npFeeAmt =
+    !p.pricingIntelligenceSimulate && useOfficialShippingByPrice === false
+      ? npRec.sale_fee_amount != null && String(npRec.sale_fee_amount).trim() !== ""
+        ? String(npRec.sale_fee_amount).trim()
+        : null
       : null;
-  feeAmtStrResolved = resolveScenarioSaleFeeAmountBrl(priceDec, feePctStr, feeAmtStrResolved);
+
+  let feeAmtStrResolved = feeAmtOficialMl ?? npFeeAmt ?? null;
+  feeAmtStrResolved = resolveScenarioSaleFeeAmountBrl(priceDec, feePctStr, feeAmtStrResolved, {
+    officialSource: officialFee?.source ?? null,
+    preferOfficialAmount: officialFee?.source === "ml_listing_prices",
+    trustPercentForScenarioPrice:
+      p.pricingIntelligenceSimulate === true ||
+      p.piCustomPriceOfficialApis === true ||
+      useOfficialShippingByPrice ||
+      officialFee?.source === "ml_listing_prices",
+  });
   /** Repasse/lucro usam override; alinhar também `sale_fee_amount` no objeto para leitores futuros. */
   const npAdjusted =
     np && typeof np === "object"
@@ -1069,9 +1382,32 @@ async function computeOneScenario(p) {
       ? String(payoutStrResolved).trim()
       : null;
 
+  if (p.pricingIntelligenceSimulate === true && !mlAccessToken) {
+    warnings.push("Token ML indisponível — tarifa/frete oficial não consultados para este preço.");
+  }
+
+  const piCustomPriceOfficialApis = p.piCustomPriceOfficialApis === true;
+  const listingRaw =
+    listingSim.raw_json != null && typeof listingSim.raw_json === "object"
+      ? /** @type {Record<string, unknown>} */ (listingSim.raw_json)
+      : {};
+  const listingShipping =
+    listingRaw.shipping != null && typeof listingRaw.shipping === "object"
+      ? /** @type {Record<string, unknown>} */ (listingRaw.shipping)
+      : listingSim.shipping != null && typeof listingSim.shipping === "object"
+        ? /** @type {Record<string, unknown>} */ (listingSim.shipping)
+        : null;
+  /** @type {Record<string, unknown>} */
+  const piFeeDebug = {
+    request_url: officialFee?.debug?.request_url ?? null,
+    response_status: officialFee?.debug?.response_status ?? null,
+    fee_amount_brl: feeAmtStrResolved,
+    fee_percent: feePctStr,
+  };
+
   const resolvedShipping = await resolveMercadoLivreScenarioShippingAsync({
-    accessToken: p.mlAccessToken ?? null,
-    itemId: p.itemMlId ?? null,
+    accessToken: mlAccessToken,
+    itemId: itemMlId,
     zipCode: p.referenceZipCode ?? null,
     scenarioSaleDec: priceDec,
     npRec,
@@ -1079,7 +1415,69 @@ async function computeOneScenario(p) {
     listing: listingSim,
     scenarioType: scenario_id,
     listingUuid: p.listingUuid ?? null,
+    preferItemShippingOptionsByPrice: useOfficialShippingByPrice && !piCustomPriceOfficialApis,
+    piFreteViaShippingOptionsFree: piCustomPriceOfficialApis,
+    piOfficialApiContext: piCustomPriceOfficialApis
+      ? {
+          categoryId:
+            listingSim.category_id != null
+              ? String(listingSim.category_id)
+              : listingRaw.category_id != null
+                ? String(listingRaw.category_id)
+                : null,
+          listingTypeId:
+            listingSim.listing_type_id != null ? String(listingSim.listing_type_id).trim() : null,
+          currencyId:
+            listingSim.currency_id != null ? String(listingSim.currency_id).trim() : "BRL",
+          logisticType:
+            listingShipping?.logistic_type != null
+              ? String(listingShipping.logistic_type).trim()
+              : null,
+          shippingMode:
+            listingShipping?.mode != null ? String(listingShipping.mode).trim() : null,
+          feeDebug: piFeeDebug,
+        }
+      : null,
+    officialFeeAmountBrl: feeAmtStrResolved,
   });
+
+  if (
+    piCustomPriceOfficialApis &&
+    resolvedShipping.amount_brl == null &&
+    (officialFee?.source === "ml_listing_prices" || feeAmtStrResolved != null)
+  ) {
+    logPricingPiOfficialApiCall({
+      listing_id: p.listingUuid ?? itemMlId ?? null,
+      sale_price: salePriceStrOfficial,
+      category_id:
+        listingSim.category_id != null
+          ? String(listingSim.category_id)
+          : listingRaw.category_id != null
+            ? String(listingRaw.category_id)
+            : null,
+      listing_type_id:
+        listingSim.listing_type_id != null ? String(listingSim.listing_type_id).trim() : null,
+      currency_id: listingSim.currency_id != null ? String(listingSim.currency_id).trim() : "BRL",
+      logistic_type:
+        listingShipping?.logistic_type != null
+          ? String(listingShipping.logistic_type).trim()
+          : null,
+      shipping_mode: listingShipping?.mode != null ? String(listingShipping.mode).trim() : null,
+      fee_url: piFeeDebug.request_url,
+      fee_status: piFeeDebug.response_status,
+      fee_amount_brl: feeAmtStrResolved,
+      fee_percent: feePctStr,
+      shipping_url_free_true: null,
+      shipping_status_free_true: null,
+      shipping_cost_free_true: null,
+      shipping_url_free_false: null,
+      shipping_status_free_false: null,
+      shipping_cost_free_false: null,
+      selected_shipping_cost_brl: null,
+      selected_shipping_context: null,
+      fallback_used: true,
+    });
+  }
   const shipTrim = resolvedShipping.amount_brl;
   const shippingCostSource = resolvedShipping.source;
   const shippingCtx =
@@ -1104,7 +1502,9 @@ async function computeOneScenario(p) {
     marketplacePayoutOverrideBrl: payoutAlignedBrl,
   });
 
-  if (!npOk) {
+  if (!npOk && officialFee?.source === "ml_listing_prices" && shipTrim != null && payoutAlignedBrl != null) {
+    /* Repasse/tarifa oficiais por preço — não exibir alerta de health stale. */
+  } else if (!npOk) {
     warnings.push("Dados de repasse/tarifa incompletos para este preço — sincronize o anúncio ou verifique o health.");
   }
   if (feePctStr == null && feeAmtStrResolved == null) {
@@ -1147,9 +1547,122 @@ async function computeOneScenario(p) {
     scenario_id,
     scenario_type: scenario_id,
     sale_price_brl: priceDec.toDecimalPlaces(2, Decimal.ROUND_HALF_UP).toFixed(2),
+    official_fee_brl: feeAmtStrResolved,
+    official_fee_percent: feePctStr,
+    official_fee_source: officialFee?.source ?? null,
     shipping_source: shippingCostSource,
+    shipping_context: shippingCtx,
+    payout_brl: payoutAlignedBrl ?? payoutTrim,
     is_shipping_estimated: resolvedShipping.is_shipping_estimated,
     promotion_source: pf?.promotion_source != null ? String(pf.promotion_source) : null,
+  });
+
+  if (p.pricingIntelligenceSimulate === true || useOfficialShippingByPrice) {
+    console.info("[pricing-official-scenario]", {
+      sale_price: salePriceStrOfficial,
+      fee_amount_brl: feeAmtStrResolved,
+      shipping_cost_brl: shipTrim,
+      payout_brl: payoutAlignedBrl ?? payoutTrim,
+      profit_brl: marginAmt,
+      margin_percent: marginPct,
+      fee_source: officialFee?.source ?? null,
+      shipping_source: shippingCostSource,
+      shipping_context: shippingCtx,
+    });
+  }
+
+  const rayxScenarioType = is_baseline
+    ? "current_price"
+    : promotion_id != null
+      ? "promotion"
+      : null;
+  if (rayxScenarioType != null) {
+    console.info("[pricing-rayx-scenario]", {
+      scenario_type: rayxScenarioType,
+      sale_price: salePriceStrOfficial,
+      fee_amount_brl: feeAmtStrResolved,
+      shipping_cost_brl: shipTrim,
+      payout_brl: payoutAlignedBrl ?? payoutTrim,
+      fee_source: officialFee?.source ?? null,
+      shipping_source: shippingCostSource,
+      shipping_context: shippingCtx,
+    });
+  }
+
+  const isLowPriceDebug =
+    p.pricingIntelligenceSimulate === true &&
+    (salePriceStrOfficial === "109.00" ||
+      salePriceStrOfficial === "65.00" ||
+      salePriceStrOfficial === "85.00" ||
+      salePriceStrOfficial === "40.00" ||
+      priceDec.lt(150));
+  if (isLowPriceDebug) {
+    const feeDebug =
+      officialFee?.debug != null && typeof officialFee.debug === "object"
+        ? /** @type {Record<string, unknown>} */ (officialFee.debug)
+        : {};
+    const shippingEndpoint =
+      shippingCostSource === "ml_item_shipping_options_api" ||
+      (typeof shippingCostSource === "string" && shippingCostSource.startsWith("ml_item_shipping_options_api"))
+        ? "GET /items/{id}/shipping_options?price=&zip_code="
+        : shippingCostSource === "ml_listing_prices_logistics" ||
+            shippingCostSource === "ml_listing_prices_logistics_validated"
+          ? "GET /sites/{site_id}/listing_prices"
+          : shippingCostSource === "ml_shipping_options_free" ||
+              shippingCostSource === "ml_shipping_options_free_list_cost"
+            ? "GET /users/{id}/shipping_options/free"
+            : shippingCostSource ?? "none";
+    const feeFound =
+      officialFee?.source === "ml_listing_prices" &&
+      feeAmtStrResolved != null &&
+      String(feeAmtStrResolved).trim() !== "";
+    const shippingFound =
+      shipTrim != null &&
+      shippingCostSource != null &&
+      shippingCostSource !== "official_unresolved" &&
+      shippingCostSource !== "health_column" &&
+      shippingCostSource !== "net_receivable_gap" &&
+      !String(shippingCostSource).includes("simulation") &&
+      !String(shippingCostSource).includes("shipping_options_free");
+    const fallbackUsed = !feeFound || !shippingFound || resolvedShipping.is_shipping_estimated === true;
+    console.info("[ml-low-price-official-debug]", {
+      listing_id: itemMlId ?? p.listingUuid ?? null,
+      sale_price: salePriceStrOfficial,
+      endpoint: feeDebug.endpoint ?? "GET /sites/{site_id}/listing_prices",
+      request_payload_or_query: feeDebug.request_url ?? null,
+      response_status: feeDebug.response_status ?? null,
+      price_sent_to_ml: feeDebug.price_sent ?? salePriceStrOfficial,
+      listing_type_id: feeDebug.listing_type_id ?? null,
+      category_id: feeDebug.category_id ?? null,
+      fee_found: feeFound,
+      fee_amount_brl: feeAmtStrResolved,
+      fee_percent: feePctStr,
+      shipping_endpoint: shippingEndpoint,
+      shipping_found: shippingFound,
+      shipping_cost_brl: shipTrim,
+      buyer_shipping_context: shippingCtx,
+      payout_brl: payoutAlignedBrl ?? payoutTrim,
+      fallback_used: fallbackUsed,
+      warning: warningsDedup.length ? warningsDedup.join(" ") : null,
+    });
+  }
+
+  console.info("[ml-official-scenario-final]", {
+    listing_id: p.listingUuid ?? null,
+    external_listing_id: itemMlId,
+    scenario_id,
+    sale_price: salePriceStrOfficial,
+    fee_amount_brl: feeAmtStrResolved,
+    fee_percent: feePctStr,
+    fee_source: officialFee?.source ?? null,
+    shipping_cost_brl: shipTrim,
+    shipping_source: shippingCostSource,
+    shipping_context: shippingCtx,
+    payout_brl: payoutAlignedBrl ?? payoutTrim,
+    profit_brl: marginAmt,
+    margin_percent: marginPct,
+    is_shipping_estimated: resolvedShipping.is_shipping_estimated,
+    shipping_warning: resolvedShipping.warning ?? null,
   });
 
   return {
@@ -1164,6 +1677,8 @@ async function computeOneScenario(p) {
     promotion_name,
     promotion_active,
     is_baseline,
+    offer_id,
+    official_fee_source: officialFee?.source ?? null,
     marketplace: {
       sale_price_brl: priceDec.toDecimalPlaces(2, Decimal.ROUND_HALF_UP).toFixed(2),
       original_price_brl: null,
@@ -1179,6 +1694,8 @@ async function computeOneScenario(p) {
         pf?.promotion_subsidy_amount_brl != null ? String(pf.promotion_subsidy_amount_brl) : null,
       seller_discount_amount_brl:
         pf?.seller_discount_amount_brl != null ? String(pf.seller_discount_amount_brl) : null,
+      seller_discount_percent:
+        pf?.seller_discount_percent != null ? String(pf.seller_discount_percent) : null,
       promotion_source: pf?.promotion_source != null ? String(pf.promotion_source) : null,
       is_shipping_estimated: resolvedShipping.is_shipping_estimated,
       is_promotion_estimated: Boolean(pf?.is_promotion_estimated),
@@ -1283,11 +1800,407 @@ function buildSubsidyLayer(baselineRow, promoRow) {
 }
 
 /**
+ * Precificação Inteligente — mesma engine do Raio-X (`computeOneScenario` com paridade de parâmetros).
+ * Sem `pricingIntelligenceSimulate`, sem resolver paralelo de comissão, sem limpar health como PI antigo.
+ *
+ * @param {{
+ *   listing: Record<string, unknown>;
+ *   health: Record<string, unknown> | null;
+ *   metrics: Record<string, unknown> | null;
+ *   sellerTaxPct: string | null;
+ *   salePriceStr: string;
+ *   listingTypeId: string;
+ *   mlAccessToken?: string | null;
+ *   referenceZipCode?: string | null;
+ *   itemMlId: string;
+ *   listingUuid?: string | null;
+ * }} p
+ * @returns {Promise<{ scenario: Record<string, unknown>; engine_path: string }>}
+ */
+/**
+ * ENGINE FINANCEIRA HOMOLOGADA — entrada PI (paridade Raio-X).
+ *
+ * Alterações exigem nova trilha + homologação ML.
+ * Doc: docs/precificacao/PI_ENGINE_HOMOLOGADA.md
+ */
+export async function computeMercadoLivreScenarioComoRayxParaPI(p) {
+  const {
+    listing,
+    health,
+    metrics,
+    sellerTaxPct,
+    salePriceStr,
+    listingTypeId,
+    mlAccessToken,
+    referenceZipCode,
+    itemMlId,
+    listingUuid,
+  } = p;
+
+  const listingForTipo = { ...listing, listing_type_id: listingTypeId };
+  if (listingForTipo.raw_json != null && typeof listingForTipo.raw_json === "object") {
+    listingForTipo.raw_json = {
+      .../** @type {Record<string, unknown>} */ (listingForTipo.raw_json),
+      listing_type_id: listingTypeId,
+    };
+  }
+
+  let priceDec;
+  try {
+    priceDec = new Decimal(String(salePriceStr).trim().replace(",", "."));
+  } catch {
+    priceDec = new Decimal(NaN);
+  }
+  if (!priceDec.isFinite() || priceDec.lte(0)) {
+    throw new Error("Preço inválido para simulação PI.");
+  }
+  const saleNorm = priceDec.toDecimalPlaces(2, Decimal.ROUND_HALF_UP).toFixed(2);
+
+  const baselinePriceStr = resolveBaselineSalePriceStr(listing, health, decStr);
+  const catalogBrl = resolveMercadoLivreBaselineCatalogBrl(listing, health);
+  const promos = extractPromotionScenarios(listing, health, { source: "persisted" });
+
+  const refZip =
+    referenceZipCode != null && String(referenceZipCode).trim() !== ""
+      ? String(referenceZipCode).trim()
+      : "01310100";
+
+  const baseParams = {
+    listing: listingForTipo,
+    health,
+    metrics,
+    sellerTaxPct,
+    mlAccessToken: mlAccessToken ?? null,
+    referenceZipCode: refZip,
+    itemMlId,
+    listingUuid: listingUuid ?? null,
+  };
+
+  if (baselinePriceStr != null && saleNorm === baselinePriceStr) {
+    const scenario = await computeOneScenario({
+      ...baseParams,
+      salePriceStr: baselinePriceStr,
+      scenario_id: "baseline",
+      promotion_id: null,
+      promotion_name: null,
+      promotion_status: "current",
+      starts_at: null,
+      ends_at: null,
+      promotion_active: false,
+      is_baseline: true,
+      promotionFinancials: null,
+    });
+    return { scenario, engine_path: "rayx_baseline_match" };
+  }
+
+  for (const pr of promos) {
+    const promoSale = toDec(pr.final_price_brl);
+    if (promoSale == null || !promoSale.isFinite() || promoSale.lte(0)) continue;
+    if (promoSale.toDecimalPlaces(2, Decimal.ROUND_HALF_UP).toFixed(2) !== saleNorm) continue;
+
+    const promoId = pr.promotion_id != null ? String(pr.promotion_id).trim() : "";
+    if (!promoId) continue;
+
+    const scenarioStableId = buildMlPromotionScenarioId(promoId, pr.starts_at, pr.ends_at);
+    const promoFin = resolveMercadoLivrePromotionFinancials({
+      listing,
+      promotionId: promoId,
+      promoPriceBrl: pr.final_price_brl,
+      baselineCatalogBrl: catalogBrl,
+    });
+
+    const scenario = await computeOneScenario({
+      ...baseParams,
+      salePriceStr: pr.final_price_brl,
+      scenario_id: scenarioStableId,
+      promotion_id: promoId,
+      promotion_name: pr.promotion_name != null ? String(pr.promotion_name) : null,
+      promotion_status: pr.status,
+      starts_at: pr.starts_at,
+      ends_at: pr.ends_at,
+      promotion_active: pr.status === "active",
+      is_baseline: false,
+      promotionFinancials: promoFin,
+    });
+    return { scenario, engine_path: "rayx_promotion_match" };
+  }
+
+  const scenario = await computeOneScenario({
+    ...baseParams,
+    salePriceStr: saleNorm,
+    scenario_id: listingTypeId,
+    promotion_id: null,
+    promotion_name: null,
+    promotion_status: "current",
+    starts_at: null,
+    ends_at: null,
+    promotion_active: false,
+    is_baseline: false,
+    promotionFinancials: null,
+    piCustomPriceOfficialApis: true,
+  });
+  return { scenario, engine_path: "rayx_custom_price" };
+}
+
+/**
+ * Cenário promocional somente listagem (sem motor financeiro) — price=0 sem referência calculável.
+ * @param {ReturnType<typeof normalizeOfficialSellerPromotionsFromApi>["promotions"][number]} pr
+ * @param {string | null} listingUuid
+ * @param {string} itemMlId
+ */
+function buildDisplayOnlyOfficialPromotionScenarioRow(pr, listingUuid, itemMlId) {
+  const scenarioStableId = buildMlPromotionScenarioId(
+    pr.promotion_id,
+    pr.starts_at,
+    pr.ends_at,
+    pr.offer_id
+  );
+  const lt = normalizeMercadoLivreListingType(null);
+  const fin = pr.financials ?? null;
+  const row = {
+    key: `ml:promotion:${pr.identity_key}`,
+    kind: "promotion",
+    label: pr.promotion_name,
+    status: pr.status,
+    starts_at: pr.starts_at,
+    ends_at: pr.ends_at,
+    scenario_id: scenarioStableId,
+    promotion_id: pr.promotion_id,
+    promotion_type: pr.promotion_type,
+    offer_id: pr.offer_id,
+    promotion_name: pr.promotion_name,
+    promotion_active: pr.promotion_active === true,
+    seller_participates: pr.promotion_active === true,
+    is_baseline: false,
+    ml_official_identity_key: pr.identity_key,
+    ml_promotion_raw_status: pr.raw_status,
+    _raiox_listing_effective_api_state:
+      pr.ml_effective_state === "active"
+        ? "active"
+        : pr.ml_effective_state === "scheduled"
+          ? "scheduled"
+          : "participate",
+    marketplace: {
+      sale_price_brl: pr.final_price_brl,
+      original_price_brl: pr.reference_price_brl,
+      listing_type_label: lt.label,
+      sale_fee_percent: null,
+      sale_fee_amount_brl: null,
+      fee_amount_brl: null,
+      shipping_cost_amount_brl: null,
+      shipping_cost_source: null,
+      shipping_context: null,
+      shipping_subsidy_amount_brl: null,
+      promotion_subsidy_amount_brl: fin?.promotion_subsidy_amount_brl ?? null,
+      seller_discount_amount_brl: fin?.seller_discount_amount_brl ?? null,
+      seller_discount_percent: fin?.seller_discount_percent ?? null,
+      promotion_source: fin?.promotion_source ?? "ml_seller_promotions_api",
+      is_shipping_estimated: false,
+      is_promotion_estimated: true,
+      marketplace_payout_amount_brl: null,
+      net_receivable_brl: null,
+      margin_amount_brl: null,
+      margin_percent: null,
+    },
+    subsidies: null,
+    internal_costs: {
+      product_cost_brl: null,
+      tax_amount_brl: null,
+      operational_packaging_total_brl: null,
+      tax_percent_applied: null,
+      tax_percent_label: null,
+    },
+    result: null,
+    ui: {
+      block2_mode: "blocked",
+      block3_mode: "blocked",
+      block2_message: "Preço promocional ainda não aplicado no Mercado Livre.",
+      block3_message: null,
+    },
+    data_quality: {
+      source: "ml_api",
+      price_pending: true,
+      listing_id: listingUuid,
+      external_listing_id: itemMlId,
+    },
+  };
+  attachOfficialPromotionMetadata(row, pr, fin);
+  logS7PiPromoFinAuditFromScenarioRow(row);
+  return row;
+}
+
+/**
+ * @param {Record<string, unknown>} row
+ * @param {ReturnType<typeof normalizeOfficialSellerPromotionsFromApi>["promotions"][number]} pr
+ * @param {ReturnType<typeof resolveOfficialSellerPromotionFinancials> | null | undefined} promoFin
+ */
+function attachOfficialPromotionMetadata(row, pr, promoFin = null) {
+  const fin = promoFin ?? pr.financials ?? null;
+  row.ml_official_identity_key = pr.identity_key;
+  row.ml_promotion_raw_status = pr.raw_status;
+  row.promotion_type = pr.promotion_type;
+  row.promotion_active = pr.promotion_active === true;
+  row.seller_participates = pr.promotion_active === true;
+  row._raiox_listing_effective_api_state =
+    pr.ml_effective_state === "active"
+      ? "active"
+      : pr.ml_effective_state === "scheduled"
+        ? "scheduled"
+        : "participate";
+  if (fin?.ml_financial_audit != null) {
+    row.ml_financial_audit = fin.ml_financial_audit;
+  }
+
+  const rawRow =
+    "ml_api_raw_row" in pr && pr.ml_api_raw_row != null && typeof pr.ml_api_raw_row === "object"
+      ? /** @type {Record<string, unknown>} */ (pr.ml_api_raw_row)
+      : /** @type {Record<string, unknown>} */ ({});
+
+  logS7PromotionsPiAudit("financial_raw_fields", {
+    listing_external_id: row.external_listing_id ?? pr.reference_price_brl ?? null,
+    ...extractOfficialPromotionFinancialRawFields(rawRow),
+  });
+
+  if (row.marketplace != null && typeof row.marketplace === "object" && fin != null) {
+    const m = /** @type {Record<string, unknown>} */ (row.marketplace);
+    if (pr.reference_price_brl != null) m.original_price_brl = pr.reference_price_brl;
+    if (fin.seller_discount_amount_brl != null) m.seller_discount_amount_brl = fin.seller_discount_amount_brl;
+    if (fin.seller_discount_percent_display != null) {
+      m.seller_discount_percent = `${fin.seller_discount_percent_display}.00`;
+    } else if (fin.seller_discount_percent != null) {
+      m.seller_discount_percent = fin.seller_discount_percent;
+    }
+    if (
+      fin.ml_financial_audit != null &&
+      typeof fin.ml_financial_audit === "object" &&
+      /** @type {Record<string, unknown>} */ (fin.ml_financial_audit).original_price != null
+    ) {
+      m.original_price_brl = String(/** @type {Record<string, unknown>} */ (fin.ml_financial_audit).original_price);
+    }
+    m.promotion_source = fin.promotion_source ?? "ml_seller_promotions_api";
+    if (pr.price_applied === false) m.is_promotion_estimated = true;
+
+    const presentation = resolveOfficialPromotionPresentationFinancials({
+      grossFeeBrl:
+        m.sale_fee_amount_brl != null
+          ? String(m.sale_fee_amount_brl)
+          : m.fee_amount_brl != null
+            ? String(m.fee_amount_brl)
+            : null,
+      salePriceBrl: m.sale_price_brl != null ? String(m.sale_price_brl) : null,
+      shippingCostBrl: m.shipping_cost_amount_brl != null ? String(m.shipping_cost_amount_brl) : null,
+      fin,
+      rawRow,
+    });
+
+    logS7PromotionsPiAudit("financial_normalized", {
+      listing_external_id: row.external_listing_id ?? null,
+      promotion_id: row.promotion_id ?? null,
+      promotion_name: row.promotion_name ?? null,
+      ...presentation,
+    });
+
+    if (presentation.gross_fee_brl != null) {
+      m.fee_amount_before_promo_subsidy_brl = presentation.gross_fee_brl;
+    }
+    if (presentation.net_fee_brl != null) {
+      m.fee_amount_after_promo_subsidy_brl = presentation.net_fee_brl;
+    }
+    if (presentation.fee_discount_brl != null) {
+      m.promotion_subsidy_amount_brl = presentation.fee_discount_brl;
+      m.fee_discount_brl = presentation.fee_discount_brl;
+      m.charged_fee_discount_brl = presentation.fee_discount_brl;
+      m.marketplace_fee_discount_amount_brl = presentation.fee_discount_brl;
+    }
+    if (presentation.expected_payout_brl != null) {
+      m.payout_before_promo_subsidy_brl =
+        presentation.gross_fee_brl != null &&
+        presentation.sale_price_brl != null &&
+        presentation.shipping_cost_brl != null
+          ? decToStr2(
+              toDec(presentation.sale_price_brl)
+                .minus(toDec(presentation.gross_fee_brl))
+                .minus(toDec(presentation.shipping_cost_brl))
+            )
+          : null;
+      m.payout_after_promo_subsidy_brl = presentation.expected_payout_brl;
+      m.marketplace_payout_amount_brl = presentation.expected_payout_brl;
+      m.net_receivable_brl = presentation.expected_payout_brl;
+      row.net_receivable_brl = presentation.expected_payout_brl;
+      row.marketplace_payout_amount_brl = presentation.expected_payout_brl;
+    }
+  }
+  if (fin != null) {
+    logS7PiPromoFinAuditDeep(row, fin, /** @type {Record<string, unknown>} */ (row.marketplace ?? {}));
+    logS7PiPromoFlowAudit("backend_after_attachOfficialPromotionMetadata", {
+      ...buildPiPromoFlowAuditPayload({
+        promotion_name: row.promotion_name != null ? String(row.promotion_name) : null,
+        promotion_id: row.promotion_id != null ? String(row.promotion_id) : null,
+        type: row.promotion_type != null ? String(row.promotion_type) : null,
+        ref_id: row.offer_id != null ? String(row.offer_id) : null,
+        fin,
+        row,
+        marketplace: /** @type {Record<string, unknown>} */ (row.marketplace ?? {}),
+        source_field_used: "attachOfficialPromotionMetadata",
+      }),
+    });
+  }
+  return row;
+}
+
+/** @param {Record<string, unknown>} row */
+function logS7PiPromoFinAuditFromScenarioRow(row) {
+  if (process.env.NODE_ENV === "production" && process.env.S7_PI_PROMO_FIN_AUDIT !== "1") return;
+  const m =
+    row.marketplace != null && typeof row.marketplace === "object"
+      ? /** @type {Record<string, unknown>} */ (row.marketplace)
+      : /** @type {Record<string, unknown>} */ ({});
+  const audit =
+    row.ml_financial_audit != null && typeof row.ml_financial_audit === "object"
+      ? /** @type {Record<string, unknown>} */ (row.ml_financial_audit)
+      : /** @type {Record<string, unknown>} */ ({});
+  const mlDisc = audit.ml_discount_brl != null ? String(audit.ml_discount_brl) : null;
+  const suse7Disc = m.seller_discount_amount_brl != null ? String(m.seller_discount_amount_brl) : null;
+  const mlPct = audit.ml_discount_pct != null ? String(audit.ml_discount_pct) : null;
+  const suse7Pct = m.seller_discount_percent != null ? String(m.seller_discount_percent) : null;
+  console.info("[S7_PI_PROMO_FIN_AUDIT]", {
+    promotion_name: row.promotion_name ?? row.label ?? null,
+    promotion_id: row.promotion_id ?? null,
+    type: row.promotion_type ?? null,
+    ref_id: row.offer_id ?? null,
+    raw_status: row.ml_promotion_raw_status ?? null,
+    original_price: audit.original_price ?? m.original_price_brl ?? null,
+    promotion_price: audit.promotion_price ?? m.sale_price_brl ?? null,
+    ml_discount_brl: mlDisc,
+    ml_discount_pct: mlPct,
+    suse7_discount_brl: suse7Disc,
+    suse7_discount_pct: suse7Pct,
+    ml_fee_brl: null,
+    suse7_fee_brl: m.sale_fee_amount_brl ?? m.fee_amount_brl ?? null,
+    ml_shipping_brl: null,
+    suse7_shipping_brl: m.shipping_cost_amount_brl ?? null,
+    ml_payout_brl: null,
+    suse7_payout_brl: m.marketplace_payout_amount_brl ?? m.net_receivable_brl ?? null,
+    diff_discount_brl:
+      mlDisc != null && suse7Disc != null && toDec(mlDisc) != null && toDec(suse7Disc) != null
+        ? decToStr2(toDec(suse7Disc).minus(toDec(mlDisc)))
+        : null,
+    diff_discount_pct:
+      mlPct != null && suse7Pct != null && toDec(mlPct) != null && toDec(suse7Pct) != null
+        ? decToStr2(toDec(suse7Pct).minus(toDec(mlPct)))
+        : null,
+    diff_payout_brl: null,
+    discount_source: audit.discount_source ?? null,
+  });
+}
+
+/**
  * @param {import("@supabase/supabase-js").SupabaseClient} supabase
  * @param {string} userId
  * @param {{
  *   listingId?: string;
  *   listingExternalId?: string;
+ *   scenarioScope?: string;
  *   mlAccessToken?: string | null;
  *   referenceZipCode?: string | null;
  * }} keys
@@ -1295,6 +2208,11 @@ function buildSubsidyLayer(baselineRow, promoRow) {
 export async function buildMercadoLivreListingPricingScenariosPayload(supabase, userId, keys) {
   const listingId = keys.listingId != null ? String(keys.listingId).trim() : "";
   const listingExternalId = keys.listingExternalId != null ? String(keys.listingExternalId).trim() : "";
+  const scenarioScope =
+    keys.scenarioScope != null && String(keys.scenarioScope).trim() !== ""
+      ? String(keys.scenarioScope).trim().toLowerCase()
+      : "";
+  const wantPricingOpportunities = scenarioScope === "pricing_opportunities";
 
   let loaded;
   if (listingId) {
@@ -1310,6 +2228,16 @@ export async function buildMercadoLivreListingPricingScenariosPayload(supabase, 
   }
 
   const { listing, health, metrics, sellerTaxPct, external_listing_id } = loaded;
+  const marketplaceAccountId =
+    loaded.marketplace_account_id != null && String(loaded.marketplace_account_id).trim() !== ""
+      ? String(loaded.marketplace_account_id).trim()
+      : listing.marketplace_account_id != null && String(listing.marketplace_account_id).trim() !== ""
+        ? String(listing.marketplace_account_id).trim()
+        : null;
+  const sellerId =
+    loaded.seller_id != null && String(loaded.seller_id).trim() !== ""
+      ? String(loaded.seller_id).trim()
+      : null;
 
   const baselinePriceStr = resolveBaselineSalePriceStr(listing, health, decStr);
   if (baselinePriceStr == null) {
@@ -1320,10 +2248,20 @@ export async function buildMercadoLivreListingPricingScenariosPayload(supabase, 
     };
   }
 
+  const catalogBrl = resolveMercadoLivreBaselineCatalogBrl(listing, health);
+
   const persistedPromos = extractPromotionScenarios(listing, health, { source: "persisted" });
+  /** @type {ReturnType<typeof normalizeOfficialSellerPromotionsFromApi>["promotions"] | ReturnType<typeof extractPromotionScenarios>} */
   let promos = persistedPromos;
-  /** @type {ReturnType<typeof extractPromotionScenarios>} */
-  let livePromos = [];
+  /** @type {Record<string, unknown>[]} */
+  let rawLivePromotions = [];
+  let mlEndpointUsed = null;
+  let liveFetchOk = false;
+  let liveFetchHttpStatus = /** @type {number | null} */ (null);
+  let liveFetchError = /** @type {string | null} */ (null);
+  let officialNormalize = null;
+  /** @type {string[]} */
+  const normalizationRemovalReasons = [];
   const diag = {
     persisted_promos: persistedPromos.length,
     live_promos: 0,
@@ -1331,9 +2269,12 @@ export async function buildMercadoLivreListingPricingScenariosPayload(supabase, 
     discarded_ended: 0,
     discarded_expired: 0,
     used_live_enrichment: false,
+    dropped_as_duplicate: 0,
   };
 
-  const mlToken = keys.mlAccessToken ?? null;
+  let mlToken = keys.mlAccessToken ?? null;
+  let mlTokenSource = mlToken ? "handler_fallback" : null;
+
   const refZip =
     keys.referenceZipCode != null && String(keys.referenceZipCode).trim() !== ""
       ? String(keys.referenceZipCode).trim()
@@ -1344,32 +2285,148 @@ export async function buildMercadoLivreListingPricingScenariosPayload(supabase, 
       ? String(external_listing_id).trim()
       : listing.external_listing_id != null
         ? String(listing.external_listing_id).trim()
-        : "";
+        : listingExternalId || "";
   const listingUuid = listing.id != null ? String(listing.id) : null;
-  const debugPromotionScenario = shouldEmitPromotionDebug(itemMlId);
 
-  // Persistência local pode vir sem `prices[]` (ou parcial). Neste caso, buscamos o item ao vivo no ML
-  // para recuperar múltiplas promoções válidas sem depender de montagem no frontend.
-  if (mlToken && itemMlId && promos.length <= 1) {
+  if (marketplaceAccountId) {
     try {
-      const liveItem = await fetchItem(mlToken, itemMlId);
-      if (liveItem && typeof liveItem === "object") {
-        const livePromotions = await fetchSellerPromotionsByItem(mlToken, itemMlId);
-        const listingWithLivePromo = mergeListingWithLivePromotionPayload(
-          /** @type {Record<string, unknown>} */ (listing),
-          /** @type {Record<string, unknown>} */ (liveItem),
-          livePromotions
-        );
-        const promosFromLive = extractPromotionScenarios(listingWithLivePromo, health, {
-          source: "live",
-        });
-        livePromos = promosFromLive;
-        diag.live_promos = promosFromLive.length;
-        if (promosFromLive.length > promos.length) {
-          diag.used_live_enrichment = true;
-          promos = promosFromLive;
+      mlToken = await getValidMLToken(userId, { marketplaceAccountId });
+      mlTokenSource = "listing_marketplace_account";
+    } catch (e) {
+      if (!mlToken && sellerId) {
+        try {
+          mlToken = await getValidMLToken(userId, { mlUserId: sellerId });
+          mlTokenSource = "listing_seller_id";
+        } catch {
+          // tenta fallback abaixo
         }
       }
+      if (!mlToken) {
+        logS7PromotionsPiAudit("request", {
+          user_id: userId,
+          marketplace_account_id: marketplaceAccountId,
+          seller_id: sellerId,
+          listing_external_id: itemMlId || null,
+          endpoint: `GET /seller-promotions/items/${itemMlId || "{item}"}?app_version=v2`,
+          token_error: e instanceof Error ? e.message : String(e),
+        });
+      }
+    }
+  } else if (!mlToken) {
+    try {
+      mlToken = await getValidMLToken(userId);
+      mlTokenSource = "user_default";
+    } catch (e) {
+      logS7PromotionsPiAudit("request", {
+        user_id: userId,
+        marketplace_account_id: null,
+        seller_id: sellerId,
+        listing_external_id: itemMlId || null,
+        endpoint: `GET /seller-promotions/items/${itemMlId || "{item}"}?app_version=v2`,
+        token_error: e instanceof Error ? e.message : String(e),
+      });
+    }
+  }
+
+  const debugPromotionScenario = shouldEmitPromotionDebug(itemMlId);
+
+  logS7MlPromosAudit("listing_id", itemMlId || listingUuid || null);
+  logS7MlPromosAudit("scenario_scope", scenarioScope || null);
+
+  const shouldFetchLiveSellerPromotions =
+    Boolean(mlToken && itemMlId) && (wantPricingOpportunities || persistedPromos.length <= 1);
+
+  /** @type {Map<string, Record<string, unknown>>} */
+  const rawRowByIdentity = new Map();
+
+  if (shouldFetchLiveSellerPromotions) {
+    mlEndpointUsed = `GET /seller-promotions/items/${itemMlId}?app_version=v2`;
+    logS7PromotionsPiAudit("request", {
+      user_id: userId,
+      marketplace_account_id: marketplaceAccountId,
+      seller_id: sellerId,
+      listing_external_id: itemMlId,
+      endpoint: mlEndpointUsed,
+      token_source: mlTokenSource,
+    });
+    try {
+      const fetchResult = await fetchSellerPromotionsByItemDetailed(mlToken, itemMlId);
+      liveFetchOk = fetchResult.ok;
+      liveFetchHttpStatus = fetchResult.httpStatus;
+      liveFetchError = fetchResult.error;
+      rawLivePromotions = fetchResult.rows;
+
+      logS7PromotionsPiAudit("raw_response_summary", {
+        listing_external_id: itemMlId,
+        raw_count: rawLivePromotions.length,
+        response_keys: fetchResult.responseKeys,
+        http_status: liveFetchHttpStatus,
+        fetch_error: liveFetchError,
+      });
+
+      for (const raw of rawLivePromotions) {
+        if (!raw || typeof raw !== "object") continue;
+        const key = buildOfficialSellerPromotionIdentityKey(/** @type {Record<string, unknown>} */ (raw));
+        if (key.replace(/\|/g, "") !== "") {
+          rawRowByIdentity.set(key, /** @type {Record<string, unknown>} */ (raw));
+        }
+        const nameRaw = raw.name ?? raw.promotion_name ?? raw.type;
+        if (
+          nameRaw != null &&
+          String(nameRaw).toLowerCase().includes("aumente") &&
+          String(nameRaw).toLowerCase().includes("vendas")
+        ) {
+          logS7PiPromoFlowAudit("backend_after_seller_promotions_fetch", {
+            ...buildPiPromoFlowAuditPayload({
+              promotion_name: String(nameRaw),
+              promotion_id: raw.id ?? raw.promotion_id ?? null,
+              type: raw.type ?? raw.promotion_type ?? null,
+              ref_id: raw.ref_id ?? raw.offer_id ?? null,
+              fin: resolveOfficialSellerPromotionFinancials(
+                /** @type {Record<string, unknown>} */ (raw),
+                raw.price != null ? String(raw.price) : null,
+                catalogBrl
+              ),
+              row: /** @type {Record<string, unknown>} */ (raw),
+              source_field_used: "ml_seller_promotions_api_raw_row",
+            }),
+            seller_percentage_raw: raw.seller_percentage ?? null,
+            meli_percentage_raw: raw.meli_percentage ?? null,
+            discount_meli_boost_amount_raw: raw.discount_meli_boost_amount ?? null,
+            original_price_raw: raw.original_price ?? null,
+            price_raw: raw.price ?? null,
+          });
+        }
+      }
+      officialNormalize = normalizeOfficialSellerPromotionsFromApi(rawLivePromotions, { source: "live" });
+      diag.live_promos = officialNormalize.normalized_total;
+      diag.dropped_as_duplicate = officialNormalize.dropped_as_duplicate;
+      diag.used_live_enrichment = liveFetchOk && rawLivePromotions.length > 0;
+
+      if (wantPricingOpportunities && liveFetchOk) {
+        // Fonte soberana: endpoint oficial por item — sem somar persistido/prices[].
+        promos = officialNormalize.promotions;
+      } else if (wantPricingOpportunities) {
+        promos = persistedPromos.length > 0 ? persistedPromos : [];
+        normalizationRemovalReasons.push(
+          `live_fetch_failed:${liveFetchHttpStatus ?? "unknown"}:${liveFetchError ?? "unknown"}`
+        );
+      } else if (persistedPromos.length <= 1) {
+        promos =
+          officialNormalize.normalized_total > 0 ? officialNormalize.promotions : persistedPromos;
+      }
+
+      logS7PromotionsPiAudit("normalization", {
+        raw_count: rawLivePromotions.length,
+        normalized_count: officialNormalize.normalized_total,
+        removidos_por_filtro: officialNormalize.dropped_as_duplicate,
+        motivos_de_remocao:
+          normalizationRemovalReasons.length > 0
+            ? normalizationRemovalReasons
+            : liveFetchOk
+              ? []
+              : [`live_fetch_failed:${liveFetchHttpStatus ?? "unknown"}:${liveFetchError ?? "unknown"}`],
+      });
     } catch (e) {
       logPricingEvent(PRICING_LOG_LEVEL.INFO, PRICING_EVENT_CODE.PRICING_FALLBACK_APPLIED, {
         marketplace: "mercado_livre",
@@ -1378,10 +2435,54 @@ export async function buildMercadoLivreListingPricingScenariosPayload(supabase, 
         reason: "live_item_promotion_fetch_failed",
         message: e instanceof Error ? e.message : String(e),
       });
+      if (wantPricingOpportunities) {
+        promos = persistedPromos.length > 0 ? persistedPromos : [];
+        normalizationRemovalReasons.push(
+          `live_fetch_exception:${e instanceof Error ? e.message : String(e)}`
+        );
+        logS7PromotionsPiAudit("normalization", {
+          raw_count: 0,
+          normalized_count: promos.length,
+          removidos_por_filtro: 0,
+          motivos_de_remocao: normalizationRemovalReasons,
+        });
+      }
     }
+  } else if (wantPricingOpportunities && !mlToken) {
+    logS7PromotionsPiAudit("request", {
+      user_id: userId,
+      marketplace_account_id: marketplaceAccountId,
+      seller_id: sellerId,
+      listing_external_id: itemMlId || null,
+      endpoint: `GET /seller-promotions/items/${itemMlId || "{item}"}?app_version=v2`,
+      token_error: "missing_access_token",
+    });
+    promos = persistedPromos;
+    logS7PromotionsPiAudit("normalization", {
+      raw_count: 0,
+      normalized_count: promos.length,
+      removidos_por_filtro: 0,
+      motivos_de_remocao: ["missing_access_token"],
+    });
   }
 
-  const catalogBrl = resolveMercadoLivreBaselineCatalogBrl(listing, health);
+  logS7MlPromosAudit("ml_endpoint_used", mlEndpointUsed);
+  logS7MlPromosAudit("live_total", liveFetchOk ? rawLivePromotions.length : null);
+  logS7MlPromosAudit(
+    "live_identity_keys",
+    officialNormalize != null
+      ? officialNormalize.identity_keys
+      : rawLivePromotions.map((row) => buildOfficialSellerPromotionIdentityKey(row))
+  );
+  logS7MlPromosAudit(
+    "normalized_total",
+    officialNormalize != null ? officialNormalize.normalized_total : promos.length
+  );
+  logS7MlPromosAudit("dropped_as_duplicate", diag.dropped_as_duplicate);
+  logS7MlPromosAudit(
+    "status_counts",
+    officialNormalize != null ? officialNormalize.status_counts : null
+  );
 
   let baseline;
   try {
@@ -1420,6 +2521,33 @@ export async function buildMercadoLivreListingPricingScenariosPayload(supabase, 
     };
   }
 
+  {
+    const { logPricingFlowDiff, extrairMetricasFluxoPrecificacao } = await import(
+      "./pricingFlowDiffLog.js"
+    );
+    const m = extrairMetricasFluxoPrecificacao(baseline);
+    logPricingFlowDiff({
+      flow: "rayx",
+      handler: "POST /api/ml/listings/pricing-scenarios",
+      listingExternalId: itemMlId || listingExternalId || null,
+      sale_price: baselinePriceStr,
+      listing_type:
+        listing.listing_type_id != null ? String(listing.listing_type_id) : null,
+      has_marketplace_account: Boolean(mlToken),
+      has_access_token: Boolean(mlToken),
+      token_source: mlTokenSource,
+      calls_listing_prices: Boolean(mlToken && itemMlId),
+      listing_prices_status: m.fee_amount_brl != null ? "resolved" : "unresolved",
+      fee_amount_brl: m.fee_amount_brl,
+      fee_source: m.fee_source,
+      shipping_cost_brl: m.shipping_cost_brl,
+      shipping_source: m.shipping_source,
+      payout_brl: m.payout_brl,
+      warnings: m.warnings,
+      engine_path: "rayx_baseline",
+    });
+  }
+
   /** @type {Record<string, unknown>[]} */
   const promotionRowsRaw = [];
   /** @type {Record<string, unknown>[]} */
@@ -1427,33 +2555,33 @@ export async function buildMercadoLivreListingPricingScenariosPayload(supabase, 
   if (debugPromotionScenario) {
     const selectedFingerprints = new Set(
       promos.map((p) => {
-        const pid = p.promotion_id != null ? String(p.promotion_id).trim() : "";
-        const sale = p.final_price_brl != null ? String(p.final_price_brl).trim() : "";
-        const src = p.source != null ? String(p.source).trim() : "persisted";
-        const s = p.starts_at != null ? String(p.starts_at).trim() : "";
-        const e = p.ends_at != null ? String(p.ends_at).trim() : "";
-        return `${src}|${pid}|${sale}|${s}|${e}`;
+        const identity =
+          "identity_key" in p && p.identity_key != null
+            ? String(p.identity_key)
+            : promotionExtractionMapKey(/** @type {Parameters<typeof promotionExtractionMapKey>[0]} */ (p));
+        return identity;
       })
     );
     const baseCandidates = [
-      ...persistedPromos.map((p) => ({ p, fallbackReason: "superseded_by_live_enrichment" })),
-      ...livePromos.map((p) => ({ p, fallbackReason: "not_selected_for_pipeline" })),
+      ...persistedPromos.map((p) => ({ p, fallbackReason: "superseded_by_live_official" })),
+      ...(officialNormalize != null
+        ? officialNormalize.promotions.map((p) => ({ p, fallbackReason: "not_selected_for_pipeline" }))
+        : []),
     ];
     for (const { p, fallbackReason } of baseCandidates) {
+      const identity =
+        "identity_key" in p && p.identity_key != null
+          ? String(p.identity_key)
+          : promotionExtractionMapKey(/** @type {Parameters<typeof promotionExtractionMapKey>[0]} */ (p));
+      if (selectedFingerprints.has(identity)) continue;
       const pid = p.promotion_id != null ? String(p.promotion_id).trim() : "";
-      const sale = p.final_price_brl != null ? String(p.final_price_brl).trim() : "";
-      const src = p.source != null ? String(p.source).trim() : "persisted";
-      const s = p.starts_at != null ? String(p.starts_at).trim() : "";
-      const e = p.ends_at != null ? String(p.ends_at).trim() : "";
-      const fp = `${src}|${pid}|${sale}|${s}|${e}`;
-      if (selectedFingerprints.has(fp)) continue;
       promotionDebugRows.push({
         marketplace: "mercado_livre",
         listing_id: listingUuid,
         external_listing_id: itemMlId,
-        source: src,
+        source: p.source != null ? String(p.source) : "persisted",
         promotion_id: pid || null,
-        scenario_id: buildMlPromotionScenarioId(pid, p.starts_at, p.ends_at),
+        scenario_id: buildMlPromotionScenarioId(pid, p.starts_at, p.ends_at, p.offer_id ?? null),
         label: p.promotion_name ?? null,
         raw_status: p.raw_status ?? null,
         normalized_status: p.status ?? "unknown",
@@ -1466,12 +2594,16 @@ export async function buildMercadoLivreListingPricingScenariosPayload(supabase, 
     }
   }
   for (const pr of promos) {
+    const isOfficial =
+      wantPricingOpportunities &&
+      (("identity_key" in pr && pr.identity_key != null) || pr.source === "live" || rawRowByIdentity.size > 0);
     const promoSource = pr.source != null ? String(pr.source) : "persisted";
     const rawStatus = pr.raw_status != null ? String(pr.raw_status) : null;
     const normalizedStatus = pr.status != null ? String(pr.status) : "unknown";
     const promoId = pr.promotion_id != null ? String(pr.promotion_id).trim() : "";
-    const scenarioStableId = buildMlPromotionScenarioId(promoId, pr.starts_at, pr.ends_at);
-    const promoSale = toDec(pr.final_price_brl);
+    const offerId = pr.offer_id != null ? String(pr.offer_id).trim() : "";
+    const scenarioStableId = buildMlPromotionScenarioId(promoId, pr.starts_at, pr.ends_at, offerId || null);
+    const promoSale = pr.final_price_brl != null ? toDec(pr.final_price_brl) : null;
     const debugBase = {
       marketplace: "mercado_livre",
       listing_id: listingUuid,
@@ -1486,10 +2618,15 @@ export async function buildMercadoLivreListingPricingScenariosPayload(supabase, 
       ends_at: pr.ends_at ?? null,
       sale_price_brl: pr.final_price_brl ?? null,
     };
-    const eligibility = evaluatePromotionUiEligibility({ status: pr.status, ends_at: pr.ends_at });
+    const eligibility = isOfficial
+      ? evaluateOfficialPromotionUiEligibility({ raw_status: pr.raw_status, ends_at: pr.ends_at })
+      : evaluatePromotionUiEligibility({ status: pr.status, ends_at: pr.ends_at });
     if (!eligibility.ok) {
       if (eligibility.reason === "expired") diag.discarded_expired += 1;
       else diag.discarded_ended += 1;
+      normalizationRemovalReasons.push(
+        `${promoId || pr.promotion_name || "unknown"}:${eligibility.reason ?? "ineligible"}`
+      );
       logPricingEvent(PRICING_LOG_LEVEL.INFO, PRICING_EVENT_CODE.ML_PROMOTION_SCENARIO_SKIPPED_INVALID, {
         marketplace: "mercado_livre",
         listing_id: listingUuid,
@@ -1506,29 +2643,117 @@ export async function buildMercadoLivreListingPricingScenariosPayload(supabase, 
         });
       continue;
     }
-    if (!promoId || promoSale == null || !promoSale.isFinite() || promoSale.lte(0)) {
+    if (!promoId) {
       diag.discarded_invalid += 1;
+      normalizationRemovalReasons.push(`${pr.promotion_name || "unknown"}:missing_promotion_id`);
       logPricingEvent(PRICING_LOG_LEVEL.WARN, PRICING_EVENT_CODE.ML_PROMOTION_SCENARIO_SKIPPED_INVALID, {
         marketplace: "mercado_livre",
         listing_id: listingUuid,
-        promotion_id: promoId || null,
-        reason: !promoId ? "missing_promotion_id" : "invalid_sale_price_brl",
+        promotion_id: null,
+        reason: "missing_promotion_id",
       });
       if (debugPromotionScenario)
         promotionDebugRows.push({
           ...debugBase,
-          discard_reason: !promoId ? "missing_promotion_id" : "invalid_sale_price_brl",
+          discard_reason: "missing_promotion_id",
           included_in_final: false,
         });
       continue;
     }
+
+    const promotionActive = isOfficial
+      ? pr.promotion_active === true
+      : String(pr.raw_status ?? pr.status ?? "")
+          .trim()
+          .toLowerCase() === "started" || pr.status === "active";
+
+    if (promoSale == null || !promoSale.isFinite() || promoSale.lte(0)) {
+      if (isOfficial) {
+        const displayRow = buildDisplayOnlyOfficialPromotionScenarioRow(
+          /** @type {ReturnType<typeof normalizeOfficialSellerPromotionsFromApi>["promotions"][number]} */ (pr),
+          listingUuid,
+          itemMlId
+        );
+        promotionRowsRaw.push(displayRow);
+        if (debugPromotionScenario)
+          promotionDebugRows.push({
+            ...debugBase,
+            discard_reason: null,
+            included_in_final: null,
+          });
+        continue;
+      }
+      diag.discarded_invalid += 1;
+      if (debugPromotionScenario)
+        promotionDebugRows.push({
+          ...debugBase,
+          discard_reason: "invalid_sale_price_brl",
+          included_in_final: false,
+        });
+      continue;
+    }
+
     try {
-      const promoFin = resolveMercadoLivrePromotionFinancials({
-        listing,
-        promotionId: promoId,
-        promoPriceBrl: pr.final_price_brl,
-        baselineCatalogBrl: catalogBrl,
-      });
+      /** @type {ReturnType<typeof resolveOfficialSellerPromotionFinancials> | ReturnType<typeof resolveMercadoLivrePromotionFinancials>} */
+      let promoFin;
+      let promoFinSource = "legacy_resolver";
+      if (isOfficial) {
+        const identityKey =
+          "identity_key" in pr && pr.identity_key != null ? String(pr.identity_key) : buildOfficialSellerPromotionIdentityKey(
+              /** @type {Record<string, unknown>} */ (
+                "ml_api_raw_row" in pr && pr.ml_api_raw_row != null && typeof pr.ml_api_raw_row === "object"
+                  ? pr.ml_api_raw_row
+                  : /** @type {Record<string, unknown>} */ ({ id: pr.promotion_id, type: pr.promotion_type, ref_id: pr.offer_id })
+              )
+            );
+        const rawRow =
+          rawRowByIdentity.get(identityKey) ??
+          ("ml_api_raw_row" in pr && pr.ml_api_raw_row != null && typeof pr.ml_api_raw_row === "object"
+            ? /** @type {Record<string, unknown>} */ (pr.ml_api_raw_row)
+            : null);
+        if (rawRow != null) {
+          promoFin = resolveOfficialSellerPromotionFinancials(
+            rawRow,
+            pr.final_price_brl,
+            catalogBrl ?? pr.reference_price_brl
+          );
+          promoFinSource = "ml_seller_promotions_api_raw_row";
+        } else {
+          promoFin = resolveOfficialSellerPromotionFinancials(
+            /** @type {Record<string, unknown>} */ ({
+              id: pr.promotion_id,
+              type: pr.promotion_type,
+              ref_id: pr.offer_id,
+              name: pr.promotion_name,
+              price: pr.final_price_brl,
+              original_price: pr.reference_price_brl,
+            }),
+            pr.final_price_brl,
+            catalogBrl ?? pr.reference_price_brl
+          );
+          promoFinSource = "official_sparse_row";
+        }
+        logS7PiPromoFlowAudit("backend_after_resolveOfficialSellerPromotionFinancials", {
+          ...buildPiPromoFlowAuditPayload({
+            promotion_name: pr.promotion_name != null ? String(pr.promotion_name) : null,
+            promotion_id: promoId || null,
+            type: pr.promotion_type != null ? String(pr.promotion_type) : null,
+            ref_id: offerId || null,
+            fin: promoFin,
+            source_field_used: promoFinSource,
+          }),
+          is_official: isOfficial,
+        });
+      } else {
+        promoFin = resolveMercadoLivrePromotionFinancials({
+          listing,
+          promotionId: promoId,
+          promoPriceBrl: pr.final_price_brl,
+          baselineCatalogBrl:
+            isOfficial && pr.reference_price_brl != null ? pr.reference_price_brl : catalogBrl,
+        });
+        promoFinSource = "resolveMercadoLivrePromotionFinancials";
+      }
       const row = await computeOneScenario({
         listing,
         health,
@@ -1541,14 +2766,27 @@ export async function buildMercadoLivreListingPricingScenariosPayload(supabase, 
         promotion_status: pr.status,
         starts_at: pr.starts_at,
         ends_at: pr.ends_at,
-        promotion_active: pr.status === "active",
+        promotion_active: promotionActive,
         is_baseline: false,
         mlAccessToken: mlToken,
         referenceZipCode: refZip,
         itemMlId,
         listingUuid,
+        offer_id: offerId || null,
         promotionFinancials: promoFin,
       });
+      if (isOfficial) {
+        attachOfficialPromotionMetadata(
+          row,
+          /** @type {ReturnType<typeof normalizeOfficialSellerPromotionsFromApi>["promotions"][number]} */ (pr),
+          promoFin
+        );
+        logS7PiPromoFinAuditFromScenarioRow(row);
+      } else {
+        row.ml_promotion_raw_status = rawStatus;
+        row.promotion_active = promotionActive;
+        row.seller_participates = promotionActive;
+      }
       const sub = buildSubsidyLayer(baseline, row);
       row.subsidies = sub;
       promotionRowsRaw.push(row);
@@ -1581,6 +2819,8 @@ export async function buildMercadoLivreListingPricingScenariosPayload(supabase, 
   }
 
   const promotionScenarios = dedupePromotionScenarioRows(promotionRowsRaw, listingUuid, diag);
+  logS7MlPromosAudit("deduped_total", promotionScenarios.length);
+  logS7MlPromosAudit("final_response_total", promotionScenarios.length);
   /** @type {Record<string, unknown>[]} */
   let allScenarios;
   try {
@@ -1635,6 +2875,52 @@ export async function buildMercadoLivreListingPricingScenariosPayload(supabase, 
     used_live_enrichment: diag.used_live_enrichment,
   });
 
+  for (const promoRow of promotionScenarios) {
+    if (!promoRow || typeof promoRow !== "object") continue;
+    const r = /** @type {Record<string, unknown>} */ (promoRow);
+    const name = r.promotion_name != null ? String(r.promotion_name) : "";
+    if (!name.toLowerCase().includes("aumente") || !name.toLowerCase().includes("vendas")) continue;
+    logS7PiPromoFlowAudit("backend_pricing_scenarios_response", {
+      ...buildPiPromoFlowAuditPayload({
+        promotion_name: name,
+        promotion_id: r.promotion_id != null ? String(r.promotion_id) : null,
+        type: r.promotion_type != null ? String(r.promotion_type) : null,
+        ref_id: r.offer_id != null ? String(r.offer_id) : null,
+        row: r,
+        marketplace:
+          r.marketplace != null && typeof r.marketplace === "object"
+            ? /** @type {Record<string, unknown>} */ (r.marketplace)
+            : {},
+        source_field_used: "promotion_scenarios_response",
+      }),
+    });
+  }
+
+  logS7PromotionsPiAudit("final_payload", {
+    listing_external_id: itemMlId || listingExternalId || null,
+    promotions_count: promotionScenarios.length,
+    promotion_names: promotionScenarios
+      .map((s) => (s?.promotion_name != null ? String(s.promotion_name) : null))
+      .filter(Boolean),
+    statuses: promotionScenarios.map((s) => {
+      if (!s || typeof s !== "object") return null;
+      const r = /** @type {Record<string, unknown>} */ (s);
+      return r.ml_promotion_raw_status ?? r.status ?? null;
+    }),
+    pipeline: {
+      persisted_promos: diag.persisted_promos,
+      live_promos: diag.live_promos,
+      live_fetch_ok: liveFetchOk,
+      live_http_status: liveFetchHttpStatus,
+      token_source: mlTokenSource,
+      marketplace_account_id: marketplaceAccountId,
+      seller_id: sellerId,
+      discarded_invalid: diag.discarded_invalid,
+      discarded_expired: diag.discarded_expired,
+      filter_reasons: normalizationRemovalReasons,
+    },
+  });
+
   return {
     ok: true,
     data: {
@@ -1645,6 +2931,25 @@ export async function buildMercadoLivreListingPricingScenariosPayload(supabase, 
       scenarios: allScenarios,
       promotion_scenarios: promotionScenarios,
       baseline,
+      promotions_pipeline: {
+        live_fetch_ok: liveFetchOk,
+        live_http_status: liveFetchHttpStatus,
+        live_fetch_error: liveFetchError,
+        persisted_count: diag.persisted_promos,
+        live_normalized_count: diag.live_promos,
+        final_count: promotionScenarios.length,
+        token_source: mlTokenSource,
+        marketplace_account_id: marketplaceAccountId,
+        seller_id: sellerId,
+        warnings:
+          wantPricingOpportunities && !liveFetchOk && promotionScenarios.length === 0
+            ? [
+                liveFetchError != null
+                  ? `live_seller_promotions_fetch_failed:${liveFetchError}`
+                  : "live_seller_promotions_unavailable",
+              ]
+            : [],
+      },
     },
   };
 }

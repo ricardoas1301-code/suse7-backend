@@ -745,6 +745,10 @@ export function extractOfficialMercadoLibreListingPricesFee(listingPricesRow) {
   const r = /** @type {Record<string, unknown>} */ (listingPricesRow);
   const fromDetails = normalizeSaleFeeDetailsShape(r.sale_fee_details);
   let percent = fromDetails.percent != null && fromDetails.percent > 0 ? fromDetails.percent : null;
+  if (percent == null) {
+    const pctRoot = toFiniteNumber(r.sale_fee_percent ?? r.percentage_fee ?? r.meli_percentage_fee);
+    if (pctRoot != null && pctRoot > 0) percent = pctRoot;
+  }
   /** Tarifa efetiva: mesma regra que coalesceListingPricesPersistedFeeAmount (subsídio ML na tarifa). */
   const coalescedEffective = coalesceListingPricesPersistedFeeAmount(r);
   let amount =

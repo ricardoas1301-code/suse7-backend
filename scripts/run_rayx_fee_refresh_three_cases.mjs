@@ -1,5 +1,5 @@
 /**
- * Localiza vendas ML com bruto 39.81 / 27.00 / 73.00 e executa refresh do contrato marketplace_fee.
+ * Refresh do contrato marketplace_fee — cases históricos reais (DEV).
  * Uso: node scripts/run_rayx_fee_refresh_three_cases.mjs
  */
 import dotenv from "dotenv";
@@ -10,17 +10,26 @@ dotenv.config({ path: ".env.vercel" });
 dotenv.config({ path: ".env.local" });
 dotenv.config();
 
-const TARGET_GROSS = ["39.81", "27.00", "73.00"];
 const EXPECTED = {
+  "295.45": { percent: "13.5", fee: "39.89", label: "Premium" },
+  "400.50": { percent: "13.5", fee: "54.07", label: "Premium" },
   "39.81": { percent: "16.5", fee: "6.57", label: "Premium" },
   "27.00": { percent: "11.5", fee: "3.10", label: "Clássico" },
   "73.00": { percent: "16.5", fee: "12.04", label: "Premium" },
 };
 
+const CASE_ITEM_IDS = {
+  "295.45": "8572c809-6c60-4f3c-8ea4-d9d7b8d9ad38",
+  "400.50": "8b1b8660-5452-4b29-a23d-a5b2c45f00ce",
+  "39.81": "a23a61b9-40ae-4d35-9cb5-9c825cfc03ae",
+  "27.00": "62797649-32b7-4e11-a18c-07479e08edbd",
+  "73.00": "29177389-ff28-4bb7-9819-eb8d5785622e",
+};
+
 const url = process.env.SUPABASE_URL?.trim();
 const key = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
 if (!url || !key) {
-  console.error("SUPABASE_URL e SUPABASE_SERVICE_ROLE_KEY são obrigatórios (.env.vercel ou .env.local)");
+  console.error("SUPABASE_URL e SUPABASE_SERVICE_ROLE_KEY são obrigatórios");
   process.exit(1);
 }
 
@@ -33,146 +42,68 @@ function pickFin(raw) {
   return fin && typeof fin === "object" ? fin : null;
 }
 
-/** IDs confirmados no DEV (seller com vendas reais dos 3 cases). */
-const CASE_ITEM_IDS = {
-  "39.81": "a51834b0-f2e5-4e7f-acb3-113376c180bf",
-  "27.00": "d5920484-0613-45e5-939b-2e798b87ccda",
-  "73.00": "5b486806-7d34-4ece-825e-331436e16779",
-};
+/** @param {unknown} v */
+function normMoney(v) {
+  if (v == null || v === "") return null;
+  const n = Number(String(v).replace(",", "."));
+  if (!Number.isFinite(n)) return null;
+  return n.toFixed(2);
+}
 
 async function main() {
-  let userId = process.env.S7_FEE_REFRESH_USER_ID?.trim() || "";
-  if (!userId) {
-    const { data: users, error: userErr } = await supabase
-      .from("profiles")
-      .select("id,email")
-      .ilike("email", "ricardo@suse7.com.br")
-      .limit(1);
-    if (userErr) throw userErr;
-    userId = users?.[0]?.id != null ? String(users[0].id) : "";
-  }
-  console.log("user_id (initial)", userId || "(scan all tenants)");
-
-  const since = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString();
-  let query = supabase
-    .from("sales_order_items")
-    .select("id,user_id,gross_amount,marketplace,fee_amount,raw_json,created_at,unit_price,quantity")
-    .eq("marketplace", "mercado_livre")
-    .gte("created_at", since)
-    .order("created_at", { ascending: false })
-    .limit(5000);
-  if (userId) query = query.eq("user_id", userId);
-  const { data: rows, error } = await query;
-  if (error) throw error;
-
-  /** @param {unknown} v */
-  function normMoney(v) {
-    if (v == null || v === "") return null;
-    const n = Number(String(v).replace(",", "."));
-    if (!Number.isFinite(n)) return null;
-    return n.toFixed(2);
-  }
-
-  /** @type {Map<string, Record<string, unknown>>} */
-  const byGross = new Map();
-  for (const row of rows || []) {
-    const fin = pickFin(row.raw_json);
-    const fromFin = fin?.gross_sale_amount_brl != null ? normMoney(fin.gross_sale_amount_brl) : null;
-    const fromCol = row.gross_amount != null ? normMoney(row.gross_amount) : null;
-    const fromUnit =
-      row.unit_price != null && row.quantity != null
-        ? normMoney(Number(row.unit_price) * Number(row.quantity))
-        : row.unit_price != null
-          ? normMoney(row.unit_price)
-          : null;
-    const g = fromFin ?? fromCol ?? fromUnit;
-    if (!g || !TARGET_GROSS.includes(g) || byGross.has(g)) continue;
-    byGross.set(g, row);
-  }
-
-  console.log(
-    "matched gross keys:",
-    [...byGross.keys()],
-    "from",
-    (rows || []).length,
-    "recent items",
-  );
-
   let failures = 0;
-  /** @type {Map<string, Record<string, unknown>>} */
-  const forcedRows = new Map();
-  for (const id of Object.values(CASE_ITEM_IDS)) {
-    const { data: one, error: oneErr } = await supabase
+
+  for (const [gross, itemId] of Object.entries(CASE_ITEM_IDS)) {
+    const { data: row, error } = await supabase
       .from("sales_order_items")
-      .select("id,user_id,gross_amount,marketplace,fee_amount,raw_json,created_at")
-      .eq("id", id)
+      .select("id,user_id,gross_amount,fee_amount,raw_json,external_order_id,external_listing_id")
+      .eq("id", itemId)
       .maybeSingle();
-    if (oneErr) throw oneErr;
-    if (one) {
-      const g = normMoney(one.gross_amount) ?? grossFromRow(one);
-      if (g) forcedRows.set(g, one);
-    }
-  }
-
-  /** @param {Record<string, unknown>} row */
-  function grossFromRow(row) {
-    const fin = pickFin(row.raw_json);
-    return fin?.gross_sale_amount_brl != null ? normMoney(fin.gross_sale_amount_brl) : null;
-  }
-
-  for (const gross of TARGET_GROSS) {
-    const forcedId = CASE_ITEM_IDS[gross];
-    const row =
-      forcedRows.get(gross) ??
-      (forcedId ? (rows || []).find((r) => String(r.id) === forcedId) : null) ??
-      byGross.get(gross);
+    if (error) throw error;
     if (!row) {
       failures += 1;
-      console.error("NOT_FOUND gross", gross);
+      console.error("NOT_FOUND", gross, itemId);
       continue;
     }
-    const itemId = String(row.id);
-    const ownerId = row.user_id != null ? String(row.user_id) : userId;
-    if (!ownerId) {
-      failures += 1;
-      console.error("NO_USER_ID", gross, itemId);
-      continue;
-    }
+
+    const ownerId = String(row.user_id);
     const before = pickFin(row.raw_json);
-    console.log("\n--- refresh", gross, "item_id", itemId, "---");
-    console.log("before fee", before?.marketplace_fee_amount_brl, "pct", before?.marketplace_fee_percent);
+    console.log("\n---", gross, itemId, "---");
+    console.log("before", before?.marketplace_fee_amount_brl, before?.marketplace_fee_percent);
 
     const result = await refreshSaleFinancialContractByItemId(supabase, ownerId, itemId);
     if (!result.ok) {
       failures += 1;
-      console.error("refresh_failed", gross, result);
+      console.error("refresh_failed", result);
       continue;
     }
 
     const after = result.marketplace_fee_after;
     const exp = EXPECTED[gross];
     const okFee = after?.amount_brl === exp.fee;
-    const okPct = after?.percentage === exp.percent || after?.percentage === `${exp.percent}.00`;
+    const okPct = after?.percentage === exp.percent;
     const okLabel = after?.listing_type_label === exp.label;
+    const okNotFallback = after?.percentage_source !== "fallback_listing_type";
 
     console.log("after", {
       amount_brl: after?.amount_brl,
       percentage: after?.percentage,
-      listing_type_label: after?.listing_type_label,
-      percent_source: after?.percent_source,
-      mode: result.mode,
+      percentage_source: after?.percentage_source,
+      raw_amount_source_path: after?.raw_amount_source_path,
+      raw_percentage_source_path: after?.raw_percentage_source_path,
+      is_estimated: after?.is_estimated,
     });
 
-    if (!okFee || !okPct || !okLabel) {
+    if (!okFee || !okPct || !okLabel || !okNotFallback) {
       failures += 1;
-      console.error("VALIDATION_FAIL", gross, { okFee, okPct, okLabel, exp });
+      console.error("VALIDATION_FAIL", { okFee, okPct, okLabel, okNotFallback, exp });
     } else {
       console.log("VALIDATION_OK", gross);
     }
   }
 
   if (failures > 0) process.exit(1);
-  console.log("\nAll three cases refreshed and validated.");
+  console.log("\nAll cases refreshed.");
 }
 
 main().catch((e) => {

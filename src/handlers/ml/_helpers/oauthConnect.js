@@ -246,6 +246,333 @@ export function generateSecureState() {
   return bytes.toString("base64url");
 }
 
+/**
+ * Project ref Supabase (ex.: ujznkyvgqhxagemdgmor) — só para logs/diagnóstico.
+ * @param {string | undefined | null} supabaseUrl
+ */
+export function maskSupabaseProjectRef(supabaseUrl) {
+  const s = String(supabaseUrl || "").trim();
+  if (!s) return "(empty)";
+  try {
+    const m = s.match(/https:\/\/([a-z0-9]+)\.supabase\.co/i);
+    return m?.[1] ? m[1] : "(unknown)";
+  } catch {
+    return "(parse-error)";
+  }
+}
+
+/**
+ * @param {string | undefined | null} rawUrl
+ */
+export function extractUrlHostname(rawUrl) {
+  try {
+    return new URL(String(rawUrl || "").trim()).hostname.toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * Host efetivo da requisição (sem porta).
+ * @param {import("http").IncomingMessage | { headers?: Record<string, string | string[] | undefined> }} req
+ */
+export function resolveRequestHostname(req) {
+  const host = req?.headers?.host != null ? String(req.headers.host) : "";
+  if (!host) return "";
+  return host.split(":")[0]?.toLowerCase() ?? "";
+}
+
+/**
+ * Base pública do backend derivada de ML_REDIRECT_URI (.../api/ml/callback).
+ * @param {string | undefined | null} redirectUri
+ */
+export function deriveMlOAuthBackendBaseFromRedirectUri(redirectUri) {
+  const s = String(redirectUri || "").trim();
+  if (!s) return null;
+  try {
+    const u = new URL(s);
+    const pathNorm = u.pathname.replace(/\/+$/, "") || "/";
+    if (pathNorm !== "/api/ml/callback") return null;
+    u.pathname = "";
+    u.search = "";
+    u.hash = "";
+    return u.toString().replace(/\/+$/, "");
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * DEV típico: connect em localhost:3001, callback HTTPS na Vercel — state deve ser
+ * persistido no mesmo Supabase que o callback. Redireciona o /connect para o host do callback.
+ *
+ * @param {import("http").IncomingMessage | { headers?: Record<string, string | string[] | undefined> }} req
+ * @param {string | undefined | null} redirectUri
+ * @returns {{ shouldProxy: boolean; reason: string | null; targetConnectUrl: string | null; connectHost: string; callbackHost: string }}
+ */
+export function resolveMlOAuthConnectHostProxy(req, redirectUri) {
+  const connectHost = resolveRequestHostname(req);
+  const callbackHost = extractUrlHostname(redirectUri);
+  const empty = {
+    shouldProxy: false,
+    reason: null,
+    targetConnectUrl: null,
+    connectHost,
+    callbackHost,
+  };
+  if (!connectHost || !callbackHost) return empty;
+  if (connectHost === callbackHost) return empty;
+
+  const connectIsLocal =
+    connectHost === "localhost" || connectHost === "127.0.0.1" || connectHost === "::1";
+  const callbackIsLocal = callbackHost === "localhost" || callbackHost === "127.0.0.1";
+  if (connectIsLocal && callbackIsLocal) return empty;
+
+  const backendBase = deriveMlOAuthBackendBaseFromRedirectUri(redirectUri);
+  if (!backendBase) {
+    return {
+      ...empty,
+      reason: "invalid_redirect_uri_for_proxy",
+    };
+  }
+
+  return {
+    shouldProxy: true,
+    reason: "connect_callback_host_mismatch",
+    targetConnectUrl: backendBase,
+    connectHost,
+    callbackHost,
+  };
+}
+
+/**
+ * Monta URL absoluta de /api/ml/connect no host do callback (preserva query OAuth).
+ * @param {string} backendBase — ex.: https://suse7-backend-dev.vercel.app
+ * @param {import("http").IncomingMessage & { url?: string; query?: Record<string, unknown> }} req
+ */
+export function buildMlOAuthConnectProxyUrl(backendBase, req) {
+  const base = String(backendBase || "").trim().replace(/\/+$/, "");
+  const qs = new URLSearchParams();
+  const q = req.query && typeof req.query === "object" ? req.query : {};
+  for (const [key, value] of Object.entries(q)) {
+    if (value == null) continue;
+    if (Array.isArray(value)) {
+      for (const v of value) qs.append(key, String(v));
+    } else {
+      qs.set(key, String(value));
+    }
+  }
+  if (!qs.has("user_id") && req.url) {
+    try {
+      const u = new URL(String(req.url), "http://local");
+      for (const [key, value] of u.searchParams.entries()) {
+        if (!qs.has(key)) qs.set(key, value);
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+  const suffix = qs.toString();
+  return `${base}/api/ml/connect${suffix ? `?${suffix}` : ""}`;
+}
+
+/**
+ * Diagnóstico seguro quando resolveAndConsumeOAuthState retorna null.
+ * @returns {Promise<{ found_expired: boolean; found_active: boolean; supabase_project_ref: string }>}
+ */
+export async function diagnoseOAuthStateLookup(supabaseUrl, serviceRoleKey, state, marketplace = "ml") {
+  const ref = maskSupabaseProjectRef(supabaseUrl);
+  const supabase = createClient(supabaseUrl, serviceRoleKey);
+  const now = new Date().toISOString();
+  let foundExpired = false;
+  let foundActive = false;
+  try {
+    const { data: expiredRow } = await supabase
+      .from("oauth_states")
+      .select("state, expires_at")
+      .eq("state", state)
+      .eq("marketplace", marketplace)
+      .lte("expires_at", now)
+      .maybeSingle();
+    foundExpired = Boolean(expiredRow?.state);
+  } catch {
+    /* ignore */
+  }
+  try {
+    const { data: activeRow } = await supabase
+      .from("oauth_states")
+      .select("state, expires_at")
+      .eq("state", state)
+      .eq("marketplace", marketplace)
+      .gt("expires_at", now)
+      .maybeSingle();
+    foundActive = Boolean(activeRow?.state);
+  } catch {
+    /* ignore */
+  }
+  return {
+    found_expired: foundExpired,
+    found_active: foundActive,
+    supabase_project_ref: ref,
+  };
+}
+
+/**
+ * Detecta backend DEV servindo env de PROD (causa comum: seller_company “não existe” + Invalid/expired state).
+ * @param {import("http").IncomingMessage | { headers?: Record<string, string | string[] | undefined> }} [req]
+ */
+export function evaluateMlOAuthBackendEnvCoherence(req) {
+  /** @type {string[]} */
+  const warnings = [];
+  /** @type {string[]} */
+  const errors = [];
+  const backendHost =
+    resolveRequestHostname(req) ||
+    extractUrlHostname(process.env.VERCEL_URL) ||
+    extractUrlHostname(process.env.VERCEL_BRANCH_URL);
+  const redirectHost = extractUrlHostname(process.env.ML_REDIRECT_URI);
+  const frontendHost = extractUrlHostname(process.env.FRONTEND_URL);
+  const supabaseRef = maskSupabaseProjectRef(process.env.SUPABASE_URL);
+  const expectedRef = String(process.env.S7_EXPECTED_SUPABASE_PROJECT_REF || "")
+    .trim()
+    .toLowerCase();
+
+  const s7AppEnv = String(process.env.S7_APP_ENV || "").trim().toLowerCase();
+  const vercelEnv = String(process.env.VERCEL_ENV || "").trim().toLowerCase();
+  const isDevBackendHost =
+    /-dev\.vercel\.app$/i.test(backendHost) ||
+    backendHost === "localhost" ||
+    backendHost === "127.0.0.1" ||
+    s7AppEnv === "development" ||
+    vercelEnv === "preview" ||
+    vercelEnv === "development";
+
+  if (
+    isDevBackendHost &&
+    redirectHost &&
+    /suse7-backend\.vercel\.app$/i.test(redirectHost) &&
+    !/-dev\.vercel\.app$/i.test(redirectHost)
+  ) {
+    errors.push(
+      "Backend DEV com ML_REDIRECT_URI apontando para suse7-backend.vercel.app (PROD). Defina https://suse7-backend-dev.vercel.app/api/ml/callback no projeto Vercel DEV."
+    );
+  }
+
+  if (isDevBackendHost && /(^|\.)suse7\.com\.br$/i.test(frontendHost) && !/dev\.|staging\./i.test(frontendHost)) {
+    warnings.push(
+      "FRONTEND_URL aponta para domínio público de produção enquanto o backend parece DEV — redirects pós-OAuth podem ir para o app errado."
+    );
+  }
+
+  if (expectedRef && supabaseRef !== "(empty)" && supabaseRef !== "(unknown)" && supabaseRef !== expectedRef) {
+    errors.push(
+      `SUPABASE_URL (ref ${supabaseRef}) diverge de S7_EXPECTED_SUPABASE_PROJECT_REF (${expectedRef}). seller_companies/OAuth state serão lidos do banco errado.`
+    );
+  }
+
+  return {
+    warnings,
+    errors,
+    supabaseProjectRef: supabaseRef,
+    expectedSupabaseProjectRef: expectedRef || null,
+    isDevBackendHost,
+    backendHost: backendHost || null,
+    redirectHost: redirectHost || null,
+    frontendHost: frontendHost || null,
+    vercelEnv: vercelEnv || null,
+    s7AppEnv: s7AppEnv || null,
+  };
+}
+
+/**
+ * Valida seller_company_id ∈ seller_companies para user_id (service role).
+ * Não filtra active=true — empresa inativa ainda pertence ao usuário.
+ *
+ * @param {import("@supabase/supabase-js").SupabaseClient} supabase
+ */
+export async function assertSellerCompanyOwnedForMlConnect(supabase, userId, sellerCompanyId, supabaseUrl) {
+  const uid = String(userId || "").trim();
+  const sid = String(sellerCompanyId || "").trim();
+  const ref = maskSupabaseProjectRef(supabaseUrl);
+  const expectedRef = String(process.env.S7_EXPECTED_SUPABASE_PROJECT_REF || "")
+    .trim()
+    .toLowerCase();
+  const selectVariants = ["id, user_id, active", "id, user_id"];
+
+  /** @type {Record<string, unknown> | null} */
+  let rowById = null;
+  /** @type {{ code?: string; message?: string } | null} */
+  let rowByIdErr = null;
+
+  for (const sel of selectVariants) {
+    const { data, error } = await supabase.from("seller_companies").select(sel).eq("id", sid).maybeSingle();
+    if (!error) {
+      rowById = data;
+      rowByIdErr = null;
+      break;
+    }
+    if (isPostgrestUnknownColumnError(error)) continue;
+    rowByIdErr = error;
+    break;
+  }
+
+  for (const sel of selectVariants) {
+    const { data, error } = await supabase
+      .from("seller_companies")
+      .select(sel)
+      .eq("id", sid)
+      .eq("user_id", uid)
+      .maybeSingle();
+    if (!error && data?.id) {
+      return { ok: true, supabase_project_ref: ref };
+    }
+    if (error && !isPostgrestUnknownColumnError(error)) {
+      rowByIdErr = rowByIdErr ?? error;
+      break;
+    }
+  }
+
+  const rowUserId =
+    rowById?.user_id != null ? String(rowById.user_id).trim().toLowerCase() : null;
+  const uidNorm = uid.toLowerCase();
+
+  /** @type {"not_found_in_database" | "user_id_mismatch" | "query_error"} */
+  let reason = "not_found_in_database";
+  if (rowById?.id && rowUserId && rowUserId !== uidNorm) reason = "user_id_mismatch";
+  else if (rowByIdErr && !rowById?.id) reason = "query_error";
+
+  let hint = "supabase_env_mismatch_probable";
+  if (reason === "user_id_mismatch") hint = "seller_company_belongs_to_other_user";
+  if (reason === "query_error") hint = "seller_companies_query_failed";
+
+  const envMismatchProbable =
+    reason === "not_found_in_database" &&
+    Boolean(expectedRef && ref !== "(empty)" && ref !== expectedRef);
+
+  return {
+    ok: false,
+    code: "seller_company_not_owned_by_user",
+    hint,
+    reason,
+    supabase_project_ref: ref,
+    expected_supabase_project_ref: expectedRef || null,
+    supabase_env_mismatch_probable: envMismatchProbable,
+    diagnostics: {
+      table: "seller_companies",
+      filters_ownership_query: ["id", "user_id"],
+      filters_active_applied: false,
+      row_exists_by_id_only: Boolean(rowById?.id),
+      row_user_id: rowById?.user_id ?? null,
+      requested_user_id: uid,
+      user_id_matches: Boolean(rowUserId && rowUserId === uidNorm),
+      row_active: rowById?.active ?? null,
+      postgrest_error_code: rowByIdErr?.code ?? null,
+      postgrest_error_message:
+        rowByIdErr?.message != null ? String(rowByIdErr.message).slice(0, 240) : null,
+    },
+  };
+}
+
 // ----------------------------------------------
 // buildMlAuthUrl — Monta URL OAuth do Mercado Livre
 // ----------------------------------------------
@@ -268,6 +595,7 @@ export function buildMlAuthUrl(clientId, redirectUri, state) {
 // ----------------------------------------------
 /**
  * @param {string | null | undefined} sellerCompanyId - UUID da empresa (opcional); validar no handler /connect.
+ * @param {{ flow_type?: string | null }} [options] - flow_type persistido (first_account | additional_account).
  */
 export async function persistOAuthState(
   supabaseUrl,
@@ -275,7 +603,8 @@ export async function persistOAuthState(
   state,
   userId,
   marketplace = "ml",
-  sellerCompanyId = null
+  sellerCompanyId = null,
+  options = {}
 ) {
   const supabase = createClient(supabaseUrl, serviceRoleKey);
   const expiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString();
@@ -294,24 +623,44 @@ export async function persistOAuthState(
   if (co) {
     row.seller_company_id = co;
   }
+  const ft =
+    options && options.flow_type != null && String(options.flow_type).trim() !== ""
+      ? String(options.flow_type).trim()
+      : null;
+  if (ft) {
+    row.flow_type = ft;
+  }
 
   let { data, error } = await supabase.from("oauth_states").insert(row);
 
+  if (error && ft && isPostgrestUnknownColumnError(error)) {
+    const { flow_type: _f, ...rowNoFlow } = row;
+    const r2 = await supabase.from("oauth_states").insert(rowNoFlow);
+    data = r2.data;
+    error = r2.error;
+    if (!error) {
+      console.warn("[oauth] persistOAuthState_flow_type_column_missing", {
+        message: "Inseriu oauth_state sem flow_type; rode migration com flow_type para multi-conta.",
+      });
+    }
+  }
+
   if (error && co && isPostgrestUnknownColumnError(error)) {
-    console.warn("[oauth] persistOAuthState_retry_without_seller_company_id", {
+    console.error("[oauth] persistOAuthState_missing_seller_company_id_column", {
       message: error.message,
       code: error.code,
+      user_id_preview: String(userId || "").slice(0, 8),
+      hint: "Adicione a coluna oauth_states.seller_company_id (ver scripts/oauth_states_add_seller_company_id.sql). Não persistir state sem o CNPJ/empresa em fluxo multi-conta.",
     });
-    const { data: d2, error: e2 } = await supabase
-      .from("oauth_states")
-      .insert({
-        state,
-        user_id: userId,
-        marketplace,
-        expires_at: expiresAt,
-      });
-    data = d2;
-    error = e2;
+    return {
+      data: null,
+      error: {
+        message:
+          "oauth_states: coluna seller_company_id ausente. Rode a migration no Supabase antes de conectar nova conta com CNPJ.",
+        code: "oauth_states_schema_seller_company_id",
+        original: error,
+      },
+    };
   }
 
   return { data, error };
@@ -346,7 +695,7 @@ export async function resolveOAuthState(supabaseUrl, serviceRoleKey, state, mark
 // resolveAndConsumeOAuthState — Lê user_id (+ seller_company_id) e remove o state (one-time)
 // ----------------------------------------------
 /**
- * @returns {Promise<{ user_id: string; seller_company_id: string | null } | null>}
+ * @returns {Promise<{ user_id: string; seller_company_id: string | null; flow_type: string | null } | null>}
  */
 export async function resolveAndConsumeOAuthState(
   supabaseUrl,
@@ -362,7 +711,7 @@ export async function resolveAndConsumeOAuthState(
     .eq("state", state)
     .eq("marketplace", marketplace)
     .gt("expires_at", now)
-    .select("user_id, seller_company_id")
+    .select("user_id, seller_company_id, flow_type")
     .maybeSingle();
 
   if (error && isPostgrestUnknownColumnError(error)) {
@@ -376,7 +725,7 @@ export async function resolveAndConsumeOAuthState(
       .eq("state", state)
       .eq("marketplace", marketplace)
       .gt("expires_at", now)
-      .select("user_id")
+      .select("user_id, seller_company_id")
       .maybeSingle();
     data = r2.data;
     error = r2.error;
@@ -392,5 +741,7 @@ export async function resolveAndConsumeOAuthState(
     data?.seller_company_id != null && String(data.seller_company_id).trim() !== ""
       ? String(data.seller_company_id).trim()
       : null;
-  return { user_id: uid, seller_company_id: sid };
+  const flowType =
+    data?.flow_type != null && String(data.flow_type).trim() !== "" ? String(data.flow_type).trim() : null;
+  return { user_id: uid, seller_company_id: sid, flow_type: flowType };
 }

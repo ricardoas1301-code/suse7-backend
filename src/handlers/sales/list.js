@@ -1,7 +1,10 @@
 import { requireAuthUser } from "../ml/_helpers/requireAuthUser.js";
 import { gatePremiumHandler } from "../../billing/middleware/requirePlanAccess.js";
 import { normalizeSkuForDbLookup } from "../../domain/productCatalogCompleteness.js";
+import { resolveExecutiveProductScope } from "../../domain/sales/saleExecutiveProductScope.js";
 import { resolveExecutiveRankingImageUrl } from "../../domain/sales/executiveRankingImageUrl.js";
+import { isExecutiveSummaryEligibleOrderRow } from "../../domain/sales/saleExecutiveOrderValidity.js";
+import { resolveExecutiveSummaryPeriod } from "../../domain/sales/saleExecutivePeriod.js";
 import { buildVendasListRow, buildVendasSalesItemQOrFilter, chunkIds, enrichVendasListRowsOperationalStatus, fetchVendasSearchOrderIds, normalizeSearchQuery, splitSearchTokens, thumbFromListingRecord, toNum } from "./_vendasSalesRows.js";
 
 function toPositiveInt(value, fallback) {
@@ -541,6 +544,10 @@ export async function hydrateExecutiveSummaryRankingRows(supabase, userId, itemR
       if (!row.product_image_url) row.product_image_url = resolved;
     }
 
+    if (product) {
+      row._hydrated_product = product;
+    }
+
     return row;
   });
 }
@@ -793,6 +800,17 @@ export default async function handleSalesList(req, res) {
       : null;
   const qRaw = req.query?.q != null && String(req.query.q).trim() !== "" ? String(req.query.q).trim() : null;
   const qNormalized = qRaw ? normalizeSearchQuery(qRaw) : null;
+  const productId =
+    req.query?.product_id != null && String(req.query.product_id).trim() !== ""
+      ? String(req.query.product_id).trim()
+      : null;
+  const periodResult = resolveExecutiveSummaryPeriod(req.query ?? {});
+  if (!periodResult.ok) {
+    return res.status(400).json({ ok: false, error: periodResult.error });
+  }
+  const executivePeriod = periodResult.period;
+  const hasExplicitPeriodFilter =
+    executivePeriod?.start_ms != null || executivePeriod?.end_ms_exclusive != null;
 
   const auth = await requireAuthUser(req);
   if (auth.error) {
@@ -804,6 +822,16 @@ export default async function handleSalesList(req, res) {
 
   const { user, supabase } = auth;
   if (await gatePremiumHandler(res, supabase, user.id, { module: "vendas" })) return;
+
+  /** @type {import("../../domain/sales/saleExecutiveProductScope.js").ExecutiveProductScope | null} */
+  let productScope = null;
+  if (productId) {
+    productScope = await resolveExecutiveProductScope(supabase, user.id, productId);
+    if (productScope.listing_count === 0) {
+      return res.status(200).json(emptySalesPayload(page, pageSize));
+    }
+  }
+
   const from = (page - 1) * pageSize;
   const to = from + pageSize - 1;
 
@@ -825,12 +853,17 @@ export default async function handleSalesList(req, res) {
      *   marketplaceAccountId: string | null;
      *   qNormalized: string | null;
      *   orderIdsForSearch: string[];
+     *   productListingIds: string[] | null;
+     *   executivePeriod: { start_ms: number | null; end_ms_exclusive: number | null } | null;
      * }} f
      */
     function applySalesItemListFilters(qb, f) {
       let q = qb.eq("user_id", f.userId);
       if (f.marketplace) q = q.eq("marketplace", f.marketplace);
       if (f.marketplaceAccountId) q = q.eq("marketplace_account_id", f.marketplaceAccountId);
+      if (Array.isArray(f.productListingIds) && f.productListingIds.length > 0) {
+        q = q.in("external_listing_id", f.productListingIds);
+      }
       if (f.qNormalized) {
         const tokens = splitSearchTokens(f.qNormalized);
         if (tokens.length > 0) {
@@ -841,10 +874,92 @@ export default async function handleSalesList(req, res) {
           if (orExpr) q = q.or(orExpr);
         }
       }
+      if (f.executivePeriod?.start_ms != null) {
+        q = q.gte(
+          "sales_orders.date_created_marketplace",
+          new Date(f.executivePeriod.start_ms).toISOString(),
+        );
+      }
+      if (f.executivePeriod?.end_ms_exclusive != null) {
+        q = q.lt(
+          "sales_orders.date_created_marketplace",
+          new Date(f.executivePeriod.end_ms_exclusive).toISOString(),
+        );
+      }
       return q;
     }
 
-    const filterCtx = { userId: user.id, marketplace, marketplaceAccountId, qNormalized, orderIdsForSearch };
+    /**
+     * Contagem oficial de vendas = pedidos únicos no escopo filtrado.
+     * Mantém paginação da lista por linha/item e expõe total de pedidos
+     * para os módulos que seguem S7-HIST-001.
+     *
+     * @param {{
+     *   userId: string;
+     *   marketplace: string | null;
+     *   marketplaceAccountId: string | null;
+     *   qNormalized: string | null;
+     *   orderIdsForSearch: string[];
+     *   productListingIds: string[] | null;
+     *   executivePeriod: { start_ms: number | null; end_ms_exclusive: number | null } | null;
+     * }} f
+     */
+    async function resolveDistinctOrdersTotal(f) {
+      const SCAN_PAGE_SIZE = 2000;
+      const SCAN_MAX_PAGES = 200;
+      /** @type {Set<string>} */
+      const orderIds = new Set();
+      let truncatedScan = false;
+
+      for (let pageIndex = 0; pageIndex < SCAN_MAX_PAGES; pageIndex += 1) {
+        const rangeFrom = pageIndex * SCAN_PAGE_SIZE;
+        const rangeTo = rangeFrom + SCAN_PAGE_SIZE - 1;
+        const { data, error } = await applySalesItemListFilters(
+          supabase
+            .from("sales_order_items")
+            .select(
+              "id,sales_order_id,sales_orders!inner(id,date_created_marketplace,user_id,order_status,order_substatus,raw_json)",
+            ),
+          f,
+        )
+          .order("sales_order_id", { ascending: true })
+          .order("id", { ascending: true })
+          .range(rangeFrom, rangeTo);
+
+        if (error) throw error;
+
+        const rows = Array.isArray(data) ? data : [];
+        for (const row of rows) {
+          const order =
+            row?.sales_orders != null && typeof row.sales_orders === "object"
+              ? /** @type {Record<string, unknown>} */ (row.sales_orders)
+              : null;
+          if (!isExecutiveSummaryEligibleOrderRow(order)) {
+            continue;
+          }
+          if (row?.sales_order_id != null && String(row.sales_order_id).trim() !== "") {
+            orderIds.add(String(row.sales_order_id));
+          }
+        }
+
+        if (rows.length < SCAN_PAGE_SIZE) {
+          return { total: orderIds.size, truncated_scan: false };
+        }
+      }
+
+      truncatedScan = true;
+      return { total: orderIds.size, truncated_scan: truncatedScan };
+    }
+
+    const filterCtx = {
+      userId: user.id,
+      marketplace,
+      marketplaceAccountId,
+      qNormalized,
+      orderIdsForSearch,
+      productListingIds: productScope?.external_listing_ids ?? null,
+      executivePeriod: hasExplicitPeriodFilter ? executivePeriod : null,
+    };
 
     /** @type {Record<string, unknown>[]} */
     let itemRows = [];
@@ -864,7 +979,9 @@ export default async function handleSalesList(req, res) {
     const skipRpcForListFilters =
       (marketplace != null && String(marketplace).trim() !== "") ||
       (marketplaceAccountId != null && String(marketplaceAccountId).trim() !== "") ||
-      (qNormalized != null && qNormalized !== "");
+      (qNormalized != null && qNormalized !== "") ||
+      (productId != null && String(productId).trim() !== "") ||
+      hasExplicitPeriodFilter;
     const rpcRes = skipRpcForListFilters
       ? { data: null, error: { message: "skip_rpc_marketplace_or_account_filter" } }
       : await supabase.rpc("s7_sales_order_items_page_v1", {
@@ -955,7 +1072,7 @@ export default async function handleSalesList(req, res) {
         msg1.includes("schema cache") ||
         msg1.includes("could not find the table");
 
-      if (itemErr && !missingRelation) {
+      if (itemErr && !missingRelation && !hasExplicitPeriodFilter) {
         listSource = "postgrest_plain";
         const r2 = await applySalesItemListFilters(
           supabase.from("sales_order_items").select("*", { count: "exact" }),
@@ -1032,7 +1149,13 @@ export default async function handleSalesList(req, res) {
       row_count: rows.length,
       distinct_marketplace_account_ids: distinctAcct.length,
       marketplace_account_ids: distinctAcct.slice(0, 40),
-      filters: { marketplace, marketplace_account_id: marketplaceAccountId },
+      filters: {
+        marketplace,
+        marketplace_account_id: marketplaceAccountId,
+        product_id: productId,
+        period_start: executivePeriod?.start_date ?? null,
+        period_end: executivePeriod?.end_date ?? null,
+      },
       list_source: listSource,
     });
 
@@ -1047,7 +1170,14 @@ export default async function handleSalesList(req, res) {
         page,
         limit: pageSize,
         offset: from,
-        filters: { marketplace, marketplace_account_id: marketplaceAccountId, q: qRaw },
+        filters: { marketplace, marketplace_account_id: marketplaceAccountId, q: qRaw, product_id: productId },
+        period: {
+          preset: executivePeriod?.preset ?? null,
+          start_date: executivePeriod?.start_date ?? null,
+          end_date: executivePeriod?.end_date ?? null,
+          start_datetime: executivePeriod?.start_datetime ?? null,
+          end_datetime: executivePeriod?.end_datetime ?? null,
+        },
         rpc_rows_count: rpcRowsCount,
         rpc_total_count: rpcTotalCount,
         fallback_used: fallbackUsed,
@@ -1096,7 +1226,26 @@ export default async function handleSalesList(req, res) {
       });
     }
 
+    let ordersTotal = 0;
+    let ordersTotalTruncatedScan = false;
+    try {
+      const distinctOrders = await resolveDistinctOrdersTotal(filterCtx);
+      ordersTotal = Number.isFinite(distinctOrders?.total) ? Number(distinctOrders.total) : 0;
+      ordersTotalTruncatedScan = Boolean(distinctOrders?.truncated_scan);
+    } catch (distinctError) {
+      console.warn("[S7][sales-list] distinct_orders_count_failed", {
+        message: distinctError?.message ?? String(distinctError),
+      });
+      ordersTotal = Number.isFinite(total) ? Number(total) : rows.length;
+      ordersTotalTruncatedScan = false;
+    }
+
     const pag = buildPaginationMeta(page, pageSize, total);
+    const pagination = {
+      ...pag,
+      orders_total: ordersTotal,
+      orders_total_truncated_scan: ordersTotalTruncatedScan,
+    };
     return res.status(200).json({
       ok: true,
       items: rows,
@@ -1104,10 +1253,11 @@ export default async function handleSalesList(req, res) {
       page: pag.page,
       page_size: pag.page_size,
       total: pag.total,
+      orders_total: ordersTotal,
       total_pages: pag.total_pages,
       has_next: pag.has_next,
       has_previous: pag.has_previous,
-      pagination: pag,
+      pagination,
       source_table: listSource === "rpc_v1" ? "sales_order_items+rpc_v1" : "sales_order_items",
       list_source: listSource,
     });

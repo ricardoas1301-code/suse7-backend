@@ -12,17 +12,50 @@ function envFlag(key, fallback = "") {
   return fallback;
 }
 
+/** @param {string} key @param {string} [configFallback] */
+function readZapiEnv(key, configFallback = "") {
+  if (Object.prototype.hasOwnProperty.call(process.env, key)) {
+    return String(process.env[key] ?? "").trim();
+  }
+  return envFlag(key, configFallback);
+}
+
 /**
  * @returns {{ baseUrl: string; clientToken: string } | null}
  */
 export function resolveZapiHttpConfig() {
-  const baseUrl = envFlag("S7_ZAPI_BASE_URL", config.s7ZapiBaseUrl).replace(/\/+$/, "");
-  const clientToken = envFlag(
+  const baseUrl = readZapiEnv("S7_ZAPI_BASE_URL", config.s7ZapiBaseUrl).replace(/\/+$/, "");
+  const clientToken = readZapiEnv(
     "S7_ZAPI_TOKEN",
     config.s7ZapiToken || config.zapiToken
   );
   if (!baseUrl) return null;
   return { baseUrl, clientToken };
+}
+
+/**
+ * @param {unknown} body
+ * @returns {string | null}
+ */
+export function getZapiBodyErrorCode(body) {
+  if (!body || typeof body !== "object") return null;
+  const row = /** @type {{ error?: unknown; connected?: boolean; smartphoneConnected?: boolean }} */ (
+    body
+  );
+  const err = row.error;
+  if (err == null || err === "") return null;
+  const msg = String(err).trim().toLowerCase();
+  if (
+    msg.includes("already connected") &&
+    (row.connected === true || row.smartphoneConnected === true)
+  ) {
+    return null;
+  }
+  const code = String(err).trim().toUpperCase().replace(/\s+/g, "_");
+  if (code.includes("CLIENT") && code.includes("TOKEN")) return "ZAPI_CLIENT_TOKEN_NOT_CONFIGURED";
+  if (code.includes("INSTANCE") && code.includes("NOT_FOUND")) return "ZAPI_INSTANCE_NOT_FOUND";
+  if (code === "NOT_FOUND" || code.includes("NOT_FOUND")) return "PROVIDER_NOT_FOUND";
+  return code.slice(0, 80);
 }
 
 /**
@@ -88,10 +121,22 @@ export async function zapiFetch(pathSuffix, options = {}) {
       }
     }
 
+    const bodyError = getZapiBodyErrorCode(data);
     if (!res.ok) {
+      const mapped = mapZapiHttpError(res.status, data);
       return {
         ok: false,
-        error_code: mapZapiHttpError(res.status, data),
+        error_code: bodyError ?? mapped,
+        http_status: res.status,
+        duration_ms,
+        data,
+      };
+    }
+
+    if (bodyError) {
+      return {
+        ok: false,
+        error_code: bodyError,
         http_status: res.status,
         duration_ms,
         data,

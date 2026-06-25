@@ -176,6 +176,12 @@ export async function handleSaleRayxManualNotification(req, res) {
             shareTextFallback:
               body.share_text_fallback != null ? String(body.share_text_fallback) : null,
             recipientName: body.recipient_name != null ? String(body.recipient_name) : null,
+            shareDocumentBase64:
+              body.share_document_base64 != null ? String(body.share_document_base64) : null,
+            shareDocumentFilename:
+              body.share_document_filename != null ? String(body.share_document_filename) : null,
+            shareDocumentMimeType:
+              body.share_document_mime_type != null ? String(body.share_document_mime_type) : null,
           })
         : await triggerManualSaleRayxNotification(auth.supabase, {
             sellerId,
@@ -193,6 +199,12 @@ export async function handleSaleRayxManualNotification(req, res) {
             shareTextFallback:
               body.share_text_fallback != null ? String(body.share_text_fallback) : null,
             recipientName: body.recipient_name != null ? String(body.recipient_name) : null,
+            shareDocumentBase64:
+              body.share_document_base64 != null ? String(body.share_document_base64) : null,
+            shareDocumentFilename:
+              body.share_document_filename != null ? String(body.share_document_filename) : null,
+            shareDocumentMimeType:
+              body.share_document_mime_type != null ? String(body.share_document_mime_type) : null,
           });
 
     if (dedupeMeta) {

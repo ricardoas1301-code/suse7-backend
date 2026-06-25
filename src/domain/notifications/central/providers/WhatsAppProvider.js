@@ -6,6 +6,12 @@ import { renderNotificationWhatsAppSandboxTemplate } from "../whatsapp/renderNot
 import { resolveInAppDeepLink } from "../inbox/resolveInAppDeepLink.js";
 import { isDevSandboxWhatsAppMode } from "../whatsapp/whatsappSandboxPolicy.js";
 import { isWhatsAppLiveDeliveryActive } from "../whatsapp/S7WhatsAppProvider.js";
+import { processWhatsAppOutboxDispatch } from "../whatsapp/processWhatsAppOutboxDispatch.js";
+import { patchManualRayxWhatsAppOutboxShare } from "../sales/manualSaleRayxLiveDelivery.js";
+import {
+  buildDailySalesSummaryOutboxShare,
+  isDailySalesSummaryMetadata,
+} from "../sales/dailySalesSummaryOutboxShareAdapter.js";
 
 export class WhatsAppNotificationProvider extends NotificationDeliveryProvider {
   constructor() {
@@ -77,6 +83,47 @@ export class WhatsAppNotificationProvider extends NotificationDeliveryProvider {
 
     if (!outbox.ok) {
       return { ok: false, error: outbox.error ?? "OUTBOX_FAILED" };
+    }
+
+    const isDailySummary = isDailySalesSummaryMetadata(ctx.metadata);
+    if (isDailySummary && outbox.outboxId) {
+      const share = await buildDailySalesSummaryOutboxShare({
+        eventId: String(ctx.metadata?.event_id ?? ""),
+        renderedSubject: ctx.renderedSubject,
+        renderedBody: ctx.renderedBody,
+        variables,
+      });
+
+      await patchManualRayxWhatsAppOutboxShare(ctx.supabase, ctx.dispatchId, {
+        caption: share.whatsappCaption,
+        imageBase64: share.imageBase64,
+        mimeType: share.imageMimeType,
+        deliveryFormat: "image",
+        documentBase64: share.documentBase64,
+        documentFilename: share.documentFilename,
+        documentMimeType: share.documentMimeType,
+      });
+
+      const processResult = await processWhatsAppOutboxDispatch(
+        ctx.supabase,
+        ctx.dispatchId,
+      );
+      const processedSent = (processResult?.sent ?? 0) >= 1;
+
+      return {
+        ok: true,
+        queued: !processedSent,
+        providerResponse: {
+          channel: "whatsapp",
+          outbox_id: outbox.outboxId ?? null,
+          idempotent: Boolean(outbox.idempotent),
+          queued: !processedSent,
+          processed_immediately: true,
+          sent: processedSent,
+          process_result: processResult ?? null,
+          simulated_until_process: !isWhatsAppLiveDeliveryActive(),
+        },
+      };
     }
 
     return {

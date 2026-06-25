@@ -1,4 +1,5 @@
 import { requireAuthUser } from "../ml/_helpers/requireAuthUser.js";
+import { isValidCnpjInput, normalizeCnpjDigits } from "../../domain/taxIdBr/cnpjDigits.js";
 
 function trimStr(v) {
   if (v == null) return "";
@@ -58,8 +59,8 @@ function companyNamesFromProfile(prof) {
 async function tryBootstrapSellerCompanyFromProfile(supabase, userId) {
   const prof = await loadProfileForSellerBootstrap(supabase, userId);
   const { company_name, trade_name } = companyNamesFromProfile(prof);
-  const doc = String(prof?.cpf_cnpj ?? "").replace(/\D/g, "");
-  if (doc.length !== 14 || !company_name) {
+  const doc = normalizeCnpjDigits(String(prof?.cpf_cnpj ?? ""));
+  if (!isValidCnpjInput(doc) || !company_name) {
     return { created: false, reason: "not_cnpj_or_missing_name" };
   }
 
@@ -215,13 +216,36 @@ export default async function handleSellerCompanies(req, res) {
           error: "company_name (ou name legado) e document_cnpj (14 dígitos) são obrigatórios",
         });
       }
+      const docNorm = normalizeCnpjDigits(documentCnpj);
+      if (!isValidCnpjInput(docNorm)) {
+        console.warn("[company/profile] cnpj_validation_failed", {
+          user_id: user.id,
+          reason: "invalid_format_or_checksum",
+        });
+        return res.status(400).json({
+          ok: false,
+          error: "CNPJ inválido. Confira os números e tente novamente.",
+        });
+      }
+
+      const { data: dupPre } = await supabase
+        .from("seller_companies")
+        .select("id")
+        .eq("user_id", user.id)
+        .eq("document_cnpj", docNorm)
+        .maybeSingle();
+      if (dupPre?.id) {
+        console.warn("[company/profile] duplicate_cnpj_blocked", { user_id: user.id });
+        return res.status(409).json({ ok: false, error: "Este CNPJ já está cadastrado no seu perfil." });
+      }
+
       const tradeRaw =
         body.trade_name != null && String(body.trade_name).trim() !== "" ? String(body.trade_name).trim() : null;
       const payload = {
         user_id: user.id,
         company_name: companyName,
         trade_name: tradeRaw ?? companyName,
-        document_cnpj: documentCnpj,
+        document_cnpj: docNorm,
         active: body.active !== false,
       };
 
@@ -251,7 +275,8 @@ export default async function handleSellerCompanies(req, res) {
             .toLowerCase()
             .includes("duplicate");
         if (dup) {
-          return res.status(409).json({ ok: false, error: "Empresa já cadastrada para este CNPJ" });
+          console.warn("[company/profile] duplicate_cnpj_blocked", { user_id: user.id, source: "db_unique" });
+          return res.status(409).json({ ok: false, error: "Este CNPJ já está cadastrado no seu perfil." });
         }
         console.error("[Suse7][API][seller-companies] failed", {
           message: error?.message,

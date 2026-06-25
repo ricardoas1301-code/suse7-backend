@@ -1,0 +1,119 @@
+﻿node.exe : Retrieving projectÔÇª
+No C:\nvm4w\nodejs\vercel.ps1:16 caractere:5
++     & "$basedir/node$exe"  "$basedir/node_modules/vercel/dist/vc.js"  ...
++     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (Retrieving projectÔÇª:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+Resolving deployment "suse7-backend-dev.vercel.app"
+Streaming logs for deployment dpl_8RZWJ7ZVqMLxMRUwQLPqqV3VCUiV starting from 03:57:12.32
+
+waiting for new logs...
+03:57:28.06  Ôä╣´©Å  POST  ---  suse7-backend-dev.vercel.app  ãÆ  /api/jobs/marketplace-account-sync
+-----------------------------------------------------------------------------------------------
+[S7 API Router] matched marketplace account sync job {
+  path: '(rawUrl-hotfix)',
+  rawUrl: 
+'/api/jobs/marketplace-account-sync?__path=jobs%2Fmarketplace-account-sync&path=jobs%2Fmarketplace-account-sync',
+  method: 'POST',
+  router_version: 'marketplace-account-sync-rawurl-hotfix-v1'
+}
+
+waiting for new logs...
+03:57:28.12  Ôä╣´©Å  POST  ---  suse7-backend-dev.vercel.app  ãÆ  /api/jobs/marketplace-account-sync
+-----------------------------------------------------------------------------------------------
+[marketplace-account-sync-job] CHECKPOINT_1 {
+  checkpoint: 1,
+  vercel_env: 'production',
+  node_env: 'production',
+  supabase_host: 'ujznkyvgqhxagemdgmor.supabase.co',
+  job_secret_configured: true,
+  dev_job_secret_configured: false,
+  stage: 'handler_entry',
+  method: 'POST'
+}
+
+waiting for new logs...
+03:57:28.12  Ôä╣´©Å  POST  ---  suse7-backend-dev.vercel.app  ãÆ  /api/jobs/marketplace-account-sync
+-----------------------------------------------------------------------------------------------
+[marketplace-account-sync-job] CHECKPOINT_2 {
+  checkpoint: 2,
+  vercel_env: 'production',
+  node_env: 'production',
+  supabase_host: 'ujznkyvgqhxagemdgmor.supabase.co',
+  job_secret_configured: true,
+  dev_job_secret_configured: false,
+  stage: 'auth_ok',
+  auth_mode: 'x-job-secret'
+}
+
+waiting for new logs...
+03:57:28.12  Ôä╣´©Å  POST  ---  suse7-backend-dev.vercel.app  ãÆ  /api/jobs/marketplace-account-sync
+-----------------------------------------------------------------------------------------------
+[ML_ONBOARDING_SYNC_JOB_DISPATCHED] {
+  event: 'worker_start',
+  budget_ms: 10000,
+  max_jobs_per_drain: 5,
+  global_sync_concurrency: 16,
+  marketplace_ml_concurrency: 16,
+  batch_details: 50,
+  sales_page_limit: 50,
+  fetch_pool_limit: 400,
+  timestamp: '2026-06-20T06:57:28.124Z'
+}
+
+waiting for new logs...
+03:57:28.12  ­ƒÜ½  POST  ---  suse7-backend-dev.vercel.app  ãÆ  /api/jobs/marketplace-account-sync
+-----------------------------------------------------------------------------------------------
+(node:4) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have 
+security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+
+waiting for new logs...
+03:58:04.77  Ôä╣´©Å  POST  ---  suse7-backend-dev.vercel.app  ãÆ  /api/jobs/daily-sales-summary-automation
+-----------------------------------------------------------------------------------------------------
+[S7 API Router] resolved path {
+  path: '/api/jobs/daily-sales-summary-automation',
+  pathNorm: '/api/jobs/daily-sales-summary-automation',
+  rawUrl: '/api/jobs/daily-sales-summary-automation?__path=jobs%2Fdaily-sales-summary-automation&path=jobs%2Fdaily-sale
+s-summary-automation',
+  method: 'POST',
+  router_version: 'ml-webhook-job-top-route-v1'
+}
+
+waiting for new logs...
+03:58:04.90  Ôä╣´©Å  POST  ---  suse7-backend-dev.vercel.app  ãÆ  /api/jobs/daily-sales-summary-automation
+-----------------------------------------------------------------------------------------------------
+[S7_NOTIFICATION]_DAILY_SALES_SUMMARY_MOTOR_RULES { active_rules: 2, scanning: 2 }
+
+waiting for new logs...
+03:58:04.90  Ôä╣´©Å  POST  ---  suse7-backend-dev.vercel.app  ãÆ  /api/jobs/daily-sales-summary-automation
+-----------------------------------------------------------------------------------------------------
+[S7_NOTIFICATION]_DAILY_SALES_SUMMARY_RULE_SKIP {
+  seller_id: 'c8a62ec6-cfbe-4ad9-98ea-49fadebeda50',
+  reason: 'outside_tolerance',
+  now_brt: '2026-06-20 03:58 BRT (wd=6)',
+  weekday_brt: 6,
+  weekdays: [ 1, 2, 3, 4, 5, 6 ],
+  times: [ '04:03', '20:06' ],
+  tolerance_min: 3,
+  slots_checked: [
+    {
+      time: '04:03',
+      slot_minutes: 243,
+      now_minutes: 238,
+      delta_min: 5,
+      within_tolerance: false
+    },
+    {
+      time: '20:06',
+      slot_minutes: 1206,
+      now_minutes: 238,
+      delta_min: 968,
+      within_tolerance: false
+    }
+  ]
+}
+
+waiting for new logs...
+WARN! Command automatically interrupted after 5 minutes.
+

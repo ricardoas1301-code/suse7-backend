@@ -1,4 +1,11 @@
 import { requireAuthUser } from "../ml/_helpers/requireAuthUser.js";
+import { gatePremiumHandler } from "../../billing/middleware/requirePlanAccess.js";
+import Decimal from "decimal.js";
+import {
+  fetchOrderIdsFromItemTextSearch,
+  fetchVendasSearchOrderIds,
+  normalizeSearchQuery,
+} from "./_vendasSalesRows.js";
 
 function emptySummary() {
   return {
@@ -26,9 +33,23 @@ function emptySummary() {
 
 function toMoneyString(value) {
   if (value == null || value === "") return "0.00";
-  const n = Number(String(value).replace(",", "."));
-  if (!Number.isFinite(n)) return "0.00";
-  return n.toFixed(2);
+  try {
+    return new Decimal(String(value).replace(",", "."))
+      .toDecimalPlaces(2, Decimal.ROUND_HALF_UP)
+      .toFixed(2);
+  } catch {
+    return "0.00";
+  }
+}
+
+function toDecimal(value) {
+  if (value == null || value === "") return null;
+  try {
+    const d = new Decimal(String(value).replace(",", "."));
+    return d.isFinite() ? d : null;
+  } catch {
+    return null;
+  }
 }
 
 export default async function handleSalesSummary(req, res) {
@@ -45,17 +66,38 @@ export default async function handleSalesSummary(req, res) {
   }
 
   const { user, supabase } = auth;
+  if (await gatePremiumHandler(res, supabase, user.id, { module: "vendas" })) return;
   const marketplace =
     req.query?.marketplace != null && String(req.query.marketplace).trim() !== ""
       ? String(req.query.marketplace).trim()
       : null;
+  const marketplaceAccountId =
+    req.query?.marketplace_account_id != null && String(req.query.marketplace_account_id).trim() !== ""
+      ? String(req.query.marketplace_account_id).trim()
+      : null;
+  const qRaw =
+    req.query?.q != null && String(req.query.q).trim() !== "" ? String(req.query.q).trim() : null;
+  const qNormalized = qRaw ? normalizeSearchQuery(qRaw) : null;
 
   try {
-    const orderIdsQuery = supabase
+    let orderIdsQuery = supabase
       .from("sales_orders")
       .select("id")
       .eq("user_id", user.id);
-    if (marketplace) orderIdsQuery.eq("marketplace", marketplace);
+    if (marketplace) orderIdsQuery = orderIdsQuery.eq("marketplace", marketplace);
+    if (marketplaceAccountId) orderIdsQuery = orderIdsQuery.eq("marketplace_account_id", marketplaceAccountId);
+
+    if (qNormalized) {
+      const [fromOrders, fromItems] = await Promise.all([
+        fetchVendasSearchOrderIds(supabase, user.id, qNormalized, 800),
+        fetchOrderIdsFromItemTextSearch(supabase, user.id, qNormalized, 1200),
+      ]);
+      const merged = new Set([...fromOrders, ...fromItems]);
+      if (merged.size === 0) return res.status(200).json(emptySummary());
+      const cap = 1500;
+      orderIdsQuery = orderIdsQuery.in("id", [...merged].slice(0, cap));
+    }
+
     const { data: orderRows, error: orderErr } = await orderIdsQuery;
     if (orderErr) {
       console.error("[Suse7][API][sales-summary] orders_failed", {
@@ -84,32 +126,29 @@ export default async function handleSalesSummary(req, res) {
     }
 
     const rows = Array.isArray(itemRows) ? itemRows : [];
-    let gross = 0;
-    let net = 0;
+    let gross = new Decimal(0);
+    let net = new Decimal(0);
     let units = 0;
-    let fees = 0;
-    let shippingFees = 0;
+    let fees = new Decimal(0);
+    let shippingFees = new Decimal(0);
     /** @type {Set<string>} */
     const uniqueOrders = new Set();
     for (const row of rows) {
-      const g = Number(String(row?.gross_amount ?? "0").replace(",", ".")) || 0;
-      const n =
-        row?.net_amount != null
-          ? Number(String(row?.net_amount).replace(",", ".")) || 0
-          : g;
+      const g = toDecimal(row?.gross_amount) ?? new Decimal(0);
+      const n = toDecimal(row?.net_amount) ?? g;
       const q = Number.parseInt(String(row?.quantity ?? "1"), 10) || 0;
-      const f = Number(String(row?.fee_amount ?? "0").replace(",", ".")) || 0;
-      const s = Number(String(row?.shipping_share_amount ?? "0").replace(",", ".")) || 0;
-      gross += g;
-      net += n;
+      const f = toDecimal(row?.fee_amount) ?? new Decimal(0);
+      const s = toDecimal(row?.shipping_share_amount) ?? new Decimal(0);
+      gross = gross.plus(g);
+      net = net.plus(n);
       units += q;
-      fees += f;
-      shippingFees += s;
+      fees = fees.plus(f);
+      shippingFees = shippingFees.plus(s);
       if (row?.sales_order_id) uniqueOrders.add(String(row.sales_order_id));
     }
 
     const salesCount = uniqueOrders.size;
-    const avgTicket = salesCount > 0 ? net / salesCount : 0;
+    const avgTicket = salesCount > 0 ? net.div(salesCount) : new Decimal(0);
 
     return res.status(200).json({
       ok: true,
@@ -127,7 +166,7 @@ export default async function handleSalesSummary(req, res) {
         total_fees_brl: toMoneyString(fees),
         total_shipping_fees_brl: toMoneyString(shippingFees),
         total_refunds_brl: "0.00",
-        loss_orders_count: net < 0 ? salesCount : 0,
+        loss_orders_count: net.lt(0) ? salesCount : 0,
         orders_count: salesCount,
       },
       truncated_scan: false,

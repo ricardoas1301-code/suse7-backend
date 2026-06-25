@@ -475,6 +475,35 @@ function prerequisiteBlockReason(job, statusMap) {
  * @param {import("@supabase/supabase-js").SupabaseClient} supabase
  * @param {string[]} accountIds
  */
+async function fetchPendingOrdersV2WebhookCountByAccount(supabase, accountIds) {
+  /** @type {Record<string, number>} */
+  const map = {};
+  const ids = accountIds.map((id) => String(id).trim()).filter(Boolean);
+  if (!ids.length) return map;
+  const { data, error } = await supabase
+    .from("ml_webhook_events")
+    .select("marketplace_account_id")
+    .in("marketplace_account_id", ids)
+    .eq("topic", "orders_v2")
+    .in("status", ["pending", "processing"])
+    .limit(1000);
+  if (error) {
+    console.warn("[sales-sync] webhook_backlog_query_error", { message: error.message });
+    return map;
+  }
+  for (const row of data || []) {
+    const id = String(row.marketplace_account_id || "");
+    if (!id) continue;
+    map[id] = (map[id] || 0) + 1;
+  }
+  return map;
+}
+
+/**
+ * Jobs ML pendentes/em execução por conta (visão worker).
+ * @param {import("@supabase/supabase-js").SupabaseClient} supabase
+ * @param {string[]} accountIds
+ */
 async function fetchActiveMlJobCountsByAccount(supabase, accountIds) {
   /** @type {Record<string, number>} */
   const map = {};
@@ -501,10 +530,25 @@ async function fetchActiveMlJobCountsByAccount(supabase, accountIds) {
 /**
  * @param {Record<string, unknown>[]} rows
  * @param {Record<string, string>} statusMap
+ * @param {Record<string, number>} [webhookBacklogByAccount]
  */
-function sortEligibleJobs(rows, statusMap) {
+function sortEligibleJobs(rows, statusMap, webhookBacklogByAccount = {}) {
+  const webhookPenaltyFor = (job) => {
+    const aid = job.marketplace_account_id != null ? String(job.marketplace_account_id).trim() : "";
+    const backlog = aid ? webhookBacklogByAccount[aid] || 0 : 0;
+    if (backlog <= 0) return 0;
+    const jobType = String(job.job_type || "");
+    if (jobType === "ml_historical_sales_backfill" || jobType === "ml_initial_sales_history") return 1000;
+    if (jobType === "ml_initial_listings" || jobType === "ml_initial_listings_current") return 100;
+    if (jobType === "ml_initial_fees" || jobType === "ml_initial_products") return 50;
+    return 0;
+  };
+
   const filtered = rows.filter((j) => prerequisiteBlockReason(j, statusMap) == null);
   filtered.sort((a, b) => {
+    const penaltyA = webhookPenaltyFor(a);
+    const penaltyB = webhookPenaltyFor(b);
+    if (penaltyA !== penaltyB) return penaltyA - penaltyB;
     const sa = String(a.status || "").toLowerCase();
     const sb = String(b.status || "").toLowerCase();
     const ua = new Date(/** @type {string} */ (a.updated_at || a.created_at || 0)).getTime();
@@ -623,7 +667,7 @@ async function processMlSalesBatchJob(supabase, job, opts) {
 
   let accessToken;
   try {
-    accessToken = await getValidMLToken(userId);
+    accessToken = await getValidMLToken(userId, { marketplaceAccountId: accountId });
   } catch (e) {
     await failMarketplaceSyncJob(
       supabase,
@@ -633,6 +677,14 @@ async function processMlSalesBatchJob(supabase, job, opts) {
     );
     return { stopped: true, processedInThisRun: 0 };
   }
+
+  console.info("[worker] marketplace_account_processed", {
+    marketplace_account_id: accountId,
+    user_id: userId,
+    job_id: String(jRow.id),
+    job_type: String(jRow.job_type || ""),
+    phase: "ml_sales_batch_token_ready",
+  });
 
   let sellerId =
     accountRow.external_seller_id != null ? String(accountRow.external_seller_id).trim() : "";
@@ -1335,6 +1387,10 @@ async function processMlSalesBatchJob(supabase, job, opts) {
               syncRunId: String(jRow.id),
               orderIndex,
               total: progressTotal,
+              syncType: salesJobType,
+            },
+            {
+              syncType: salesJobType,
             }
           ),
           ORDER_PROCESS_TIMEOUT_MS,
@@ -1886,6 +1942,15 @@ export async function runMarketplaceAccountSyncWorker(supabase, opts = {}) {
   while (Date.now() < absoluteDeadlineMs && jobsDispatchedTotal < maxJobsPerDrain) {
     const iterStart = Date.now();
     const rows = await fetchJobsPool(supabase, fetchPoolLimit);
+    const distinctMarketplaceAccountIds = [
+      ...new Set(rows.map((r) => String(r.marketplace_account_id || "").trim()).filter(Boolean)),
+    ];
+    console.info("[worker] marketplace_accounts_batch_selected", {
+      wave: waveIndex,
+      job_rows: rows.length,
+      distinct_marketplace_account_ids: distinctMarketplaceAccountIds.length,
+      marketplace_account_ids_head: distinctMarketplaceAccountIds.slice(0, 80),
+    });
     const countsByType = rows.reduce((acc, r) => {
       const jt = String(r.job_type || "unknown");
       const s = String(r.status || "unknown");
@@ -1908,7 +1973,8 @@ export async function runMarketplaceAccountSyncWorker(supabase, opts = {}) {
     const accountIds = [...new Set(rows.map((r) => String(r.marketplace_account_id || "")).filter(Boolean))];
     const statusMap = await loadLatestJobStatusMap(supabase, accountIds);
     const activeChunkByAccount = await fetchActiveMlJobCountsByAccount(supabase, accountIds);
-    const sorted = sortEligibleJobs(rows, statusMap);
+    const webhookBacklogByAccount = await fetchPendingOrdersV2WebhookCountByAccount(supabase, accountIds);
+    const sorted = sortEligibleJobs(rows, statusMap, webhookBacklogByAccount);
 
     const sortedIdSet = new Set(sorted.map((j) => String(j.id ?? "")));
     for (const j of rows) {

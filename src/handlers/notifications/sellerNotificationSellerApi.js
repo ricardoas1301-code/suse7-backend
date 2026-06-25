@@ -342,10 +342,27 @@ export async function handleNotificationSellerDailySalesSummaryAutomation(req, r
     const body = parseBody(req);
     if (body === null) return jsonError(res, 400, "INVALID_JSON", "JSON inválido");
     try {
+      logNotificationUi("DAILY_SALES_SUMMARY_RULE_PATCH_REQUEST", {
+        seller_id: sellerId,
+        enabled: body?.enabled ?? null,
+        times: Array.isArray(body?.config?.times) ? body.config.times : null,
+        weekdays: Array.isArray(body?.config?.weekdays) ? body.config.weekdays : null,
+      });
       const result = await patchDailySalesSummaryAutomationRule(auth.supabase, sellerId, body);
       if (!result.ok) {
+        logNotificationUi("DAILY_SALES_SUMMARY_RULE_PATCH_REJECTED", {
+          seller_id: sellerId,
+          error: result.error,
+          message: result.message,
+        });
         return res.status(400).json({ ok: false, error: result.error, message: result.message });
       }
+      logNotificationUi("DAILY_SALES_SUMMARY_RULE_PATCH_OK", {
+        seller_id: sellerId,
+        times: result.rule?.config?.times ?? null,
+        weekdays: result.rule?.config?.weekdays ?? null,
+        updated_at: result.rule?.updated_at ?? null,
+      });
       return res.status(200).json({ ok: true, rule: result.rule });
     } catch (e) {
       logNotificationUi("DAILY_SALES_SUMMARY_RULE_PATCH_ERR", { message: e?.message });

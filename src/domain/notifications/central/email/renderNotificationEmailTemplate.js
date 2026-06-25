@@ -14,6 +14,7 @@ import { resolveInAppDeepLink } from "../inbox/resolveInAppDeepLink.js";
  *   type?: string;
  *   deepLink?: string | null;
  *   recipientLabel?: string | null;
+ *   presentation?: "default" | "contact_form";
  * }} input
  */
 export function renderNotificationEmailTemplate(input) {
@@ -21,18 +22,26 @@ export function renderNotificationEmailTemplate(input) {
   const message = String(input.message ?? "").trim();
   const category = String(input.category ?? "").trim();
   const type = String(input.type ?? "").trim();
+  const isContactForm = input.presentation === "contact_form";
 
   const deepLink =
-    input.deepLink != null && String(input.deepLink).trim() !== ""
-      ? String(input.deepLink).trim()
-      : resolveInAppDeepLink({
-          category,
-          type,
-          payload: {},
-        });
+    isContactForm
+      ? null
+      : input.deepLink != null && String(input.deepLink).trim() !== ""
+        ? String(input.deepLink).trim()
+        : resolveInAppDeepLink({
+            category,
+            type,
+            payload: {},
+          });
 
   const baseUrl = (config.frontendUrl || "https://suse7.com.br").replace(/\/+$/, "");
-  const ctaHref = deepLink.startsWith("http") ? deepLink : `${baseUrl}${deepLink.startsWith("/") ? deepLink : `/${deepLink}`}`;
+  const ctaHref =
+    deepLink != null
+      ? deepLink.startsWith("http")
+        ? deepLink
+        : `${baseUrl}${deepLink.startsWith("/") ? deepLink : `/${deepLink}`}`
+      : null;
   const subject = String(input.subject ?? "").trim() || `[Suse7] ${title}`;
 
   const greeting = input.recipientLabel
@@ -44,12 +53,16 @@ export function renderNotificationEmailTemplate(input) {
     "",
     title,
     message,
-    "",
-    "Ver detalhes no Suse7:",
-    ctaHref,
+    ...(ctaHref
+      ? ["", "Ver detalhes no Suse7:", ctaHref]
+      : isContactForm
+        ? [""]
+        : []),
     "",
     "— Equipe Suse7",
-    "Este é um e-mail operacional automático. Não responda a esta mensagem.",
+    isContactForm
+      ? "Mensagem enviada pelo formulário Fale Conosco do site."
+      : "Este é um e-mail operacional automático. Não responda a esta mensagem.",
   ].join("\n");
 
   const html = `<!DOCTYPE html>
@@ -65,11 +78,19 @@ export function renderNotificationEmailTemplate(input) {
         </td></tr>
         <tr><td style="padding:28px;">
           <p style="margin:0 0 12px;font-size:15px;color:#334155;">${escapeHtml(greeting)}</p>
-          <p style="margin:0 0 20px;font-size:15px;line-height:1.55;color:#475569;">${escapeHtml(message)}</p>
-          <a href="${escapeAttr(ctaHref)}" style="display:inline-block;background:#2563eb;color:#ffffff;text-decoration:none;font-size:14px;font-weight:600;padding:12px 22px;border-radius:10px;">Ver detalhes no Suse7</a>
+          <p style="margin:0 0 20px;font-size:15px;line-height:1.55;color:#475569;white-space:pre-wrap;">${escapeHtml(message)}</p>
+          ${
+            ctaHref
+              ? `<a href="${escapeAttr(ctaHref)}" style="display:inline-block;background:#2563eb;color:#ffffff;text-decoration:none;font-size:14px;font-weight:600;padding:12px 22px;border-radius:10px;">Ver detalhes no Suse7</a>`
+              : ""
+          }
         </td></tr>
         <tr><td style="padding:16px 28px 24px;border-top:1px solid #e2e8f0;">
-          <p style="margin:0;font-size:12px;line-height:1.45;color:#94a3b8;">E-mail operacional automático. Não responda a esta mensagem.</p>
+          <p style="margin:0;font-size:12px;line-height:1.45;color:#94a3b8;">${
+            isContactForm
+              ? "Mensagem enviada pelo formulário Fale Conosco do site."
+              : "E-mail operacional automático. Não responda a esta mensagem."
+          }</p>
         </td></tr>
       </table>
     </td></tr>

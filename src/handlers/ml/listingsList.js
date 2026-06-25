@@ -4,6 +4,7 @@
 // ======================================================
 
 import { requireAuthUser } from "./_helpers/requireAuthUser.js";
+import { gatePremiumHandler } from "../../billing/middleware/requirePlanAccess.js";
 import {
   buildListingGridRow,
   ensureListingGridMoneyContract,
@@ -25,6 +26,17 @@ import { maybeEnrichGridRowsWithLiveListingPrices } from "./_helpers/listingGrid
 import { mercadoLivreMoneyShapeDiagnostics } from "./_helpers/mercadoLivreListingMoneyShared.js";
 import { mlPriceValidateLogsEnabled } from "./_helpers/mercadoLibreItemsApi.js";
 import { fetchAllListingHealthRowsCompat } from "./_helpers/mlHealthSchemaCompat.js";
+import { enrichListingGridRowsWithProductCardMetrics } from "./_helpers/listingProductCardMetrics.js";
+import {
+  finalizeListingGridAccountFields,
+  loadMarketplaceAccountMetaMap,
+  resolveMarketplaceAccountDisplayName,
+  resolveMarketplaceAccountDisplayNameById,
+} from "./_helpers/listingGridAccountEnrich.js";
+import {
+  buildHistoricalCardOrderItemsAggregates,
+  logHistoricalCardMetricsProbe,
+} from "../../domain/sales/historicalCardOrderItemsAggregates.js";
 
 export default async function handleMlListingsList(req, res) {
   if (req.method !== "GET") {
@@ -49,15 +61,35 @@ export default async function handleMlListingsList(req, res) {
   }
 
   const { user, supabase } = auth;
+  if (await gatePremiumHandler(res, supabase, user.id, { module: "anuncios" })) return;
+
+  const LISTINGS_SELECT_BASE =
+    "id, title, marketplace, marketplace_account_id, price, base_price, original_price, available_quantity, sold_quantity, status, external_listing_id, permalink, health, api_last_seen_at, currency_id, pictures_count, variations_count, seller_sku, seller_custom_field, listing_type_id, raw_json, product_id, financial_analysis_blocked, needs_attention, attention_reason, products(catalog_completeness, product_images, product_name, sku, cost_price, operational_cost, packaging_cost)";
+  const LISTINGS_SELECT_WITH_ACCOUNT = `${LISTINGS_SELECT_BASE}, marketplace_accounts(account_alias, ml_nickname)`;
 
   try {
-    const { data, error } = await supabase
+    let data;
+    let error;
+    ({ data, error } = await supabase
       .from("marketplace_listings")
-      .select(
-        "id, title, marketplace, price, base_price, original_price, available_quantity, sold_quantity, status, external_listing_id, permalink, health, api_last_seen_at, currency_id, pictures_count, variations_count, seller_sku, seller_custom_field, listing_type_id, raw_json, product_id, financial_analysis_blocked, needs_attention, attention_reason, products(catalog_completeness, product_images, product_name, sku, cost_price, operational_cost, packaging_cost)"
-      )
+      .select(LISTINGS_SELECT_WITH_ACCOUNT)
       .eq("user_id", user.id)
-      .order("api_last_seen_at", { ascending: false });
+      .order("api_last_seen_at", { ascending: false }));
+
+    if (error) {
+      const errMsg = String(error?.message ?? "").toLowerCase();
+      if (errMsg.includes("marketplace_accounts") || String(error?.code ?? "") === "PGRST200") {
+        console.warn("[Suse7][API][ml-listings] account_join_fallback", {
+          message: error?.message,
+          code: error?.code,
+        });
+        ({ data, error } = await supabase
+          .from("marketplace_listings")
+          .select(LISTINGS_SELECT_BASE)
+          .eq("user_id", user.id)
+          .order("api_last_seen_at", { ascending: false }));
+      }
+    }
 
     if (error) {
       console.error("[Suse7][API][ml-listings] failed", {
@@ -78,7 +110,14 @@ export default async function handleMlListingsList(req, res) {
     }
 
     const listings = (data ?? []).map((row) => {
-      const { products: prodRel, ...rest } = row;
+      const { products: prodRel, marketplace_accounts: accRel, ...rest } = row;
+      const accJoined = Array.isArray(accRel) && accRel[0] ? accRel[0] : accRel;
+      const joinedAccountAlias =
+        accJoined && typeof accJoined === "object"
+          ? resolveMarketplaceAccountDisplayName(/** @type {Record<string, unknown>} */ (accJoined), {
+              allowFallback: false,
+            })
+          : null;
       const product_catalog_completeness =
         prodRel && typeof prodRel === "object" && !Array.isArray(prodRel)
           ? /** @type {{ catalog_completeness?: string }} */ (prodRel).catalog_completeness ?? null
@@ -113,8 +152,20 @@ export default async function handleMlListingsList(req, res) {
         product_cost_row,
         product_name,
         product_sku,
+        joined_account_alias: joinedAccountAlias,
       };
     });
+    const accountById = await loadMarketplaceAccountMetaMap(supabase, user.id);
+
+    for (const listing of listings) {
+      const accountId =
+        listing.marketplace_account_id != null && String(listing.marketplace_account_id).trim() !== ""
+          ? String(listing.marketplace_account_id).trim()
+          : "";
+      if (!accountId) continue;
+      listing.joined_account_alias = resolveMarketplaceAccountDisplayNameById(accountId, accountById);
+    }
+
     const listingIds = listings.map((l) => l.id).filter(Boolean);
 
     const healthLoad = await fetchAllListingHealthRowsCompat(supabase, user.id);
@@ -222,21 +273,101 @@ export default async function handleMlListingsList(req, res) {
           pictureRows
         );
       }
+      const accountId =
+        l.marketplace_account_id != null && String(l.marketplace_account_id).trim() !== ""
+          ? String(l.marketplace_account_id).trim()
+          : null;
+      const aliasResolved =
+        accountId != null
+          ? resolveMarketplaceAccountDisplayNameById(accountId, accountById)
+          : (/** @type {{ joined_account_alias?: string | null }} */ (lx)).joined_account_alias ??
+            null;
+      const accountMeta =
+        accountId != null
+          ? accountById.get(String(accountId).trim().toLowerCase())
+          : null;
+      row.marketplace_account_id = accountId;
+      row.account_alias = aliasResolved;
+      row.ml_account_alias = aliasResolved;
+      if (accountMeta?.logoUrl != null) {
+        row.account_logo_url = accountMeta.logoUrl;
+      }
       return row;
     });
 
-    await maybeEnrichGridRowsWithLiveListingPrices({
-      userId: user.id,
-      listings: /** @type {Record<string, unknown>[]} */ (listings),
-      gridRows: /** @type {Record<string, unknown>[]} */ (gridRows),
-      healthByKey,
-      metricsByKey,
-      sellerTaxPct,
-    });
+    let orderItemsMaps = null;
+    try {
+      orderItemsMaps = await buildHistoricalCardOrderItemsAggregates(
+        supabase,
+        user.id,
+        /** @type {Record<string, unknown>[]} */ (listings),
+        accountById
+      );
+    } catch (orderItemsErr) {
+      console.warn("[Suse7][API][ml-listings] product_card_order_items_aggregate_failed", {
+        message: orderItemsErr?.message ?? String(orderItemsErr),
+      });
+    }
 
-    const listingsOut = gridRows.map((row) =>
-      ensureListingGridMoneyContract(/** @type {Record<string, unknown>} */ (row))
+    const localOnly =
+      req.query?.local_only === "1" ||
+      req.query?.local_only === "true" ||
+      String(req.query?.local_only ?? "")
+        .trim()
+        .toLowerCase() === "true";
+
+    if (!localOnly) {
+      await maybeEnrichGridRowsWithLiveListingPrices({
+        userId: user.id,
+        listings: /** @type {Record<string, unknown>[]} */ (listings),
+        gridRows: /** @type {Record<string, unknown>[]} */ (gridRows),
+        healthByKey,
+        metricsByKey,
+        sellerTaxPct,
+      });
+    }
+
+    try {
+      enrichListingGridRowsWithProductCardMetrics(/** @type {Record<string, unknown>[]} */ (gridRows), {
+        orderItemsMaps,
+        metricsByKey,
+        accountById,
+        listings: /** @type {Record<string, unknown>[]} */ (listings),
+      });
+    } catch (cardMetricsErr) {
+      console.warn("[Suse7][API][ml-listings] product_card_metrics_enrich_failed", {
+        message: cardMetricsErr?.message ?? String(cardMetricsErr),
+      });
+    }
+
+    try {
+      logHistoricalCardMetricsProbe(
+        /** @type {Record<string, unknown>[]} */ (gridRows),
+        /** @type {Record<string, unknown>[]} */ (listings),
+        orderItemsMaps
+      );
+    } catch (probeErr) {
+      if (process.env.NODE_ENV !== "production") {
+        console.warn("[Suse7][API][ml-listings] product_card_metrics_probe_failed", {
+          message: probeErr?.message ?? String(probeErr),
+        });
+      }
+    }
+
+    for (let i = 0; i < gridRows.length; i++) {
+      gridRows[i] = ensureListingGridMoneyContract(/** @type {Record<string, unknown>} */ (gridRows[i]));
+    }
+
+    await finalizeListingGridAccountFields(
+      supabase,
+      user.id,
+      /** @type {Record<string, unknown>[]} */ (gridRows),
+      /** @type {Record<string, unknown>[]} */ (listings),
+      accountById,
+      orderItemsMaps
     );
+
+    const listingsOut = /** @type {Record<string, unknown>[]} */ (gridRows);
 
     if (mlPriceValidateLogsEnabled() && listingsOut.length > 0) {
       const cap = Math.min(5, listingsOut.length);

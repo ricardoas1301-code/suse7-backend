@@ -33,8 +33,15 @@ export function buildDailySalesSummaryTemplatePayload(executivePayload, window) 
     executivePayload?.summary && typeof executivePayload.summary === "object"
       ? /** @type {Record<string, unknown>} */ (executivePayload.summary)
       : {};
+  const health =
+    executivePayload?.health && typeof executivePayload.health === "object"
+      ? /** @type {Record<string, unknown>} */ (executivePayload.health)
+      : {};
 
   const ordersCount = Number(summary.orders_count ?? 0);
+  const negativeCount = Number(health.negative_sales_count ?? 0);
+  const lowMarginCount = Number(health.low_margin_count ?? 0);
+  const healthyCount = Math.max(0, ordersCount - negativeCount - lowMarginCount);
   const periodo = formatDailySalesSummaryPeriodLabel(window.period_start, window.period_end);
 
   return {
@@ -44,6 +51,9 @@ export function buildDailySalesSummaryTemplatePayload(executivePayload, window) 
     faturamento: formatBrlDisplay(summary.gross_sales_brl),
     lucro: formatBrlDisplay(summary.contribution_profit_brl),
     margem: formatPctDisplay(summary.contribution_margin_percent),
+    saudaveis: String(healthyCount),
+    margem_critica: String(Math.max(0, lowMarginCount)),
+    prejuizo: String(Math.max(0, negativeCount)),
     notification_event_type: "SALES:DAILY_SALES_SUMMARY",
     period_start: window.period_start.toISOString(),
     period_end: window.period_end.toISOString(),

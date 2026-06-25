@@ -1,0 +1,235 @@
+{
+  "run_token": "1779388180523",
+  "sandbox_email": "ricardoas1301@gmail.com",
+  "test_seller_email": "s7-billing-dev-validate@suse7.local",
+  "seller_id": "9ea7286f-ebd6-403c-8e92-efa93661f913",
+  "email_mode": "dev_sandbox",
+  "whitelist": [
+    "ricardoas1301@gmail.com"
+  ],
+  "dev_sandbox": true,
+  "resend_configured": false,
+  "can_send_real": false,
+  "is_real_provider_flag": false,
+  "generated": 11,
+  "sent_real": 11,
+  "simulated": 0,
+  "blocked": 0,
+  "failed": 0,
+  "subjects": [
+    "Pagamento confirmado — Plano Pro (sandbox 3.4.A)",
+    "Pagamento pendente — Plano Pro (sandbox 3.4.A)",
+    "Renovação próxima — Plano Pro (sandbox 3.4.A)",
+    "Carência iniciada — Plano Pro (sandbox 3.4.A)",
+    "Venda com prejuízo — Kit Premium ML #sandbox",
+    "Margem ou estoque em atenção — SKU Margem Baixa #sandbox",
+    "Aumento de frete — Mercado Livre",
+    "Alteração de taxa — Mercado Livre",
+    "Saúde crítica da conta — Mercado Livre",
+    "Sincronização falhou",
+    "Alerta operacional Suse7"
+  ],
+  "ctas": [
+    {
+      "key": "billing_confirmed",
+      "cta_href": "http://localhost:5173/perfil/assinatura/historico"
+    },
+    {
+      "key": "billing_pending",
+      "cta_href": "http://localhost:5173/perfil/assinatura/historico"
+    },
+    {
+      "key": "billing_renewal_upcoming",
+      "cta_href": "http://localhost:5173/perfil/assinatura/historico"
+    },
+    {
+      "key": "billing_grace",
+      "cta_href": "http://localhost:5173/perfil/assinatura/minha-assinatura"
+    },
+    {
+      "key": "sales_loss",
+      "cta_href": "http://localhost:5173/vendas"
+    },
+    {
+      "key": "sales_low_margin",
+      "cta_href": "http://localhost:5173/produtos"
+    },
+    {
+      "key": "marketplace_shipping",
+      "cta_href": "http://localhost:5173/perfil/integracoes/mercado-livre"
+    },
+    {
+      "key": "marketplace_fee",
+      "cta_href": "http://localhost:5173/perfil/integracoes/mercado-livre"
+    },
+    {
+      "key": "account_critical",
+      "cta_href": "http://localhost:5173/perfil/integracoes/mercado-livre"
+    },
+    {
+      "key": "sync_failed",
+      "cta_href": "http://localhost:5173/notificacoes"
+    },
+    {
+      "key": "system_alert",
+      "cta_href": "http://localhost:5173/notificacoes"
+    }
+  ],
+  "rows": [
+    {
+      "key": "billing_confirmed",
+      "label": "Billing — pagamento confirmado",
+      "category": "BILLING",
+      "type": "PAYMENT_CONFIRMED",
+      "subject": "Pagamento confirmado — Plano Pro (sandbox 3.4.A)",
+      "cta_href": "http://localhost:5173/perfil/assinatura/historico",
+      "outbox_status": "sent",
+      "dispatch_status": null,
+      "destination": "ricardoas1301@gmail.com",
+      "simulated": false,
+      "provider_message_id": null,
+      "preview_html": "scripts/output/phase34a/1779388180523/billing_confirmed.html"
+    },
+    {
+      "key": "billing_pending",
+      "label": "Billing — pagamento pendente",
+      "category": "BILLING",
+      "type": "PAYMENT_FAILED",
+      "subject": "Pagamento pendente — Plano Pro (sandbox 3.4.A)",
+      "cta_href": "http://localhost:5173/perfil/assinatura/historico",
+      "outbox_status": "sent",
+      "dispatch_status": null,
+      "destination": "ricardoas1301@gmail.com",
+      "simulated": false,
+      "provider_message_id": null,
+      "preview_html": "scripts/output/phase34a/1779388180523/billing_pending.html"
+    },
+    {
+      "key": "billing_renewal_upcoming",
+      "label": "Billing — renovação próxima",
+      "category": "BILLING",
+      "type": "RENEWAL_COMPLETED",
+      "subject": "Renovação próxima — Plano Pro (sandbox 3.4.A)",
+      "cta_href": "http://localhost:5173/perfil/assinatura/historico",
+      "outbox_status": "sent",
+      "dispatch_status": null,
+      "destination": "ricardoas1301@gmail.com",
+      "simulated": false,
+      "provider_message_id": null,
+      "preview_html": "scripts/output/phase34a/1779388180523/billing_renewal_upcoming.html"
+    },
+    {
+      "key": "billing_grace",
+      "label": "Billing — período de carência",
+      "category": "BILLING",
+      "type": "ENTERED_GRACE",
+      "subject": "Carência iniciada — Plano Pro (sandbox 3.4.A)",
+      "cta_href": "http://localhost:5173/perfil/assinatura/minha-assinatura",
+      "outbox_status": "sent",
+      "dispatch_status": null,
+      "destination": "ricardoas1301@gmail.com",
+      "simulated": false,
+      "provider_message_id": null,
+      "preview_html": "scripts/output/phase34a/1779388180523/billing_grace.html"
+    },
+    {
+      "key": "sales_loss",
+      "label": "Vendas — venda com prejuízo",
+      "category": "PROFIT",
+      "type": "NEGATIVE_MARGIN",
+      "subject": "Venda com prejuízo — Kit Premium ML #sandbox",
+      "cta_href": "http://localhost:5173/vendas",
+      "outbox_status": "sent",
+      "dispatch_status": null,
+      "destination": "ricardoas1301@gmail.com",
+      "simulated": false,
+      "provider_message_id": null,
+      "preview_html": "scripts/output/phase34a/1779388180523/sales_loss.html"
+    },
+    {
+      "key": "sales_low_margin",
+      "label": "Vendas — margem baixa",
+      "category": "INVENTORY",
+      "type": "LOW_STOCK",
+      "subject": "Margem ou estoque em atenção — SKU Margem Baixa #sandbox",
+      "cta_href": "http://localhost:5173/produtos",
+      "outbox_status": "sent",
+      "dispatch_status": null,
+      "destination": "ricardoas1301@gmail.com",
+      "simulated": false,
+      "provider_message_id": null,
+      "preview_html": "scripts/output/phase34a/1779388180523/sales_low_margin.html"
+    },
+    {
+      "key": "marketplace_shipping",
+      "label": "Marketplace — aumento de frete",
+      "category": "MARKETPLACE",
+      "type": "PRICE_CHANGED",
+      "subject": "Aumento de frete — Mercado Livre",
+      "cta_href": "http://localhost:5173/perfil/integracoes/mercado-livre",
+      "outbox_status": "sent",
+      "dispatch_status": null,
+      "destination": "ricardoas1301@gmail.com",
+      "simulated": false,
+      "provider_message_id": null,
+      "preview_html": "scripts/output/phase34a/1779388180523/marketplace_shipping.html"
+    },
+    {
+      "key": "marketplace_fee",
+      "label": "Marketplace — alteração de taxa",
+      "category": "MARKETPLACE",
+      "type": "FEE_CHANGED",
+      "subject": "Alteração de taxa — Mercado Livre",
+      "cta_href": "http://localhost:5173/perfil/integracoes/mercado-livre",
+      "outbox_status": "sent",
+      "dispatch_status": null,
+      "destination": "ricardoas1301@gmail.com",
+      "simulated": false,
+      "provider_message_id": null,
+      "preview_html": "scripts/output/phase34a/1779388180523/marketplace_fee.html"
+    },
+    {
+      "key": "account_critical",
+      "label": "Conta — saúde crítica",
+      "category": "ACCOUNT_HEALTH",
+      "type": "MARKETPLACE_DISCONNECTED",
+      "subject": "Saúde crítica da conta — Mercado Livre",
+      "cta_href": "http://localhost:5173/perfil/integracoes/mercado-livre",
+      "outbox_status": "sent",
+      "dispatch_status": null,
+      "destination": "ricardoas1301@gmail.com",
+      "simulated": false,
+      "provider_message_id": null,
+      "preview_html": "scripts/output/phase34a/1779388180523/account_critical.html"
+    },
+    {
+      "key": "sync_failed",
+      "label": "Conta — sincronização falhou",
+      "category": "SYNC",
+      "type": "SYNC_FAILED",
+      "subject": "Sincronização falhou",
+      "cta_href": "http://localhost:5173/notificacoes",
+      "outbox_status": "sent",
+      "dispatch_status": null,
+      "destination": "ricardoas1301@gmail.com",
+      "simulated": false,
+      "provider_message_id": null,
+      "preview_html": "scripts/output/phase34a/1779388180523/sync_failed.html"
+    },
+    {
+      "key": "system_alert",
+      "label": "Sistema — alerta operacional",
+      "category": "SYSTEM",
+      "type": "SYSTEM_ALERT",
+      "subject": "Alerta operacional Suse7",
+      "cta_href": "http://localhost:5173/notificacoes",
+      "outbox_status": "sent",
+      "dispatch_status": null,
+      "destination": "ricardoas1301@gmail.com",
+      "simulated": false,
+      "provider_message_id": null,
+      "preview_html": "scripts/output/phase34a/1779388180523/system_alert.html"
+    }
+  ],
+  "output_dir": "scripts/output/phase34a/1779388180523"
+}

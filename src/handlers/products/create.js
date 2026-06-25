@@ -45,6 +45,15 @@ export function normalizeProductImagesForDb(v) {
         if (item == null) return null;
         if (typeof item === "string") {
           const t = item.trim();
+          if ((t.startsWith("{") && t.endsWith("}")) || (t.startsWith("[") && t.endsWith("]"))) {
+            try {
+              const parsed = JSON.parse(t);
+              const nested = normalizeProductImagesForDb(Array.isArray(parsed) ? parsed : [parsed]);
+              return nested?.[0] ?? null;
+            } catch {
+              /* continua */
+            }
+          }
           if (t.startsWith("http")) return { url: t };
           if (t.includes("/") && !t.includes(" ")) return { storage_path: t };
           return null;

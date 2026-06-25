@@ -5,7 +5,21 @@
 // ======================================================
 
 import { ML_MARKETPLACE_SLUG } from "./mlMarketplace.js";
+import { normalizeMercadoLibreExternalListingId } from "./mercadoLibreListingCoverImage.js";
 import { normalizeExternalListingId } from "./mlSalesPersist.js";
+
+/**
+ * ID canônico para join de anúncios ML (MLB + dígitos, uppercase).
+ * @param {unknown} marketplace
+ * @param {unknown} externalListingId
+ */
+export function canonicalListingExternalIdForJoin(marketplace, externalListingId) {
+  const mkt = normalizeMarketplaceSlug(marketplace);
+  if (mkt === ML_MARKETPLACE_SLUG) {
+    return normalizeMercadoLibreExternalListingId(externalListingId);
+  }
+  return normalizeExternalListingId(externalListingId);
+}
 
 /**
  * @param {unknown} marketplace
@@ -27,7 +41,7 @@ export function normalizeMarketplaceSlug(marketplace) {
  */
 export function listingGridJoinKey(marketplace, externalListingId) {
   const mkt = normalizeMarketplaceSlug(marketplace);
-  return `${mkt}\t${normalizeExternalListingId(externalListingId)}`;
+  return `${mkt}\t${canonicalListingExternalIdForJoin(marketplace, externalListingId)}`;
 }
 
 /**
@@ -40,6 +54,8 @@ export function externalListingIdKeyVariants(externalListingId) {
   const variants = new Set();
   if (!raw) return [];
   variants.add(normalizeExternalListingId(raw));
+  variants.add(canonicalListingExternalIdForJoin(ML_MARKETPLACE_SLUG, raw));
+  variants.add(normalizeMercadoLibreExternalListingId(raw));
   variants.add(raw);
   if (/^mlb/i.test(raw)) {
     variants.add(raw.toUpperCase());
@@ -95,4 +111,16 @@ export function getListingGridRow(map, marketplace, externalListingId) {
     }
   }
   return undefined;
+}
+
+/**
+ * Regista valor sob chaves compatíveis com a grid (variantes MLB / slug de marketplace).
+ * @template T
+ * @param {Map<string, T>} map
+ * @param {unknown} marketplace
+ * @param {unknown} externalListingId
+ * @param {T} value
+ */
+export function putListingGridRowValueAliases(map, marketplace, externalListingId, value) {
+  putListingGridRowAliases(map, marketplace, value, () => externalListingId);
 }

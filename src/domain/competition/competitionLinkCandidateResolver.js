@@ -7,6 +7,7 @@ import {
   fetchItem,
   fetchCatalogProduct,
   fetchCatalogProductItemsSafe,
+  searchCatalogProducts,
 } from "../../handlers/ml/_helpers/mercadoLibreItemsApi.js";
 import {
   normalizeDiscoveredCompetitor,
@@ -27,7 +28,11 @@ import {
   reconcileCandidateListingIdFromPermalink,
 } from "./mlListingUrlParser.js";
 import { logCompetitionLinkParseWarning } from "./competitionLinkParseAudit.js";
-import { titleFromMercadoLivrePermalink, buildMercadoLivreItemPermalink } from "./mlListingDisplay.js";
+import {
+  titleFromMercadoLivrePermalink,
+  buildMercadoLivreItemPermalink,
+  extractCatalogProductIdFromPermalink,
+} from "./mlListingDisplay.js";
 import {
   enrichCompetitorListing,
   mergeCompetitorRawFields,
@@ -64,6 +69,28 @@ const INCOMPLETE_MESSAGE =
 const SLUG_AMBIGUOUS_MESSAGE =
   "Encontramos vários anúncios parecidos. Use a aba Buscar por nome para escolher o concorrente certo.";
 const UNRESOLVED_MESSAGE = "Não foi possível identificar o anúncio neste link.";
+
+function normalizeListingIdForAnchor(value) {
+  const raw = value != null ? String(value).trim() : "";
+  if (!raw) return null;
+  return raw.toUpperCase().replace(/-/g, "");
+}
+
+function isSameAnchoredListing(candidateListingId, anchoredItemId) {
+  const cand = normalizeListingIdForAnchor(candidateListingId);
+  const anchor = normalizeListingIdForAnchor(anchoredItemId);
+  return Boolean(cand && anchor && cand === anchor);
+}
+
+function logAnchorGuard({ anchoredItemId, candidateListingId, swapBlocked, reason }) {
+  if (!anchoredItemId) return;
+  console.info("[S7_COMPETITION_LINK_ANCHOR_GUARD]", {
+    anchored_item_id: anchoredItemId,
+    candidate_listing_id: candidateListingId ?? null,
+    swap_blocked: Boolean(swapBlocked),
+    reason: reason || null,
+  });
+}
 
 function buildMinimalCandidateFromLink(listingId, url) {
   const urlTrim = String(url || "").trim();
@@ -158,6 +185,469 @@ function mergeThumbnailIntoCandidate(candidate, rawOrCandidate) {
     (src.secure_thumbnail != null ? String(src.secure_thumbnail) : null);
   if (!thumb) return candidate;
   return { ...candidate, competitor_thumbnail: thumb };
+}
+
+function resolveCatalogProductIdForAnchoredImage({
+  explicitCatalogProductId = null,
+  candidatePermalink = null,
+  rawUrl = null,
+}) {
+  if (explicitCatalogProductId != null && String(explicitCatalogProductId).trim() !== "") {
+    return String(explicitCatalogProductId).trim();
+  }
+  const fromCandidate = extractCatalogProductIdFromPermalink(candidatePermalink);
+  if (fromCandidate) return fromCandidate;
+  const fromRawUrl = extractCatalogProductIdFromPermalink(rawUrl);
+  if (fromRawUrl) return fromRawUrl;
+  return null;
+}
+
+function logAnchoredImageFallbackTrace({
+  anchoredItemId,
+  catalogProductId,
+  imageSourceBefore,
+  imageSourceAfter,
+  thumbnailBefore,
+  thumbnailAfter,
+  fallbackAttempted,
+  fallbackMatchedItem,
+  fallbackSkippedReason,
+}) {
+  if (!anchoredItemId) return;
+  console.info("[S7_COMPETITION_LINK_IMAGE_FALLBACK_TRACE]", {
+    anchored_item_id: anchoredItemId,
+    catalog_product_id: catalogProductId ?? null,
+    image_source_before: imageSourceBefore ?? null,
+    image_source_after: imageSourceAfter ?? null,
+    thumbnail_before: thumbnailBefore ?? null,
+    thumbnail_after: thumbnailAfter ?? null,
+    fallback_attempted: Boolean(fallbackAttempted),
+    fallback_matched_item: Boolean(fallbackMatchedItem),
+    fallback_skipped_reason: fallbackSkippedReason ?? null,
+  });
+}
+
+async function enrichAnchoredThumbnailDeterministic({
+  accessToken,
+  candidate,
+  anchoredItemId,
+  catalogProductId,
+  rawUrl,
+  debug,
+}) {
+  const c = candidate && typeof candidate === "object" ? candidate : null;
+  const anchored = anchoredItemId != null ? String(anchoredItemId).trim() : "";
+  if (!c || !anchored) return candidate;
+
+  const imageSourceBefore = c.competitor_thumbnail ? "existing_thumbnail" : "none";
+  const thumbnailBefore = c.competitor_thumbnail ?? null;
+  let imageSourceAfter = imageSourceBefore;
+  let thumbnailAfter = thumbnailBefore;
+  let fallbackAttempted = false;
+  let fallbackMatchedItem = false;
+  let fallbackSkippedReason = null;
+  let next = c;
+
+  if (c.competitor_thumbnail) {
+    fallbackSkippedReason = "thumbnail_already_present";
+    logAnchoredImageFallbackTrace({
+      anchoredItemId: anchored,
+      catalogProductId,
+      imageSourceBefore,
+      imageSourceAfter,
+      thumbnailBefore,
+      thumbnailAfter,
+      fallbackAttempted,
+      fallbackMatchedItem,
+      fallbackSkippedReason,
+    });
+    return next;
+  }
+
+  const resolvedCatalogProductId = resolveCatalogProductIdForAnchoredImage({
+    explicitCatalogProductId: catalogProductId,
+    candidatePermalink: c.competitor_permalink ?? null,
+    rawUrl,
+  });
+  if (!resolvedCatalogProductId) {
+    fallbackSkippedReason = "image_fallback_skipped:no_catalog_product_id";
+    logAnchoredImageFallbackTrace({
+      anchoredItemId: anchored,
+      catalogProductId: null,
+      imageSourceBefore,
+      imageSourceAfter,
+      thumbnailBefore,
+      thumbnailAfter,
+      fallbackAttempted,
+      fallbackMatchedItem,
+      fallbackSkippedReason,
+    });
+    return next;
+  }
+
+  fallbackAttempted = true;
+  const itemsRes = await fetchCatalogProductItemsSafe(accessToken, resolvedCatalogProductId, { limit: 50 });
+  pushAttempt(debug, {
+    endpoint: `/products/${resolvedCatalogProductId}/items`,
+    status: itemsRes?.status ?? null,
+    fallback: "anchored_image_deterministic_catalog_items",
+    anchored_item_id: anchored,
+  });
+
+  const row = Array.isArray(itemsRes?.results)
+    ? itemsRes.results.find((r) => String(r?.item_id ?? "").trim() === anchored)
+    : null;
+  if (!row) {
+    fallbackSkippedReason = "image_fallback_skipped:anchored_item_not_in_catalog_items";
+    logAnchoredImageFallbackTrace({
+      anchoredItemId: anchored,
+      catalogProductId: resolvedCatalogProductId,
+      imageSourceBefore,
+      imageSourceAfter,
+      thumbnailBefore,
+      thumbnailAfter,
+      fallbackAttempted,
+      fallbackMatchedItem,
+      fallbackSkippedReason,
+    });
+    return next;
+  }
+
+  fallbackMatchedItem = true;
+  let thumb =
+    (row?.secure_thumbnail != null && String(row.secure_thumbnail).trim() !== ""
+      ? String(row.secure_thumbnail).trim()
+      : null) ||
+    (row?.thumbnail != null && String(row.thumbnail).trim() !== ""
+      ? String(row.thumbnail).trim()
+      : null);
+
+  if (!thumb) {
+    const itemRes = await tryFetchItem(accessToken, anchored);
+    pushAttempt(debug, {
+      endpoint: `/items/${anchored}`,
+      status: itemRes?.status ?? null,
+      fallback: "anchored_image_deterministic_item",
+      anchored_item_id: anchored,
+    });
+    if (itemRes?.ok && itemRes?.item) {
+      thumb =
+        itemRes.item?.thumbnail != null && String(itemRes.item.thumbnail).trim() !== ""
+          ? String(itemRes.item.thumbnail).trim()
+          : itemRes.item?.secure_thumbnail != null && String(itemRes.item.secure_thumbnail).trim() !== ""
+            ? String(itemRes.item.secure_thumbnail).trim()
+            : pickItemThumbnail(itemRes.item);
+    }
+  }
+
+  if (!thumb) {
+    try {
+      const detail = await fetchCatalogProduct(accessToken, resolvedCatalogProductId);
+      pushAttempt(debug, {
+        endpoint: `/products/${resolvedCatalogProductId}`,
+        status: 200,
+        fallback: "anchored_image_deterministic_catalog_detail",
+        anchored_item_id: anchored,
+      });
+      thumb = pickCatalogProductThumbnail(detail);
+      if (thumb) {
+        imageSourceAfter = "anchored_catalog_detail_match";
+      }
+    } catch (e) {
+      pushAttempt(debug, {
+        endpoint: `/products/${resolvedCatalogProductId}`,
+        status: e?.status ?? null,
+        fallback: "anchored_image_deterministic_catalog_detail",
+        anchored_item_id: anchored,
+      });
+    }
+  } else {
+    imageSourceAfter = "anchored_item_match";
+  }
+
+  if (!thumb) {
+    fallbackSkippedReason = "image_fallback_skipped:anchored_match_without_image";
+    logAnchoredImageFallbackTrace({
+      anchoredItemId: anchored,
+      catalogProductId: resolvedCatalogProductId,
+      imageSourceBefore,
+      imageSourceAfter,
+      thumbnailBefore,
+      thumbnailAfter,
+      fallbackAttempted,
+      fallbackMatchedItem,
+      fallbackSkippedReason,
+    });
+    return next;
+  }
+
+  next = { ...c, competitor_thumbnail: thumb };
+  thumbnailAfter = thumb;
+  logAnchoredImageFallbackTrace({
+    anchoredItemId: anchored,
+    catalogProductId: resolvedCatalogProductId,
+    imageSourceBefore,
+    imageSourceAfter,
+    thumbnailBefore,
+    thumbnailAfter,
+    fallbackAttempted,
+    fallbackMatchedItem,
+    fallbackSkippedReason,
+  });
+  return next;
+}
+
+function decodeHtmlEntities(text) {
+  return String(text || "")
+    .replace(/&amp;/g, "&")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&#(\d+);/g, (_, d) => String.fromCharCode(Number(d)));
+}
+
+function extractMetaContent(html, propName) {
+  const safe = String(propName).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const rgxA = new RegExp(
+    `<meta[^>]+(?:property|name)=["']${safe}["'][^>]+content=["']([^"']+)["'][^>]*>`,
+    "i"
+  );
+  const rgxB = new RegExp(
+    `<meta[^>]+content=["']([^"']+)["'][^>]+(?:property|name)=["']${safe}["'][^>]*>`,
+    "i"
+  );
+  const m = html.match(rgxA) || html.match(rgxB);
+  return m?.[1] ? decodeHtmlEntities(m[1]).trim() : null;
+}
+
+function extractHtmlTitle(html) {
+  const m = String(html || "").match(/<title[^>]*>([^<]+)<\/title>/i);
+  if (!m?.[1]) return null;
+  const t = decodeHtmlEntities(m[1]).trim();
+  return t || null;
+}
+
+async function enrichCandidateFromPublicPage(rawUrl, candidate, debug) {
+  const c = candidate && typeof candidate === "object" ? candidate : null;
+  if (!c) return candidate;
+  const needsTitle = !c.competitor_title;
+  const needsThumb = !c.competitor_thumbnail;
+  if (!needsTitle && !needsThumb) return candidate;
+
+  const url = String(rawUrl || "").trim();
+  if (!url.startsWith("http")) return candidate;
+  if (!/mercadolivre\.com\.br|mercadolibre\.com/i.test(url)) return candidate;
+
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 4500);
+    const resp = await fetch(url, {
+      method: "GET",
+      redirect: "follow",
+      headers: { "User-Agent": "Mozilla/5.0 (compatible; S7Bot/1.0)" },
+      signal: controller.signal,
+    });
+    clearTimeout(timer);
+    const html = await resp.text();
+    const ogTitle = extractMetaContent(html, "og:title");
+    const ogImage = extractMetaContent(html, "og:image");
+    const pageTitle = extractHtmlTitle(html);
+    const resolvedTitle =
+      c.competitor_title ||
+      titleFromMercadoLivrePermalink(url) ||
+      ogTitle ||
+      pageTitle ||
+      null;
+    const resolvedThumb = c.competitor_thumbnail || ogImage || null;
+    pushAttempt(debug, {
+      endpoint: url,
+      status: resp.status,
+      fallback: "public_page_og",
+      has_title: Boolean(resolvedTitle),
+      has_thumbnail: Boolean(resolvedThumb),
+    });
+    return {
+      ...c,
+      competitor_title: resolvedTitle,
+      competitor_thumbnail: resolvedThumb,
+      competitor_permalink: c.competitor_permalink || url,
+    };
+  } catch (e) {
+    pushAttempt(debug, {
+      endpoint: url,
+      status: e?.status ?? null,
+      fallback: "public_page_og",
+      error: String(e?.message ?? e).slice(0, 120),
+    });
+    const fallbackTitle = c.competitor_title || titleFromMercadoLivrePermalink(url) || null;
+    if (fallbackTitle && !c.competitor_title) {
+      return {
+        ...c,
+        competitor_title: fallbackTitle,
+        competitor_permalink: c.competitor_permalink || url,
+      };
+    }
+    return candidate;
+  }
+}
+
+async function enrichCandidateFromSiteSearch(accessToken, candidate, debug) {
+  const c = candidate && typeof candidate === "object" ? candidate : null;
+  if (!c) return candidate;
+  const needsTitle = !c.competitor_title;
+  const needsThumb = !c.competitor_thumbnail;
+  if (!needsTitle && !needsThumb) return candidate;
+  const listingId = c.competitor_listing_id != null ? String(c.competitor_listing_id).trim() : "";
+  if (!listingId) return candidate;
+
+  try {
+    const url = `https://api.mercadolibre.com/sites/MLB/search?q=${encodeURIComponent(listingId)}&limit=15`;
+    const resp = await fetch(url, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    const body = await resp.json().catch(() => ({}));
+    const results = Array.isArray(body?.results) ? body.results : [];
+    const hit =
+      results.find((it) => String(it?.id ?? "").trim() === listingId) ??
+      results.find((it) => String(it?.id ?? "").trim().toUpperCase() === listingId.toUpperCase()) ??
+      null;
+
+    pushAttempt(debug, {
+      endpoint: "/sites/MLB/search",
+      status: resp.status,
+      fallback: "search_by_listing_id",
+      count: results.length,
+      hit: Boolean(hit),
+    });
+
+    if (!hit) return candidate;
+
+    const title = hit?.title != null ? String(hit.title).trim() : null;
+    const thumb =
+      hit?.thumbnail != null && String(hit.thumbnail).trim() !== ""
+        ? String(hit.thumbnail).trim()
+        : hit?.secure_thumbnail != null && String(hit.secure_thumbnail).trim() !== ""
+          ? String(hit.secure_thumbnail).trim()
+          : null;
+    const permalink = hit?.permalink != null ? String(hit.permalink).trim() : null;
+
+    return {
+      ...c,
+      competitor_title: c.competitor_title || title || null,
+      competitor_thumbnail: c.competitor_thumbnail || thumb || null,
+      competitor_permalink: c.competitor_permalink || permalink || c.competitor_permalink,
+    };
+  } catch (e) {
+    pushAttempt(debug, {
+      endpoint: "/sites/MLB/search",
+      status: e?.status ?? null,
+      fallback: "search_by_listing_id",
+      error: String(e?.message ?? e).slice(0, 120),
+    });
+    return candidate;
+  }
+}
+
+async function enrichThumbnailFromCatalogSearch(
+  accessToken,
+  candidate,
+  rawUrl,
+  debug,
+  targetCatalogProductId = null
+) {
+  const c = candidate && typeof candidate === "object" ? candidate : null;
+  if (!c || c.competitor_thumbnail) return candidate;
+  const listingId = c.competitor_listing_id != null ? String(c.competitor_listing_id).trim() : "";
+  if (!listingId) return candidate;
+  const query = c.competitor_title || titleFromMercadoLivrePermalink(rawUrl) || null;
+  if (!query) return candidate;
+
+  try {
+    const searched = await searchCatalogProducts(accessToken, {
+      siteId: "MLB",
+      q: query,
+      status: "active",
+      limit: 20,
+      offset: 0,
+    });
+    const products = Array.isArray(searched?.results) ? searched.results : [];
+    pushAttempt(debug, {
+      endpoint: "/products/search",
+      status: 200,
+      fallback: "catalog_search_thumbnail_fill",
+      query: String(query).slice(0, 80),
+      count: products.length,
+    });
+
+    const targetCatalog =
+      targetCatalogProductId != null ? String(targetCatalogProductId).trim().toUpperCase() : "";
+
+    const fetchProductItemsPages = async (productId) => {
+      const pages = [];
+      let total = null;
+      for (let offset = 0; offset <= 200; offset += 50) {
+        const page = await fetchCatalogProductItemsSafe(accessToken, productId, { limit: 50, offset });
+        pages.push(page);
+        const pageTotal = Number(page?.paging?.total);
+        if (Number.isFinite(pageTotal) && pageTotal >= 0) total = pageTotal;
+        const currentCount = Array.isArray(page?.results) ? page.results.length : 0;
+        if (currentCount < 50) break;
+        if (total != null && offset + 50 >= total) break;
+      }
+      return pages;
+    };
+
+    for (const p of products.slice(0, 12)) {
+      const productId = p?.id != null ? String(p.id).trim() : "";
+      if (!productId) continue;
+      const thumb = pickCatalogProductThumbnail(p);
+      if (!thumb) continue;
+      const pages = await fetchProductItemsPages(productId);
+      const allRows = pages.flatMap((pg) => (Array.isArray(pg?.results) ? pg.results : []));
+      const catalogMatch = targetCatalog
+        ? allRows.some((row) => {
+            const up = row?.user_product_id != null ? String(row.user_product_id).trim().toUpperCase() : "";
+            return up !== "" && up === targetCatalog;
+          })
+        : false;
+      if (catalogMatch) {
+        pushAttempt(debug, {
+          endpoint: `/products/${productId}/items`,
+          status: pages[0]?.status ?? null,
+          fallback: "catalog_search_thumbnail_catalog_match",
+          listing_id: listingId,
+          target_catalog: targetCatalog,
+          has_thumbnail: true,
+          pages_scanned: pages.length,
+        });
+        return { ...c, competitor_thumbnail: thumb };
+      }
+      const hit = allRows.some(
+        (row) => row?.item_id != null && String(row.item_id).trim() === listingId
+      );
+      if (hit) {
+        pushAttempt(debug, {
+          endpoint: `/products/${productId}/items`,
+          status: pages[0]?.status ?? null,
+          fallback: "catalog_search_thumbnail_match",
+          listing_id: listingId,
+          has_thumbnail: true,
+          pages_scanned: pages.length,
+        });
+        return { ...c, competitor_thumbnail: thumb };
+      }
+    }
+  } catch (e) {
+    pushAttempt(debug, {
+      endpoint: "/products/search",
+      status: e?.status ?? null,
+      fallback: "catalog_search_thumbnail_fill",
+      error: String(e?.message ?? e).slice(0, 120),
+    });
+  }
+
+  return candidate;
 }
 
 /** Completa imagem/meta via discovery quando o item API trouxe só o básico. */
@@ -308,18 +798,32 @@ async function resolveFromCatalogProduct(accessToken, productId, debug, targetLi
     fallback: "catalog_items",
   });
 
+  let catalogDetail = null;
+  try {
+    catalogDetail = await fetchCatalogProduct(accessToken, productId);
+    meta.name = catalogDetail?.name != null ? String(catalogDetail.name) : null;
+    meta.thumbnail = pickCatalogProductThumbnail(catalogDetail);
+    pushAttempt(debug, {
+      endpoint: `/products/${productId}`,
+      status: 200,
+      fallback: "catalog_detail_seed",
+      has_name: Boolean(meta.name),
+      has_thumbnail: Boolean(meta.thumbnail),
+    });
+  } catch (e) {
+    pushAttempt(debug, {
+      endpoint: `/products/${productId}`,
+      status: e?.status ?? null,
+      body: safeBodySummary(e?.body),
+      fallback: "catalog_detail_seed",
+    });
+  }
+
   if (targetListingId) {
     const row = itemsRes.results.find(
       (r) => r?.item_id != null && String(r.item_id).trim() === String(targetListingId).trim()
     );
     if (row) {
-      try {
-        const detail = await fetchCatalogProduct(accessToken, productId);
-        meta.name = detail?.name != null ? String(detail.name) : null;
-        meta.thumbnail = pickCatalogProductThumbnail(detail);
-      } catch {
-        /* ignore */
-      }
       const raw = mlCatalogItemRowToCandidateRaw(row, meta);
       if (raw?.competitor_listing_id) return { raw, via: "catalog_items_match" };
     }
@@ -333,9 +837,7 @@ async function resolveFromCatalogProduct(accessToken, productId, debug, targetLi
   }
 
   try {
-    const detail = await fetchCatalogProduct(accessToken, productId);
-    meta.name = detail?.name != null ? String(detail.name) : null;
-    meta.thumbnail = pickCatalogProductThumbnail(detail);
+    const detail = catalogDetail ?? (await fetchCatalogProduct(accessToken, productId));
     const bbRaw = mlBuyBoxWinnerToCandidateRaw(detail, meta);
     if (bbRaw?.competitor_listing_id) return { raw: bbRaw, via: "buy_box_winner" };
   } catch (e) {
@@ -381,6 +883,46 @@ async function enrichSellerOnRaw(accessToken, raw, debug, linkDebug) {
   if (profile?.nickname && !raw.competitor_store_name) raw.competitor_store_name = profile.nickname;
   if (profile?.reputation && !raw.reputation) raw.reputation = profile.reputation;
   return raw;
+}
+
+async function enrichSellerOnCandidate(accessToken, candidate, debug, linkDebug) {
+  if (!candidate?.competitor_seller_id || candidate?.competitor_store_name) return candidate;
+  const { profile } = await fetchSellerProfile(accessToken, candidate.competitor_seller_id, linkDebug);
+  pushAttempt(debug, {
+    endpoint: `/users/${candidate.competitor_seller_id}`,
+    status: profile ? 200 : null,
+    fallback: "seller_profile_candidate",
+  });
+  if (!profile) return candidate;
+  return {
+    ...candidate,
+    competitor_store_name: candidate.competitor_store_name || profile.nickname || null,
+    reputation: candidate.reputation || profile.reputation || null,
+  };
+}
+
+async function enrichThumbnailFromCatalogProduct(accessToken, candidate, catalogProductId, debug) {
+  if (!candidate || candidate.competitor_thumbnail || !catalogProductId) return candidate;
+  try {
+    const detail = await fetchCatalogProduct(accessToken, catalogProductId);
+    const thumb = pickCatalogProductThumbnail(detail);
+    pushAttempt(debug, {
+      endpoint: `/products/${catalogProductId}`,
+      status: 200,
+      fallback: "catalog_thumbnail_fill",
+      has_pictures: Boolean(thumb),
+    });
+    if (!thumb) return candidate;
+    return { ...candidate, competitor_thumbnail: thumb };
+  } catch (e) {
+    pushAttempt(debug, {
+      endpoint: `/products/${catalogProductId}`,
+      status: e?.status ?? null,
+      body: safeBodySummary(e?.body),
+      fallback: "catalog_thumbnail_fill",
+    });
+    return candidate;
+  }
 }
 
 function finalizeFailure({
@@ -547,6 +1089,8 @@ export async function resolveCompetitionCandidateFromLink({
   }
 
   let baseRaw = null;
+  const anchoredItemId = parsed.itemId != null ? String(parsed.itemId).trim() : null;
+  linkDebug.anchored_item_id = anchoredItemId;
   let listingId = parsed.itemId ?? (parsed.idType === "item" ? parsed.id : null);
   let resolvedVia = null;
   const permalink = resolvePermalinkFromUrl(rawUrl, listingId || parsed.catalogProductId || parsed.id);
@@ -814,12 +1358,37 @@ export async function resolveCompetitionCandidateFromLink({
 
   let candidate = normalizeDiscoveredCompetitor(mergedRaw, SOURCE_STRATEGY);
   candidate = mergeThumbnailIntoCandidate(candidate, mergedRaw);
+  candidate = await enrichThumbnailFromCatalogProduct(
+    accessToken,
+    candidate,
+    parsed.catalogProductId,
+    debug,
+  );
+  candidate = await enrichSellerOnCandidate(accessToken, candidate, debug, linkDebug);
+  candidate = await enrichCandidateFromSiteSearch(accessToken, candidate, debug);
+  candidate = await enrichThumbnailFromCatalogSearch(
+    accessToken,
+    candidate,
+    rawUrl,
+    debug,
+    parsed.catalogProductId ?? null
+  );
+  candidate = await enrichCandidateFromPublicPage(rawUrl, candidate, debug);
+  candidate = await enrichAnchoredThumbnailDeterministic({
+    accessToken,
+    candidate,
+    anchoredItemId,
+    catalogProductId: parsed.catalogProductId ?? null,
+    rawUrl,
+    debug,
+  });
   let sourceStrategy = SOURCE_STRATEGY;
   let health = assessLinkCandidateHealth(candidate);
 
   // OBRIGATÓRIO: fallback discovery quando incompleto
   if (!health.healthy) {
     pushLinkDebugStep(linkDebug, "discovery_fallback_required");
+    const candidateBeforeDiscovery = candidate;
     const discovery = await runDiscoveryFallback({
       accessToken,
       userId,
@@ -830,7 +1399,13 @@ export async function resolveCompetitionCandidateFromLink({
       permalink,
       parsed,
       rawUrl,
-      titleHint: candidate.competitor_title || mergedRaw?.competitor_title,
+      titleHint:
+        candidate.competitor_title ||
+        mergedRaw?.competitor_title ||
+        parsed?.slug ||
+        listingRow?.title ||
+        product?.product_name ||
+        null,
       linkDebug,
       reason: health.missing_required_fields?.length
         ? `missing:${health.missing_required_fields.join(",")}`
@@ -838,10 +1413,55 @@ export async function resolveCompetitionCandidateFromLink({
     });
 
     if (discovery?.candidate) {
-      candidate = mergeThumbnailIntoCandidate(discovery.candidate, discovery.candidate);
-      sourceStrategy = discovery.source_strategy;
+      const discoveredListingId = discovery?.candidate?.competitor_listing_id ?? null;
+      const anchorMatchesDiscovery =
+        !anchoredItemId || isSameAnchoredListing(discoveredListingId, anchoredItemId);
+      logAnchorGuard({
+        anchoredItemId,
+        candidateListingId: discoveredListingId,
+        swapBlocked: !anchorMatchesDiscovery,
+        reason: anchorMatchesDiscovery
+          ? `discovery_fallback_allowed:${discovery.matched_by ?? "unknown"}`
+          : `discovery_fallback_blocked:${discovery.matched_by ?? "unknown"}`,
+      });
+      if (!anchorMatchesDiscovery) {
+        linkDebug.anchor_swap_blocked = true;
+        linkDebug.anchor_swap_reason = "discovery_candidate_listing_mismatch";
+        candidate = candidateBeforeDiscovery;
+      } else {
+        candidate = discovery.candidate;
+        linkDebug.anchor_swap_blocked = false;
+      }
+      candidate = mergeThumbnailIntoCandidate(candidate, candidate);
+      candidate = await enrichThumbnailFromCatalogProduct(
+        accessToken,
+        candidate,
+        parsed.catalogProductId,
+        debug,
+      );
+      candidate = await enrichSellerOnCandidate(accessToken, candidate, debug, linkDebug);
+      candidate = await enrichCandidateFromSiteSearch(accessToken, candidate, debug);
+      candidate = await enrichThumbnailFromCatalogSearch(
+        accessToken,
+        candidate,
+        rawUrl,
+        debug,
+        parsed.catalogProductId ?? null
+      );
+      candidate = await enrichCandidateFromPublicPage(rawUrl, candidate, debug);
+      candidate = await enrichAnchoredThumbnailDeterministic({
+        accessToken,
+        candidate,
+        anchoredItemId,
+        catalogProductId: parsed.catalogProductId ?? null,
+        rawUrl,
+        debug,
+      });
+      if (anchorMatchesDiscovery) {
+        sourceStrategy = discovery.source_strategy;
+        resolvedVia = `discovery_${discovery.matched_by}`;
+      }
       health = assessLinkCandidateHealth(candidate);
-      resolvedVia = `discovery_${discovery.matched_by}`;
     } else if (!product?.id) {
       linkDebug.discovery_match_reason = "product_context_missing";
     }
@@ -909,6 +1529,30 @@ export async function resolveCompetitionCandidateFromLink({
         rawUrl,
       });
       candidate = mergeThumbnailIntoCandidate(completed.candidate, completed.candidate);
+      candidate = await enrichThumbnailFromCatalogProduct(
+        accessToken,
+        candidate,
+        parsed.catalogProductId,
+        debug,
+      );
+      candidate = await enrichSellerOnCandidate(accessToken, candidate, debug, linkDebug);
+      candidate = await enrichCandidateFromSiteSearch(accessToken, candidate, debug);
+      candidate = await enrichThumbnailFromCatalogSearch(
+        accessToken,
+        candidate,
+        rawUrl,
+        debug,
+        parsed.catalogProductId ?? null
+      );
+      candidate = await enrichCandidateFromPublicPage(rawUrl, candidate, debug);
+      candidate = await enrichAnchoredThumbnailDeterministic({
+        accessToken,
+        candidate,
+        anchoredItemId,
+        catalogProductId: parsed.catalogProductId ?? null,
+        rawUrl,
+        debug,
+      });
       sourceStrategy = completed.sourceStrategy;
       const boosted = await ensureCandidateBoostFromDiscovery({
         accessToken,
@@ -924,9 +1568,62 @@ export async function resolveCompetitionCandidateFromLink({
           : resolvedVia,
       });
       candidate = mergeThumbnailIntoCandidate(boosted.candidate, boosted.candidate);
+      candidate = await enrichThumbnailFromCatalogProduct(
+        accessToken,
+        candidate,
+        parsed.catalogProductId,
+        debug,
+      );
+      candidate = await enrichSellerOnCandidate(accessToken, candidate, debug, linkDebug);
+      candidate = await enrichCandidateFromSiteSearch(accessToken, candidate, debug);
+      candidate = await enrichThumbnailFromCatalogSearch(
+        accessToken,
+        candidate,
+        rawUrl,
+        debug,
+        parsed.catalogProductId ?? null
+      );
+      candidate = await enrichCandidateFromPublicPage(rawUrl, candidate, debug);
+      candidate = await enrichAnchoredThumbnailDeterministic({
+        accessToken,
+        candidate,
+        anchoredItemId,
+        catalogProductId: parsed.catalogProductId ?? null,
+        rawUrl,
+        debug,
+      });
       sourceStrategy = boosted.sourceStrategy;
       health = assessLinkCandidateHealth(candidate);
       if (health.healthy) {
+        if (anchoredItemId && !isSameAnchoredListing(candidate.competitor_listing_id, anchoredItemId)) {
+          logAnchorGuard({
+            anchoredItemId,
+            candidateListingId: candidate.competitor_listing_id ?? null,
+            swapBlocked: true,
+            reason: "final_complete_candidate_listing_mismatch_forced_partial",
+          });
+          const anchoredRaw = mergeCompetitorRawFields(
+            buildMinimalCandidateFromLink(anchoredItemId, rawUrl),
+            mergedRaw
+          );
+          anchoredRaw.competitor_listing_id = anchoredItemId;
+          const anchoredCandidate = normalizeDiscoveredCompetitor(anchoredRaw, SOURCE_STRATEGY);
+          return returnPartialPreview({
+            candidate: anchoredCandidate,
+            sourceStrategy: SOURCE_STRATEGY,
+            resolvedVia: "anchor_guard_forced_partial",
+            linkDebug,
+            enrichOut,
+            debug,
+            itemFetchStatus,
+          });
+        }
+        logAnchorGuard({
+          anchoredItemId,
+          candidateListingId: candidate.competitor_listing_id ?? null,
+          swapBlocked: false,
+          reason: "final_complete_candidate_listing_matches_anchor",
+        });
         candidate = finalizeLinkCandidate(candidate, rawUrl);
         return {
           ok: true,
@@ -974,8 +1671,52 @@ export async function resolveCompetitionCandidateFromLink({
     resolvedVia: resolvedVia ?? enrichOut?.enrichSource ?? "enriched",
   });
   candidate = metaDone.candidate;
+  candidate = await enrichThumbnailFromCatalogProduct(
+    accessToken,
+    candidate,
+    parsed.catalogProductId,
+    debug,
+  );
+  candidate = await enrichSellerOnCandidate(accessToken, candidate, debug, linkDebug);
+  candidate = await enrichAnchoredThumbnailDeterministic({
+    accessToken,
+    candidate,
+    anchoredItemId,
+    catalogProductId: parsed.catalogProductId ?? null,
+    rawUrl,
+    debug,
+  });
   sourceStrategy = metaDone.sourceStrategy;
   health = assessLinkCandidateHealth(candidate);
+  if (anchoredItemId && !isSameAnchoredListing(candidate.competitor_listing_id, anchoredItemId)) {
+    logAnchorGuard({
+      anchoredItemId,
+      candidateListingId: candidate.competitor_listing_id ?? null,
+      swapBlocked: true,
+      reason: "final_candidate_listing_mismatch_forced_partial",
+    });
+    const anchoredRaw = mergeCompetitorRawFields(
+      buildMinimalCandidateFromLink(anchoredItemId, rawUrl),
+      mergedRaw
+    );
+    anchoredRaw.competitor_listing_id = anchoredItemId;
+    const anchoredCandidate = normalizeDiscoveredCompetitor(anchoredRaw, SOURCE_STRATEGY);
+    return returnPartialPreview({
+      candidate: anchoredCandidate,
+      sourceStrategy: SOURCE_STRATEGY,
+      resolvedVia: "anchor_guard_forced_partial",
+      linkDebug,
+      enrichOut,
+      debug,
+      itemFetchStatus,
+    });
+  }
+  logAnchorGuard({
+    anchoredItemId,
+    candidateListingId: candidate.competitor_listing_id ?? null,
+    swapBlocked: false,
+    reason: "final_candidate_listing_matches_anchor",
+  });
   candidate = finalizeLinkCandidate(candidate, rawUrl);
 
   return {

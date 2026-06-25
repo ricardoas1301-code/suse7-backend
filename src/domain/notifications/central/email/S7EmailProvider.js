@@ -170,6 +170,64 @@ function maskEmailForLog(email) {
 }
 
 /**
+ * @param {string} dataUri
+ * @returns {string}
+ */
+function dataUriToBase64Payload(dataUri) {
+  const value = String(dataUri ?? "").trim();
+  if (!value) return "";
+  const marker = "base64,";
+  const idx = value.indexOf(marker);
+  if (idx >= 0) return value.slice(idx + marker.length);
+  if (!value.startsWith("data:")) return value;
+  return "";
+}
+
+/**
+ * @param {Record<string, unknown>} [metadata]
+ * @returns {Array<{ filename: string; content: string; content_id?: string }>}
+ */
+function buildResendAttachmentsFromMetadata(metadata) {
+  const meta = metadata && typeof metadata === "object" ? metadata : {};
+  if (meta.share_email_file_attachments !== true) return [];
+
+  /** @type {Array<{ filename: string; content: string; content_id?: string }>} */
+  const attachments = [];
+
+  const logoContent = dataUriToBase64Payload(meta.s7_mail_logo_data_uri);
+  if (logoContent) {
+    attachments.push({
+      filename: String(meta.s7_mail_logo_filename ?? "").trim() || "suse7-logo-abreviada.png",
+      content: logoContent,
+      content_id: "s7_mail_logo",
+    });
+  }
+
+  const imageContent = dataUriToBase64Payload(meta.share_image_data_uri);
+  if (imageContent) {
+    /** @type {{ filename: string; content: string; content_id?: string }} */
+    const imageAttachment = {
+      filename: String(meta.share_image_filename ?? "").trim() || "resumo-executivo.png",
+      content: imageContent,
+    };
+    if (meta.share_image_inline === true) {
+      imageAttachment.content_id = String(meta.share_image_content_id ?? "").trim() || "s7_report_summary";
+    }
+    attachments.push(imageAttachment);
+  }
+
+  const documentContent = dataUriToBase64Payload(meta.share_document_data_uri);
+  if (documentContent) {
+    attachments.push({
+      filename: String(meta.share_document_filename ?? "").trim() || "relatorio.xlsx",
+      content: documentContent,
+    });
+  }
+
+  return attachments;
+}
+
+/**
  * @param {S7EmailSendInput} input
  * @param {string} to
  * @returns {Promise<S7EmailSendResult>}
@@ -179,6 +237,7 @@ async function sendViaResend(input, to) {
   if (!apiKey) return { ok: false, error: "RESEND_NOT_CONFIGURED" };
 
   const from = config.s7EmailFrom || "Suse7 <notificacoes@suse7.com.br>";
+  const attachments = buildResendAttachmentsFromMetadata(input.metadata);
   const res = await fetch("https://api.resend.com/emails", {
     method: "POST",
     headers: {
@@ -191,6 +250,7 @@ async function sendViaResend(input, to) {
       subject: input.subject,
       html: input.html,
       text: input.text,
+      ...(attachments.length > 0 ? { attachments } : {}),
     }),
   });
 

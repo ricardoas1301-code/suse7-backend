@@ -17,6 +17,12 @@ import {
   formatMercadoLivreListingTypeLabel,
   ML_FINANCIAL_SNAPSHOT_VERSION,
 } from "../../domain/sales/mercadoLivreSaleRevenueRules.js";
+import {
+  buildSaleDetailInternalCostsContract,
+  computeSaleDetailRealResult,
+  resolveSaleInternalTaxProfile,
+  saleDetailMoneyToDecimal as toMoneyDecimal,
+} from "../../domain/sales/saleDetailInternalCosts.js";
 
 export const ML_FINANCIAL_ENRICHMENT_SOURCE = "mercado_livre_financial_enrichment_v1";
 export { ML_FINANCIAL_SNAPSHOT_VERSION };
@@ -31,6 +37,227 @@ function pickTrim(v) {
   if (v == null) return "";
   const s = String(v).trim();
   return s;
+}
+
+/**
+ * @param {unknown} v
+ */
+function isUuidLike(v) {
+  const s = pickTrim(v);
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(s);
+}
+
+/**
+ * @param {{
+ *   snapshot_origin?: string | null;
+ *   reconstruction_reference_date?: string | null;
+ * }} ctx
+ * @param {Record<string, unknown> | null | undefined} existing
+ * @param {string} nowIso
+ */
+function resolveFinancialSnapshotMetadata(ctx, existing, nowIso) {
+  const existingOrigin = pickTrim(existing?.snapshot_origin);
+  const requestedOrigin = pickTrim(ctx.snapshot_origin);
+  const origin = existingOrigin || requestedOrigin || "post_suse7_sale";
+
+  if (origin === "onboarding_import") {
+    return {
+      snapshot_origin: "onboarding_import",
+      snapshot_quality: "reconstructed",
+      estimated: true,
+      reconstructed_at: pickTrim(existing?.reconstructed_at) || nowIso,
+      reconstruction_reference_date:
+        pickTrim(existing?.reconstruction_reference_date) ||
+        pickTrim(ctx.reconstruction_reference_date) ||
+        nowIso,
+      snapshot_created_at: null,
+      immutable_since: pickTrim(existing?.immutable_since) || nowIso,
+    };
+  }
+
+  return {
+    snapshot_origin: "post_suse7_sale",
+    snapshot_quality: "historical",
+    estimated: false,
+    reconstructed_at: null,
+    reconstruction_reference_date: null,
+    snapshot_created_at: pickTrim(existing?.snapshot_created_at) || nowIso,
+    immutable_since: pickTrim(existing?.immutable_since) || nowIso,
+  };
+}
+
+/**
+ * @param {unknown} v
+ * @returns {Record<string, unknown> | null}
+ */
+function toSnapshotObject(v) {
+  return v && typeof v === "object" ? /** @type {Record<string, unknown>} */ (v) : null;
+}
+
+/**
+ * @param {Record<string, unknown> | null | undefined} existingFinancial
+ * @param {string} key
+ * @returns {Record<string, unknown> | null}
+ */
+function pickExistingSnapshot(existingFinancial, key) {
+  const snap = toSnapshotObject(existingFinancial?.[key]);
+  return snap ? { ...snap } : null;
+}
+
+/**
+ * @param {Record<string, unknown>} opts
+ */
+function buildDerivedHistoricalFinancialSnapshots(opts) {
+  const existingFinancial = toSnapshotObject(opts.existingFinancial);
+  const snapshotMeta = toSnapshotObject(opts.snapshotMeta) ?? {};
+
+  const existingInternal = pickExistingSnapshot(existingFinancial, "internal_costs_snapshot");
+  const existingProduct = pickExistingSnapshot(existingFinancial, "product_cost_snapshot");
+  const existingTax = pickExistingSnapshot(existingFinancial, "tax_snapshot");
+  const existingOperational = pickExistingSnapshot(existingFinancial, "operational_cost_snapshot");
+  const existingAds = pickExistingSnapshot(existingFinancial, "ads_snapshot");
+  const existingProfit = pickExistingSnapshot(existingFinancial, "profit_snapshot");
+  const existingMargin = pickExistingSnapshot(existingFinancial, "margin_snapshot");
+
+  const qtyRaw =
+    opts.itemRow?.quantity != null
+      ? Number(opts.itemRow.quantity)
+      : opts.revenue?.quantity != null
+        ? Number(opts.revenue.quantity)
+        : 1;
+  const qty = Number.isFinite(qtyRaw) && qtyRaw > 0 ? Math.trunc(qtyRaw) : 1;
+
+  const grossDec = toMoneyDecimal(opts.revenue?.gross_sale_amount_brl);
+  const netDec = toMoneyDecimal(opts.revenue?.net_received_amount_brl);
+  const productId =
+    opts.itemRow?.product_id != null && String(opts.itemRow.product_id).trim() !== ""
+      ? String(opts.itemRow.product_id).trim()
+      : opts.productRow?.id != null && String(opts.productRow.id).trim() !== ""
+        ? String(opts.productRow.id).trim()
+        : null;
+  const taxPercent = opts.taxProfile?.tax_percent != null ? String(opts.taxProfile.tax_percent) : null;
+  const taxPercentSource =
+    opts.taxProfile?.source != null && String(opts.taxProfile.source).trim() !== ""
+      ? String(opts.taxProfile.source).trim()
+      : null;
+
+  const internalCosts = buildSaleDetailInternalCostsContract({
+    item: opts.itemRow,
+    product: opts.productRow ?? null,
+    productId,
+    qty,
+    grossDec,
+    taxPercent,
+    taxPercentSource,
+    seller_company_id:
+      opts.taxProfile?.seller_company_id != null ? String(opts.taxProfile.seller_company_id) : null,
+    marketplace_account_id:
+      opts.taxProfile?.marketplace_account_id != null ? String(opts.taxProfile.marketplace_account_id) : null,
+  });
+
+  const result = computeSaleDetailRealResult({
+    netReceivedDec: netDec,
+    internalCosts,
+    contingencyDec: null,
+  });
+
+  const marginPercent =
+    result.profitDec != null && grossDec != null && !grossDec.isZero()
+      ? result.profitDec.div(grossDec).mul(100).toDecimalPlaces(2, Decimal.ROUND_HALF_UP).toFixed(2)
+      : null;
+
+  const existingContingency = pickExistingSnapshot(existingFinancial, "contingency_margin_snapshot");
+  const adsAmount =
+    existingAds?.amount_brl ??
+    existingAds?.ml_ads_brl ??
+    existingContingency?.ml_ads_brl ??
+    null;
+  const reserveAmount =
+    existingOperational?.reserve_brl ??
+    existingOperational?.operational_costs_brl ??
+    existingContingency?.reserve_brl ??
+    existingContingency?.safety_reserve_brl ??
+    existingContingency?.reserve_amount_brl ??
+    null;
+
+  const estimatedFlag = Boolean(snapshotMeta.estimated) || internalCosts.confidence !== "persisted";
+  const snapshotQuality =
+    snapshotMeta.snapshot_quality != null && String(snapshotMeta.snapshot_quality).trim() !== ""
+      ? String(snapshotMeta.snapshot_quality).trim()
+      : estimatedFlag
+        ? "reconstructed"
+        : "historical";
+
+  return {
+    internal_costs_snapshot:
+      existingInternal ??
+      {
+        product_cost_brl: internalCosts.product_cost_brl,
+        internal_tax_brl: internalCosts.internal_tax_brl,
+        packaging_cost_brl: internalCosts.packaging_cost_brl,
+        operation_cost_brl: internalCosts.operation_cost_brl,
+        operation_packaging_cost_brl: internalCosts.operation_packaging_cost_brl,
+        total_internal_cost_brl: internalCosts.total_internal_cost_brl,
+        tax_percent_applied: internalCosts.tax_percent_applied,
+        source: internalCosts.source,
+        confidence: internalCosts.confidence,
+        snapshot_quality: snapshotQuality,
+        snapshot_version: "s7_internal_costs_v1",
+        estimated: estimatedFlag,
+        seller_company_id: internalCosts.seller_company_id,
+        marketplace_account_id: internalCosts.marketplace_account_id,
+      },
+    product_cost_snapshot:
+      existingProduct ??
+      {
+        amount_brl: internalCosts.product_cost_brl,
+        source: internalCosts.source?.product_cost ?? null,
+        estimated: estimatedFlag,
+      },
+    tax_snapshot:
+      existingTax ??
+      {
+        amount_brl: internalCosts.internal_tax_brl,
+        tax_percent_applied: internalCosts.tax_percent_applied,
+        source: internalCosts.source?.internal_tax ?? null,
+        estimated: estimatedFlag,
+      },
+    operational_cost_snapshot:
+      existingOperational ??
+      {
+        operation_packaging_cost_brl: internalCosts.operation_packaging_cost_brl,
+        operation_cost_brl: internalCosts.operation_cost_brl,
+        packaging_cost_brl: internalCosts.packaging_cost_brl,
+        reserve_brl: reserveAmount != null ? String(reserveAmount) : null,
+        source: internalCosts.source?.operation_packaging ?? null,
+        estimated: estimatedFlag,
+      },
+    ads_snapshot:
+      existingAds ??
+      {
+        amount_brl: adsAmount != null ? String(adsAmount) : null,
+        source: adsAmount != null ? "historical_financial_snapshot" : null,
+        estimated: estimatedFlag,
+      },
+    profit_snapshot:
+      existingProfit ??
+      {
+        amount_brl:
+          result.profitDec != null
+            ? result.profitDec.toDecimalPlaces(2, Decimal.ROUND_HALF_UP).toFixed(2)
+            : null,
+        source: "net_received_minus_internal_costs",
+        confidence: result.confidence,
+        estimated: estimatedFlag || !result.is_definitive,
+      },
+    margin_snapshot:
+      existingMargin ??
+      {
+        percent: marginPercent,
+        source: "profit_snapshot_over_gross_sale",
+        estimated: estimatedFlag || !result.is_definitive,
+      },
+  };
 }
 
 /**
@@ -322,6 +549,13 @@ function matchDbItemToOrderLine(itemRow, orderLines, orderExternalId = "") {
  *   shipmentId: string | null;
  *   itemRow: Record<string, unknown>;
  *   line: Record<string, unknown> | null;
+ *   productRow: Record<string, unknown> | null;
+ *   taxProfile: Record<string, unknown> | null;
+ *   existingFinancial: Record<string, unknown> | null;
+ *   snapshotContext: {
+ *     snapshot_origin?: string | null;
+ *     reconstruction_reference_date?: string | null;
+ *   };
  * }} meta
  */
 function toItemFinancialContract(revenue, meta) {
@@ -345,6 +579,19 @@ function toItemFinancialContract(revenue, meta) {
     revenue.marketplace_rebate && typeof revenue.marketplace_rebate === "object"
       ? revenue.marketplace_rebate
       : null;
+  const snapshotMeta = resolveFinancialSnapshotMetadata(
+    meta.snapshotContext ?? {},
+    meta.existingFinancial,
+    nowIso,
+  );
+  const derivedSnapshots = buildDerivedHistoricalFinancialSnapshots({
+    itemRow: meta.itemRow ?? {},
+    productRow: meta.productRow ?? null,
+    taxProfile: meta.taxProfile ?? null,
+    revenue,
+    existingFinancial: meta.existingFinancial ?? null,
+    snapshotMeta,
+  });
 
   return {
     source: ML_FINANCIAL_ENRICHMENT_SOURCE,
@@ -372,6 +619,14 @@ function toItemFinancialContract(revenue, meta) {
       meta.itemRow.external_order_item_id != null ? String(meta.itemRow.external_order_item_id) : null,
     sources: revenue._sources ?? revenue.sources ?? null,
     formula_debug: revenue.formula_debug ?? null,
+    snapshot_origin: snapshotMeta.snapshot_origin,
+    snapshot_quality: snapshotMeta.snapshot_quality,
+    estimated: snapshotMeta.estimated,
+    reconstructed_at: snapshotMeta.reconstructed_at,
+    reconstruction_reference_date: snapshotMeta.reconstruction_reference_date,
+    snapshot_created_at: snapshotMeta.snapshot_created_at,
+    immutable_since: snapshotMeta.immutable_since,
+    ...derivedSnapshots,
     updated_at: nowIso,
   };
 }
@@ -391,6 +646,8 @@ function isEnrichmentDebugEnabled() {
  *   shipmentId: string | null;
  *   orderId: string;
  *   debug: Record<string, unknown>;
+ *   snapshotOrigin: string | null;
+ *   reconstructionReferenceDate: string | null;
  * }} ctx
  */
 async function persistFinancialEnrichmentToDatabase(supabase, userId, salesOrderId, order, ctx) {
@@ -399,13 +656,135 @@ async function persistFinancialEnrichmentToDatabase(supabase, userId, salesOrder
 
   const { data: items, error: itemsErr } = await supabase
     .from("sales_order_items")
-    .select("id, external_order_item_id, external_order_id, quantity, unit_price, gross_amount, fee_amount, shipping_share_amount, net_amount, raw_json")
+    .select(
+      "id, marketplace, marketplace_account_id, seller_company_id, external_listing_id, external_order_item_id, external_order_id, quantity, unit_price, gross_amount, fee_amount, shipping_share_amount, net_amount, raw_json",
+    )
     .eq("user_id", userId)
     .eq("sales_order_id", salesOrderId);
   if (itemsErr) throw itemsErr;
 
   const dbItems = (items || []).filter((r) => r && typeof r === "object");
   const orderLines = resolveOrderLinesForEnrichment(order, dbItems);
+  const orderSellerCompanyId =
+    order?.seller_company_id != null && String(order.seller_company_id).trim() !== ""
+      ? String(order.seller_company_id).trim()
+      : null;
+  const orderMarketplaceAccountId =
+    order?.marketplace_account_id != null && String(order.marketplace_account_id).trim() !== ""
+      ? String(order.marketplace_account_id).trim()
+      : null;
+
+  /** @type {Set<string>} */
+  const listingExternalIds = new Set();
+  /** @type {Set<string>} */
+  const listingAccountIds = new Set();
+  /** @type {Set<string>} */
+  const productIdsToLoad = new Set();
+  for (const rawRow of dbItems) {
+    const row = /** @type {Record<string, unknown>} */ (rawRow);
+    const extListing =
+      row.external_listing_id != null && String(row.external_listing_id).trim() !== ""
+        ? String(row.external_listing_id).trim()
+        : "";
+    if (extListing) listingExternalIds.add(extListing);
+    const accountId =
+      row.marketplace_account_id != null && String(row.marketplace_account_id).trim() !== ""
+        ? String(row.marketplace_account_id).trim()
+        : orderMarketplaceAccountId ?? "";
+    if (accountId) listingAccountIds.add(accountId);
+    const rowRaw =
+      row.raw_json && typeof row.raw_json === "object"
+        ? /** @type {Record<string, unknown>} */ (row.raw_json)
+        : null;
+    const productIdFromRaw =
+      rowRaw?.product_id != null && isUuidLike(rowRaw.product_id)
+        ? String(rowRaw.product_id).trim()
+          : "";
+    if (productIdFromRaw) productIdsToLoad.add(productIdFromRaw);
+  }
+
+  /** @type {Map<string, Record<string, unknown>>} */
+  const listingByAccountAndExternal = new Map();
+  if (listingExternalIds.size > 0) {
+    let listingsQuery = supabase
+      .from("marketplace_listings")
+      .select("id, marketplace_account_id, external_listing_id, product_id")
+      .eq("user_id", userId)
+      .in("external_listing_id", [...listingExternalIds]);
+    if (listingAccountIds.size > 0) {
+      listingsQuery = listingsQuery.in("marketplace_account_id", [...listingAccountIds]);
+    }
+    const { data: listingRows, error: listingErr } = await listingsQuery;
+    if (listingErr) throw listingErr;
+    for (const listingRaw of listingRows || []) {
+      if (!listingRaw || typeof listingRaw !== "object") continue;
+      const listing = /** @type {Record<string, unknown>} */ (listingRaw);
+      const accountId =
+        listing.marketplace_account_id != null && String(listing.marketplace_account_id).trim() !== ""
+          ? String(listing.marketplace_account_id).trim()
+          : "";
+      const extId =
+        listing.external_listing_id != null && String(listing.external_listing_id).trim() !== ""
+          ? String(listing.external_listing_id).trim()
+          : "";
+      if (!extId) continue;
+      listingByAccountAndExternal.set(`${accountId}::${extId}`, listing);
+    }
+  }
+
+  for (const listing of listingByAccountAndExternal.values()) {
+    const productId =
+      listing.product_id != null && String(listing.product_id).trim() !== ""
+        ? String(listing.product_id).trim()
+        : "";
+    if (productId) productIdsToLoad.add(productId);
+  }
+
+  /** @type {Map<string, Record<string, unknown>>} */
+  const productsById = new Map();
+  if (productIdsToLoad.size > 0) {
+    const { data: productsRows, error: productsErr } = await supabase
+      .from("products")
+      .select("id, cost_price, packaging_cost, operational_cost")
+      .eq("user_id", userId)
+      .in("id", [...productIdsToLoad]);
+    if (productsErr) throw productsErr;
+    for (const productRaw of productsRows || []) {
+      if (!productRaw || typeof productRaw !== "object") continue;
+      const product = /** @type {Record<string, unknown>} */ (productRaw);
+      const productId = product.id != null ? String(product.id).trim() : "";
+      if (!productId) continue;
+      productsById.set(productId, product);
+    }
+  }
+
+  /** @type {Map<string, Record<string, unknown>>} */
+  const taxProfileCache = new Map();
+  async function getTaxProfileForRow(row) {
+    const sellerCompanyId =
+      row.seller_company_id != null && String(row.seller_company_id).trim() !== ""
+        ? String(row.seller_company_id).trim()
+        : orderSellerCompanyId ?? null;
+    const marketplaceAccountId =
+      row.marketplace_account_id != null && String(row.marketplace_account_id).trim() !== ""
+        ? String(row.marketplace_account_id).trim()
+        : orderMarketplaceAccountId ?? null;
+    const cacheKey = `${sellerCompanyId ?? ""}::${marketplaceAccountId ?? ""}`;
+    const cached = taxProfileCache.get(cacheKey);
+    if (cached) return cached;
+    const resolved = await resolveSaleInternalTaxProfile(supabase, userId, {
+      seller_company_id: sellerCompanyId,
+      marketplace_account_id: marketplaceAccountId,
+    });
+    const profile = {
+      tax_percent: resolved.tax_percent ?? null,
+      source: resolved.source ?? null,
+      seller_company_id: resolved.seller_company_id ?? sellerCompanyId,
+      marketplace_account_id: resolved.marketplace_account_id ?? marketplaceAccountId,
+    };
+    taxProfileCache.set(cacheKey, profile);
+    return profile;
+  }
 
   /** @type {Record<string, Record<string, unknown>>} */
   const linesIndex = {};
@@ -418,9 +797,38 @@ async function persistFinancialEnrichmentToDatabase(supabase, userId, salesOrder
 
     const lineRaw =
       row.raw_json && typeof row.raw_json === "object" ? /** @type {Record<string, unknown>} */ ({ ...row.raw_json }) : {};
+    const existingFinancial =
+      lineRaw._s7_financial && typeof lineRaw._s7_financial === "object"
+        ? /** @type {Record<string, unknown>} */ (lineRaw._s7_financial)
+        : null;
 
     const externalOrderItemId =
       row.external_order_item_id != null ? String(row.external_order_item_id).trim() : null;
+    const rowAccountId =
+      row.marketplace_account_id != null && String(row.marketplace_account_id).trim() !== ""
+        ? String(row.marketplace_account_id).trim()
+        : orderMarketplaceAccountId ?? "";
+    const rowExternalListingId =
+      row.external_listing_id != null && String(row.external_listing_id).trim() !== ""
+        ? String(row.external_listing_id).trim()
+        : "";
+    const linkedListing = rowExternalListingId
+      ? listingByAccountAndExternal.get(`${rowAccountId}::${rowExternalListingId}`) ??
+        listingByAccountAndExternal.get(`::${rowExternalListingId}`) ??
+        null
+      : null;
+    const rowRaw =
+      row.raw_json && typeof row.raw_json === "object"
+        ? /** @type {Record<string, unknown>} */ (row.raw_json)
+        : null;
+    const rowProductId =
+      rowRaw?.product_id != null && isUuidLike(rowRaw.product_id)
+        ? String(rowRaw.product_id).trim()
+        : linkedListing?.product_id != null && String(linkedListing.product_id).trim() !== ""
+          ? String(linkedListing.product_id).trim()
+          : "";
+    const productRow = rowProductId ? productsById.get(rowProductId) ?? null : null;
+    const taxProfile = await getTaxProfileForRow(row);
 
     const revenue = resolveMercadoLivreFinancialFormula({
       order,
@@ -435,6 +843,13 @@ async function persistFinancialEnrichmentToDatabase(supabase, userId, salesOrder
       shipmentId: ctx.shipmentId,
       itemRow: row,
       line: line && typeof line === "object" ? line : null,
+      productRow,
+      taxProfile,
+      existingFinancial,
+      snapshotContext: {
+        snapshot_origin: ctx.snapshotOrigin,
+        reconstruction_reference_date: ctx.reconstructionReferenceDate,
+      },
     });
 
     if (isEnrichmentDebugEnabled()) {
@@ -559,6 +974,8 @@ async function persistFinancialEnrichmentToDatabase(supabase, userId, salesOrder
  *   salesOrderId?: string | null;
  *   logContext?: string;
  *   force?: boolean;
+ *   snapshotOrigin?: string | null;
+ *   reconstructionReferenceDate?: string | null;
  * }} opts
  */
 export async function enrichMercadoLivreSaleFinancialSnapshot(supabase, userId, order, opts) {
@@ -585,6 +1002,10 @@ export async function enrichMercadoLivreSaleFinancialSnapshot(supabase, userId, 
 
   const shipmentId = resolveMercadoLivreShipmentIdFromOrder(orderPayload);
   const mpAcct = opts.marketplaceAccountId ?? null;
+  const snapshotOriginRaw = pickTrim(opts.snapshotOrigin);
+  const snapshotOrigin = snapshotOriginRaw || null;
+  const reconstructionReferenceDateRaw = pickTrim(opts.reconstructionReferenceDate);
+  const reconstructionReferenceDate = reconstructionReferenceDateRaw || null;
 
   /** @type {Record<string, unknown>} */
   const debug = {
@@ -655,6 +1076,8 @@ export async function enrichMercadoLivreSaleFinancialSnapshot(supabase, userId, 
         shipmentId,
         orderId,
         debug,
+        snapshotOrigin,
+        reconstructionReferenceDate,
       },
     );
 

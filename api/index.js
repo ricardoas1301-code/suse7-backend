@@ -20,6 +20,8 @@ console.log("[S7 API Router] boot — rotas diagnóstico ML:", DEBUG_ML_FIELD_MA
 console.log("[S7 API Router] boot — ML OAuth diag: GET /api/ml/oauth-config");
 console.log("[S7 API Router] boot — billing: GET /api/billing/ping · GET /api/billing/plans · POST /api/billing/checkout/card · POST /api/billing/checkout/start · GET /api/billing/webhooks/asaas/health · POST /api/billing/webhooks/asaas · POST /api/jobs/billing-renewal-engine · POST /api/jobs/billing-consistency-check · POST /api/billing/renewals/:id/pay");
 console.log("[S7 API Router] boot — notifications: POST /api/jobs/daily-sales-summary-automation");
+console.log("[S7 API Router] boot — competition: POST /api/jobs/competition-daily-snapshot");
+console.log("[S7 API Router] boot — notifications: POST /api/notifications/manual/competition-report");
 
 /**
  * Resolve rota lógica para o router único (/api + __path no Vercel).
@@ -354,6 +356,10 @@ export default async function handler(req, res) {
       const mod = await import("../src/handlers/notifications/salesReportManualNotificationApi.js");
       return mod.handleSalesReportManualNotification(req, res);
     }
+    if (path === "/api/notifications/manual/competition-report" && req.method === "POST") {
+      const mod = await import("../src/handlers/notifications/competitionReportManualNotificationApi.js");
+      return mod.handleCompetitionReportManualNotification(req, res);
+    }
     if (path === "/api/notifications/categories" && req.method === "GET") {
       const mod = await import("../src/handlers/notifications/sellerNotificationSellerApi.js");
       return mod.handleNotificationSellerCategories(req, res);
@@ -487,6 +493,10 @@ export default async function handler(req, res) {
       const mod = await import("../src/handlers/ml/listingSetSku.js");
       return await mod.default(req, res);
     }
+    if (path === "/api/ml/listings/sku-lookup") {
+      const mod = await import("../src/handlers/ml/listingSkuLookup.js");
+      return await mod.default(req, res);
+    }
     if (path === "/api/ml/listings/pricing-scenarios") {
       const mod = await import("../src/handlers/ml/listingPricingScenarios.js");
       return await mod.default(req, res);
@@ -596,6 +606,10 @@ export default async function handler(req, res) {
       const mod = await import("../src/handlers/products/catalogRankings.js");
       return mod.handleProductsCatalogRankings(req, res);
     }
+    if (path === "/api/products/catalog-financial") {
+      const mod = await import("../src/handlers/products/catalogFinancial.js");
+      return mod.handleProductsCatalogFinancial(req, res);
+    }
     if (path === "/api/jobs/stock-min-check") {
       const mod = await import("../src/handlers/jobs/stockMinCheck.js");
       return mod.handleJobsStockMinCheck(req, res);
@@ -607,6 +621,10 @@ export default async function handler(req, res) {
     if (path === "/api/jobs/daily-sales-summary-automation") {
       const mod = await import("../src/handlers/jobs/dailySalesSummaryAutomationJob.js");
       return mod.handleJobsDailySalesSummaryAutomation(req, res);
+    }
+    if (path === "/api/jobs/competition-daily-snapshot") {
+      const mod = await import("../src/handlers/jobs/competitionDailySnapshotJob.js");
+      return mod.handleJobsCompetitionDailySnapshot(req, res);
     }
     if (path === "/api/jobs/billing-process-period-expirations") {
       const mod = await import("../src/handlers/jobs/billingPeriodExpirationsJob.js");

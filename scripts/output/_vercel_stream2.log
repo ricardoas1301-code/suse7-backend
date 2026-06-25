@@ -1,0 +1,257 @@
+﻿node.exe : Retrieving projectÔÇª
+No C:\nvm4w\nodejs\vercel.ps1:16 caractere:5
++     & "$basedir/node$exe"  "$basedir/node_modules/vercel/dist/vc.js"  ...
++     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (Retrieving projectÔÇª:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+Resolving deployment "suse7-backend-dev.vercel.app"
+Streaming logs for deployment dpl_8RZWJ7ZVqMLxMRUwQLPqqV3VCUiV starting from 14:59:22.48
+
+waiting for new logs...
+15:00:37.70  Ôä╣´©Å  POST  ---  suse7-backend-dev.vercel.app  ãÆ  /api/ml/webhook
+----------------------------------------------------------------------------
+[ml/webhook] route_matched {
+  pathNorm: '/api/ml/webhook',
+  pathResolved: '/api/ml/webhook',
+  rawUrl: '/api/ml/webhook?__path=ml%2Fwebhook&path=ml%2Fwebhook',
+  method: 'POST'
+}
+
+waiting for new logs...
+15:00:38.80  Ôä╣´©Å  POST  ---  suse7-backend-dev.vercel.app  ãÆ  /api/ml/webhook
+----------------------------------------------------------------------------
+[ML_WEBHOOK_RECEIVED] {
+  topic: 'payments',
+  resource: '/collections/164882045804',
+  user_id: '1219786189',
+  timestamp: '2026-06-19T18:00:38.806Z'
+}
+
+waiting for new logs...
+15:01:51.91  Ôä╣´©Å  POST  ---  suse7-backend-dev.vercel.app  ãÆ  /api/ml/webhook
+----------------------------------------------------------------------------
+[ml/webhook] route_matched {
+  pathNorm: '/api/ml/webhook',
+  pathResolved: '/api/ml/webhook',
+  rawUrl: '/api/ml/webhook?__path=ml%2Fwebhook&path=ml%2Fwebhook',
+  method: 'POST'
+}
+
+waiting for new logs...
+15:01:52.80  Ôä╣´©Å  POST  ---  suse7-backend-dev.vercel.app  ãÆ  /api/ml/webhook
+----------------------------------------------------------------------------
+[ML_WEBHOOK_RECEIVED] {
+  topic: 'payments',
+  resource: '/collections/164039553065',
+  user_id: '2649629037',
+  timestamp: '2026-06-19T18:01:52.808Z'
+}
+
+waiting for new logs...
+15:03:02.10  Ôä╣´©Å  POST  ---  suse7-backend-dev.vercel.app  ãÆ  /api/ml/webhook
+----------------------------------------------------------------------------
+[ml/webhook] route_matched {
+  pathNorm: '/api/ml/webhook',
+  pathResolved: '/api/ml/webhook',
+  rawUrl: '/api/ml/webhook?__path=ml%2Fwebhook&path=ml%2Fwebhook',
+  method: 'POST'
+}
+
+waiting for new logs...
+15:03:02.74  Ôä╣´©Å  POST  ---  suse7-backend-dev.vercel.app  ãÆ  /api/ml/webhook
+----------------------------------------------------------------------------
+[S7 API Router] boot ÔÇö rotas diagn├│stico ML: /api/debug/marketplaces/mercado-livre/listings/field-map 
+/api/debug/ml/listing-cover-compare /api/debug/ml/listings-cover-context
+
+waiting for new logs...
+15:03:02.75  Ôä╣´©Å  POST  ---  suse7-backend-dev.vercel.app  ãÆ  /api/ml/webhook
+----------------------------------------------------------------------------
+[ml/webhook] route_matched {
+  pathNorm: '/api/ml/webhook',
+  pathResolved: '/api/ml/webhook',
+  rawUrl: '/api/ml/webhook?__path=ml%2Fwebhook&path=ml%2Fwebhook',
+  method: 'POST'
+}
+
+waiting for new logs...
+15:03:02.75  Ôä╣´©Å  POST  ---  suse7-backend-dev.vercel.app  ãÆ  /api/ml/webhook
+----------------------------------------------------------------------------
+[ML_WEBHOOK_ROUTE_HIT] {
+  method: 'POST',
+  topic: 'items',
+  resource: '/items/MLB6004847626',
+  user_id: '2350765542',
+  timestamp: '2026-06-19T18:03:02.753Z'
+}
+
+waiting for new logs...
+15:03:03.01  Ôä╣´©Å  POST  ---  suse7-backend-dev.vercel.app  ãÆ  /api/ml/webhook
+----------------------------------------------------------------------------
+[ML_WEBHOOK_RECEIVED] {
+  topic: 'payments',
+  resource: '/collections/164067551081',
+  user_id: '2350765542',
+  timestamp: '2026-06-19T18:03:03.019Z'
+}
+
+waiting for new logs...
+15:03:03.60  Ôä╣´©Å  POST  ---  suse7-backend-dev.vercel.app  ãÆ  /api/ml/webhook
+----------------------------------------------------------------------------
+[ML_WEBHOOK_RECEIVED] {
+  topic: 'items',
+  resource: '/items/MLB6004847626',
+  user_id: '2350765542',
+  timestamp: '2026-06-19T18:03:03.606Z'
+}
+
+waiting for new logs...
+15:03:03.60  Ôä╣´©Å  POST  ---  suse7-backend-dev.vercel.app  ãÆ  /api/ml/webhook
+----------------------------------------------------------------------------
+[ML_WEBHOOK_SAVED] {
+  topic: 'items',
+  resource: '/items/MLB6004847626',
+  user_id: '2350765542',
+  timestamp: '2026-06-19T18:03:03.606Z',
+  id: 'd3d11c94-ab8b-4719-8f51-3b5f9803a54a',
+  duplicate: false,
+  status: 'pending'
+}
+
+waiting for new logs...
+15:03:03.40  Ôä╣´©Å  POST  ---  suse7-backend-dev.vercel.app  ãÆ  /api/ml/webhook
+----------------------------------------------------------------------------
+[ml/webhook] route_matched {
+  pathNorm: '/api/ml/webhook',
+  pathResolved: '/api/ml/webhook',
+  rawUrl: '/api/ml/webhook?__path=ml%2Fwebhook&path=ml%2Fwebhook',
+  method: 'POST'
+}
+
+waiting for new logs...
+15:03:04.36  Ôä╣´©Å  POST  ---  suse7-backend-dev.vercel.app  ãÆ  /api/ml/webhook
+----------------------------------------------------------------------------
+[ML_WEBHOOK_RECEIVED] {
+  topic: 'stock-locations',
+  resource: '/user-products/MLBU3650004729/stock',
+  user_id: '2350765542',
+  timestamp: '2026-06-19T18:03:04.360Z'
+}
+
+waiting for new logs...
+15:03:04.73  Ôä╣´©Å  POST  ---  suse7-backend-dev.vercel.app  ãÆ  /api/ml/webhook
+----------------------------------------------------------------------------
+[ml/webhook] route_matched {
+  pathNorm: '/api/ml/webhook',
+  pathResolved: '/api/ml/webhook',
+  rawUrl: '/api/ml/webhook?__path=ml%2Fwebhook&path=ml%2Fwebhook',
+  method: 'POST'
+}
+
+waiting for new logs...
+15:03:05.85  Ôä╣´©Å  POST  ---  suse7-backend-dev.vercel.app  ãÆ  /api/ml/webhook
+----------------------------------------------------------------------------
+[ML_WEBHOOK_RECEIVED] {
+  topic: 'items',
+  resource: '/items/MLB6004847626',
+  user_id: '2350765542',
+  timestamp: '2026-06-19T18:03:05.851Z'
+}
+
+waiting for new logs...
+15:03:04.84  Ôä╣´©Å  POST  ---  suse7-backend-dev.vercel.app  ãÆ  /api/ml/webhook
+----------------------------------------------------------------------------
+[ml/webhook] route_matched {
+  pathNorm: '/api/ml/webhook',
+  pathResolved: '/api/ml/webhook',
+  rawUrl: '/api/ml/webhook?__path=ml%2Fwebhook&path=ml%2Fwebhook',
+  method: 'POST'
+}
+
+waiting for new logs...
+15:03:05.70  Ôä╣´©Å  POST  ---  suse7-backend-dev.vercel.app  ãÆ  /api/ml/webhook
+----------------------------------------------------------------------------
+[ML_WEBHOOK_RECEIVED] {
+  topic: 'orders_v2',
+  resource: '/orders/2000017020308968',
+  user_id: '2350765542',
+  timestamp: '2026-06-19T18:03:05.703Z'
+}
+
+waiting for new logs...
+15:03:05.71  Ôä╣´©Å  POST  ---  suse7-backend-dev.vercel.app  ãÆ  /api/ml/webhook
+----------------------------------------------------------------------------
+[ML_WEBHOOK_SAVED] {
+  topic: 'orders_v2',
+  resource: '/orders/2000017020308968',
+  user_id: '2350765542',
+  timestamp: '2026-06-19T18:03:05.703Z',
+  id: '55e748a8-fef7-4ad9-bde8-0c32ac40566a',
+  duplicate: false,
+  status: 'pending'
+}
+
+waiting for new logs...
+15:03:04.97  Ôä╣´©Å  POST  ---  suse7-backend-dev.vercel.app  ãÆ  /api/ml/webhook
+----------------------------------------------------------------------------
+[ml/webhook] route_matched {
+  pathNorm: '/api/ml/webhook',
+  pathResolved: '/api/ml/webhook',
+  rawUrl: '/api/ml/webhook?__path=ml%2Fwebhook&path=ml%2Fwebhook',
+  method: 'POST'
+}
+
+waiting for new logs...
+15:03:04.97  Ôä╣´©Å  POST  ---  suse7-backend-dev.vercel.app  ãÆ  /api/ml/webhook
+----------------------------------------------------------------------------
+[ML_WEBHOOK_ROUTE_HIT] {
+  method: 'POST',
+  topic: 'orders_v2',
+  resource: '/orders/2000017020308968',
+  user_id: '2350765542',
+  timestamp: '2026-06-19T18:03:04.977Z'
+}
+
+waiting for new logs...
+15:03:07.30  Ôä╣´©Å  POST  ---  suse7-backend-dev.vercel.app  ãÆ  /api/ml/webhook
+----------------------------------------------------------------------------
+[ml/webhook] route_matched {
+  pathNorm: '/api/ml/webhook',
+  pathResolved: '/api/ml/webhook',
+  rawUrl: '/api/ml/webhook?__path=ml%2Fwebhook&path=ml%2Fwebhook',
+  method: 'POST'
+}
+
+waiting for new logs...
+15:03:07.96  Ôä╣´©Å  POST  ---  suse7-backend-dev.vercel.app  ãÆ  /api/ml/webhook
+----------------------------------------------------------------------------
+[ml/webhook] route_matched {
+  pathNorm: '/api/ml/webhook',
+  pathResolved: '/api/ml/webhook',
+  rawUrl: '/api/ml/webhook?__path=ml%2Fwebhook&path=ml%2Fwebhook',
+  method: 'POST'
+}
+
+waiting for new logs...
+15:03:08.60  Ôä╣´©Å  POST  ---  suse7-backend-dev.vercel.app  ãÆ  /api/ml/webhook
+----------------------------------------------------------------------------
+[ML_WEBHOOK_RECEIVED] {
+  topic: 'shipments',
+  resource: '/shipments/47338674543',
+  user_id: '2350765542',
+  timestamp: '2026-06-19T18:03:08.600Z'
+}
+
+waiting for new logs...
+15:03:08.10  Ôä╣´©Å  POST  ---  suse7-backend-dev.vercel.app  ãÆ  /api/ml/webhook
+----------------------------------------------------------------------------
+[ml/webhook] route_matched {
+  pathNorm: '/api/ml/webhook',
+  pathResolved: '/api/ml/webhook',
+  rawUrl: '/api/ml/webhook?__path=ml%2Fwebhook&path=ml%2Fwebhook',
+  method: 'POST'
+}
+
+waiting for new logs...
+WARN! Command automatically interrupted after 5 minutes.
+

@@ -62,10 +62,11 @@ function serializeListingsCursor(c) {
  * @param {import("@supabase/supabase-js").SupabaseClient} supabase
  * @param {Record<string, unknown>} job
  * @param {{ deadlineMs: number }} runtime
- * @returns {Promise<{ stopped: boolean; done?: boolean }>}
+ * @returns {Promise<{ stopped: boolean; done?: boolean; listingsProcessedInRun?: number }>}
  */
 export async function runMlInitialListingsSyncJobTurn(supabase, job, runtime) {
   const { deadlineMs } = runtime;
+  let listingsProcessedInRun = 0;
   const accountId = String(job.marketplace_account_id || "");
   const userId = String(job.user_id || "");
   let jRow = await ensureMarketplaceSyncJobRunning(supabase, job);
@@ -84,7 +85,7 @@ export async function runMlInitialListingsSyncJobTurn(supabase, job, runtime) {
       "Conta marketplace inativa ou ausente.",
       "[ML_INITIAL_LISTINGS_SYNC_ERROR]"
     );
-    return { stopped: true };
+    return { stopped: true, listingsProcessedInRun: 0 };
   }
 
   let accessToken;
@@ -97,13 +98,13 @@ export async function runMlInitialListingsSyncJobTurn(supabase, job, runtime) {
       e?.message ? String(e.message) : "token_ml",
       "[ML_INITIAL_LISTINGS_SYNC_ERROR]"
     );
-    return { stopped: true };
+    return { stopped: true, listingsProcessedInRun: 0 };
   }
 
   let sellerId =
     accountRow.external_seller_id != null ? String(accountRow.external_seller_id).trim() : "";
   try {
-    const me = await fetchMercadoLibreUserMe(accessToken);
+    const me = await fetchMercadoLibreUserMe(accessToken, { marketplaceAccountId: accountId });
     const meId = me?.id != null ? String(me.id).trim() : "";
     if (meId) sellerId = meId;
   } catch (e) {
@@ -117,7 +118,7 @@ export async function runMlInitialListingsSyncJobTurn(supabase, job, runtime) {
       "seller_id indisponível.",
       "[ML_INITIAL_LISTINGS_SYNC_ERROR]"
     );
-    return { stopped: true };
+    return { stopped: true, listingsProcessedInRun: 0 };
   }
 
   let cursor = parseListingsCursor(
@@ -200,7 +201,7 @@ export async function runMlInitialListingsSyncJobTurn(supabase, job, runtime) {
         processedTotal,
         capped: true,
       });
-      return { stopped: true, done: true };
+      return { stopped: true, done: true, listingsProcessedInRun };
     }
 
     const page = await fetchUserItemIdsPage(accessToken, sellerId, cursor.search_offset, PAGE_LIMIT);
@@ -249,7 +250,7 @@ export async function runMlInitialListingsSyncJobTurn(supabase, job, runtime) {
         }
       }
 
-      return { stopped: true, done: true };
+      return { stopped: true, done: true, listingsProcessedInRun };
     }
 
     if (cursor.idx_in_page >= ids.length) {
@@ -291,7 +292,7 @@ export async function runMlInitialListingsSyncJobTurn(supabase, job, runtime) {
           }
         }
 
-        return { stopped: true, done: true };
+        return { stopped: true, done: true, listingsProcessedInRun };
       }
       continue;
     }
@@ -321,8 +322,11 @@ export async function runMlInitialListingsSyncJobTurn(supabase, job, runtime) {
           cursor.idx_in_page += 1;
           processedTotal += 1;
         }
+        if (progressTotal != null && processedTotal > progressTotal) processedTotal = progressTotal;
       });
     }
+
+    listingsProcessedInRun += slice.length;
 
     let advancedPage = false;
     if (cursor.idx_in_page >= ids.length) {
@@ -359,7 +363,7 @@ export async function runMlInitialListingsSyncJobTurn(supabase, job, runtime) {
           }
         }
 
-        return { stopped: true, done: true };
+        return { stopped: true, done: true, listingsProcessedInRun };
       }
     }
 
@@ -388,5 +392,5 @@ export async function runMlInitialListingsSyncJobTurn(supabase, job, runtime) {
     };
   }
 
-  return { stopped: false };
+  return { stopped: false, listingsProcessedInRun };
 }

@@ -5,7 +5,8 @@
 import { S7_NOTIFICATION_DISPATCH_STATUS } from "../constants/dispatchStatus.js";
 import { logWhatsAppNotification } from "./whatsappLog.js";
 import { S7_WHATSAPP_MAX_ATTEMPTS, S7_WHATSAPP_OUTBOX_STATUS } from "./whatsappOutboxStatus.js";
-import { sendS7WhatsApp } from "./S7WhatsAppProvider.js";
+import { sendWhatsAppMessage } from "./sendWhatsAppMessage.js";
+import { resolveWhatsAppProcessorSendPolicy } from "../sales/manualSaleRayxLiveDelivery.js";
 
 /**
  * @param {string | null | undefined} err
@@ -23,7 +24,7 @@ export async function processWhatsAppOutbox(supabase, options = {}) {
   const batchSize = Math.min(100, Math.max(1, Number(options.batchSize) || 25));
   const now = new Date().toISOString();
 
-  logWhatsAppNotification("PROCESS_START", { batch_size: batchSize });
+  logWhatsAppNotification("PROCESS_BATCH_START", { batch_size: batchSize });
 
   let query = supabase
     .from("s7_notification_whatsapp_outbox")
@@ -62,6 +63,7 @@ export async function processWhatsAppOutbox(supabase, options = {}) {
     const outboxId = String(row.id);
     const dispatchId = String(row.dispatch_id);
     const attempts = Number(row.attempts ?? 0) + 1;
+    const providerStarted = Date.now();
 
     if (attempts > S7_WHATSAPP_MAX_ATTEMPTS) {
       await supabase
@@ -85,7 +87,27 @@ export async function processWhatsAppOutbox(supabase, options = {}) {
       })
       .eq("id", outboxId);
 
-    const sendResult = await sendS7WhatsApp({
+    const rowMetadata =
+      row.metadata && typeof row.metadata === "object"
+        ? /** @type {Record<string, unknown>} */ (row.metadata)
+        : {};
+    const processorPolicy = resolveWhatsAppProcessorSendPolicy({
+      to: String(row.recipient_phone),
+      metadata: rowMetadata,
+    });
+
+    logWhatsAppNotification("PROCESS_START", {
+      outbox_id: outboxId,
+      dispatch_id: dispatchId,
+      outbox_policy_source: processorPolicy.outbox_policy_source,
+      processor_whitelist_applied: processorPolicy.processor_whitelist_applied,
+      processor_live_bypass_respected: processorPolicy.processor_live_bypass_respected,
+      whitelist_bypass_reason: processorPolicy.whitelist_bypass_reason,
+      final_send_allowed: processorPolicy.final_send_allowed,
+      provider_send_called: processorPolicy.allowed,
+    });
+
+    const sendResult = await sendWhatsAppMessage({
       to: String(row.recipient_phone),
       message: String(row.message_text),
       metadata: {
@@ -137,7 +159,7 @@ export async function processWhatsAppOutbox(supabase, options = {}) {
           simulated: Boolean(sendResult.simulated),
         },
         error_message: null,
-        duration_ms: 0,
+        duration_ms: Date.now() - providerStarted,
       });
 
       sent += 1;

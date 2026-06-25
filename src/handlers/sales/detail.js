@@ -8,8 +8,13 @@ import {
 import { gatePremiumHandler } from "../../billing/middleware/requirePlanAccess.js";
 import { buildVendasUiRowsFromOrderItems } from "./list.js";
 import { buildSaleDetailFinancialBreakdown } from "./saleDetailFinancial.js";
-import { attachSaleDetailPricingVariables } from "./saleDetailPricingVariables.js";
+import { finalizeSaleDetailFinancialWithContingency } from "../../domain/sales/saleDetailContingencyMargin.js";
 import { EMPTY_SALE_CONTEXT_METRICS, fetchSaleContextMetrics } from "../../domain/sales/saleDetailContextMetrics.js";
+import {
+  attachFreshMercadoLivreShipmentSnapshot,
+  buildSaleDetailGeneralBlock,
+} from "../../domain/sales/saleDetailGeneral.js";
+import { enrichMercadoLivreSaleTypeDisplay } from "../../domain/sales/mercadoLivreSaleTypeDisplay.js";
 
 /**
  * @param {Record<string, unknown> | null | undefined} order
@@ -132,24 +137,6 @@ async function resolveListingForSaleDetail(supabase, userId, item, order) {
 }
 
 /**
- * @param {import("@supabase/supabase-js").SupabaseClient} supabase
- * @param {string} userId
- * @param {string | null | undefined} productId
- */
-async function fetchProductForSaleDetail(supabase, userId, productId) {
-  const pid = productId != null ? String(productId).trim() : "";
-  if (!pid) return null;
-  const { data, error } = await supabase
-    .from("products")
-    .select("id,cost_price,packaging_cost,operational_cost")
-    .eq("user_id", userId)
-    .eq("id", pid)
-    .maybeSingle();
-  if (error) throw error;
-  return data;
-}
-
-/**
  * @param {Record<string, unknown>} row
  * @param {Record<string, unknown>} item
  */
@@ -168,6 +155,153 @@ function buildSaleDetailProductBlock(row, item) {
     raw_json: row.raw_json ?? item.raw_json ?? null,
     order_raw_json: row.order_raw_json ?? null,
     external_order_item_id: row.external_order_item_id ?? null,
+  };
+}
+
+/**
+ * @param {Record<string, unknown> | null | undefined} item
+ */
+function resolveInternalCostsSnapshotFromItem(item) {
+  const raw =
+    item?.raw_json && typeof item.raw_json === "object"
+      ? /** @type {Record<string, unknown>} */ (item.raw_json)
+      : null;
+  const fin =
+    raw?._s7_financial && typeof raw._s7_financial === "object"
+      ? /** @type {Record<string, unknown>} */ (raw._s7_financial)
+      : null;
+  const snap =
+    fin?.internal_costs_snapshot && typeof fin.internal_costs_snapshot === "object"
+      ? /** @type {Record<string, unknown>} */ (fin.internal_costs_snapshot)
+      : null;
+  if (!snap) return null;
+  const hasAnyAmount =
+    snap.product_cost_brl != null || snap.internal_tax_brl != null || snap.operation_packaging_cost_brl != null;
+  return hasAnyAmount ? snap : null;
+}
+
+/**
+ * @param {Record<string, unknown> | null | undefined} item
+ */
+function resolveFinancialSnapshotMetadata(item) {
+  const raw =
+    item?.raw_json && typeof item.raw_json === "object"
+      ? /** @type {Record<string, unknown>} */ (item.raw_json)
+      : null;
+  const fin =
+    raw?._s7_financial && typeof raw._s7_financial === "object"
+      ? /** @type {Record<string, unknown>} */ (raw._s7_financial)
+      : null;
+  if (!fin) {
+    return {
+      snapshot_origin: null,
+      snapshot_quality: null,
+      estimated: null,
+    };
+  }
+  const estimatedRaw = fin.estimated;
+  return {
+    snapshot_origin: fin.snapshot_origin != null ? String(fin.snapshot_origin) : null,
+    snapshot_quality: fin.snapshot_quality != null ? String(fin.snapshot_quality) : null,
+    estimated: typeof estimatedRaw === "boolean" ? estimatedRaw : null,
+  };
+}
+
+/**
+ * @param {Record<string, unknown> | null | undefined} item
+ * @param {Record<string, unknown> | null | undefined} order
+ */
+function resolveContingencySnapshot(item, order) {
+  const itemRaw =
+    item?.raw_json && typeof item.raw_json === "object"
+      ? /** @type {Record<string, unknown>} */ (item.raw_json)
+      : null;
+  const itemFin =
+    itemRaw?._s7_financial && typeof itemRaw._s7_financial === "object"
+      ? /** @type {Record<string, unknown>} */ (itemRaw._s7_financial)
+      : null;
+  const orderRaw =
+    order?.raw_json && typeof order.raw_json === "object"
+      ? /** @type {Record<string, unknown>} */ (order.raw_json)
+      : null;
+  const orderFin =
+    orderRaw?._s7_financial && typeof orderRaw._s7_financial === "object"
+      ? /** @type {Record<string, unknown>} */ (orderRaw._s7_financial)
+      : null;
+
+  const snap =
+    (itemFin?.contingency_margin_snapshot &&
+    typeof itemFin.contingency_margin_snapshot === "object"
+      ? /** @type {Record<string, unknown>} */ (itemFin.contingency_margin_snapshot)
+      : null) ??
+    (orderFin?.contingency_margin_snapshot &&
+    typeof orderFin.contingency_margin_snapshot === "object"
+      ? /** @type {Record<string, unknown>} */ (orderFin.contingency_margin_snapshot)
+      : null);
+
+  const toLine = (key, label, amount, percent) => {
+    if (amount == null || String(amount).trim() === "") return null;
+    return {
+      key,
+      label,
+      amount_brl: String(amount),
+      percent: percent != null && String(percent).trim() !== "" ? String(percent) : null,
+    };
+  };
+
+  const lines = [];
+  const pushIfMissing = (line) => {
+    if (!line) return;
+    if (lines.findIndex((it) => String(it.key) === String(line.key)) !== -1) return;
+    lines.push(line);
+  };
+
+  pushIfMissing(
+    toLine(
+      "ml_ads",
+      "ML Ads",
+      snap?.ml_ads_brl ?? snap?.ml_ads_amount_brl,
+      snap?.ml_ads_percent,
+    ),
+  );
+  pushIfMissing(
+    toLine(
+      "safety_reserve",
+      "Reserva perdas e devoluções",
+      snap?.reserve_brl ?? snap?.safety_reserve_brl ?? snap?.reserve_amount_brl,
+      snap?.reserve_percent ?? snap?.safety_reserve_percent,
+    ),
+  );
+
+  const adsSnap =
+    itemFin?.ads_snapshot && typeof itemFin.ads_snapshot === "object"
+      ? /** @type {Record<string, unknown>} */ (itemFin.ads_snapshot)
+      : null;
+  pushIfMissing(toLine("ml_ads", "ML Ads", adsSnap?.amount_brl ?? adsSnap?.ml_ads_brl, adsSnap?.percent));
+
+  const operationalSnap =
+    itemFin?.operational_cost_snapshot && typeof itemFin.operational_cost_snapshot === "object"
+      ? /** @type {Record<string, unknown>} */ (itemFin.operational_cost_snapshot)
+      : null;
+  pushIfMissing(
+    toLine(
+      "safety_reserve",
+      "Reserva perdas e devoluções",
+      operationalSnap?.reserve_brl ?? operationalSnap?.operational_costs_brl,
+      operationalSnap?.reserve_percent,
+    ),
+  );
+
+  if (lines.length === 0) return null;
+  return {
+    lines,
+    source: "historical_financial_snapshot",
+    snapshot_quality:
+      String(snap?.snapshot_quality ?? itemFin?.snapshot_quality ?? "")
+        .trim()
+        .toLowerCase() === "reconstructed"
+        ? "reconstructed"
+        : "historical",
   };
 }
 
@@ -261,26 +395,35 @@ export default async function handleSalesDetail(req, res) {
     }
 
     let itemForFinancial = item;
+    let orderForGeneral = order;
     const marketplaceSlug = String(item.marketplace ?? order?.marketplace ?? "").trim().toLowerCase();
-    if ((marketplaceSlug === ML_MARKETPLACE_SLUG || marketplaceSlug === "mercadolivre") && order) {
+    const isMercadoLivre =
+      marketplaceSlug === ML_MARKETPLACE_SLUG || marketplaceSlug === "mercadolivre";
+    const marketplaceAccountIdForMl =
+      item.marketplace_account_id != null
+        ? String(item.marketplace_account_id).trim()
+        : order?.marketplace_account_id != null
+          ? String(order.marketplace_account_id).trim()
+          : null;
+
+    if (isMercadoLivre && order) {
       logFinancialSnapshotValidation(item, order);
     }
 
-    if (
-      (marketplaceSlug === ML_MARKETPLACE_SLUG || marketplaceSlug === "mercadolivre") &&
-      order &&
-      item.marketplace_account_id
-    ) {
+    /** @type {string | null} */
+    let mlAccessToken = null;
+
+    if (isMercadoLivre && order && marketplaceAccountIdForMl) {
       try {
-        const accessToken = await getValidMLToken(user.id, {
-          marketplaceAccountId: String(item.marketplace_account_id).trim(),
+        mlAccessToken = await getValidMLToken(user.id, {
+          marketplaceAccountId: marketplaceAccountIdForMl,
         });
         const enriched = await ensureMercadoLivreSaleFinancialEnrichmentForDetail(
           supabase,
           user.id,
           item,
           order,
-          accessToken,
+          mlAccessToken,
         );
         if (enriched.order) order = enriched.order;
         if (enriched.item) itemForFinancial = enriched.item;
@@ -293,28 +436,60 @@ export default async function handleSalesDetail(req, res) {
           item_id: itemId,
         });
       }
+
+      if (mlAccessToken && order) {
+        try {
+          orderForGeneral = await attachFreshMercadoLivreShipmentSnapshot(
+            order,
+            mlAccessToken,
+            marketplaceAccountIdForMl,
+          );
+        } catch (shipErr) {
+          console.warn("[sales/detail] shipment_snapshot_refresh_skipped", {
+            message: shipErr instanceof Error ? shipErr.message : String(shipErr),
+            item_id: itemId,
+          });
+          orderForGeneral = order;
+        }
+      } else {
+        orderForGeneral = order;
+      }
     }
 
-    const product = await fetchProductForSaleDetail(supabase, user.id, row.product_id);
-    const delivery = pickDeliveryMeta(order);
+    const persistedInternalCostsSnapshot = resolveInternalCostsSnapshotFromItem(itemForFinancial);
+    const snapshotMeta = resolveFinancialSnapshotMetadata(itemForFinancial);
     const listingRow = await resolveListingForSaleDetail(supabase, user.id, item, order);
     const listingInternalId = listingRow?.id != null ? String(listingRow.id) : null;
-    let financial = buildSaleDetailFinancialBreakdown(itemForFinancial, product, order, listingRow);
-    try {
-      financial = await attachSaleDetailPricingVariables(
-        supabase,
-        user.id,
-        listingInternalId,
-        item,
-        order,
-        financial,
-        row,
-      );
-    } catch (pricingError) {
-      console.warn("[sales/detail] pricing_variables_failed", {
-        message: pricingError instanceof Error ? pricingError.message : String(pricingError),
-      });
+    let financial = buildSaleDetailFinancialBreakdown(itemForFinancial, null, order, listingRow, {});
+    financial = {
+      ...financial,
+      snapshot_origin: snapshotMeta.snapshot_origin,
+      snapshot_quality: snapshotMeta.snapshot_quality,
+      estimated: snapshotMeta.estimated,
+      internal_costs_snapshot: {
+        source: persistedInternalCostsSnapshot ? "historical_financial_snapshot" : "snapshot_missing",
+        snapshot_quality: persistedInternalCostsSnapshot ? "historical" : "missing",
+        estimated: !persistedInternalCostsSnapshot,
+      },
+    };
+
+    const contingencySnapshot = resolveContingencySnapshot(itemForFinancial, order);
+    if (contingencySnapshot) {
+      financial = {
+        ...financial,
+        commercial_adjustment_lines: contingencySnapshot.lines,
+        pricing_variables_source: contingencySnapshot.source,
+      };
+    } else {
+      // Protege verdade histórica: sem snapshot de contingência, não usa configuração viva.
+      financial = {
+        ...financial,
+        commercial_adjustment_lines: [],
+        pricing_variables_source: "snapshot_missing_no_live_recalculation",
+      };
     }
+
+    financial = finalizeSaleDetailFinancialWithContingency(financial);
 
     if (process.env.NODE_ENV !== "production" || process.env.S7_SALES_DETAIL_DEBUG === "1") {
       const mr =
@@ -322,6 +497,10 @@ export default async function handleSalesDetail(req, res) {
           ? financial.marketplace_revenue
           : null;
       console.log("[sales/detail] marketplace_revenue_final", mr);
+      console.log("[sales/detail] applied_sale_promotion", {
+        root: financial.applied_sale_promotion ?? null,
+        nested: mr?.applied_sale_promotion ?? null,
+      });
       console.log("[sales/detail] financial_breakdown_final", {
         gross_sale_amount_brl: mr?.gross_sale_amount_brl ?? financial.gross_amount ?? financial.sale_price ?? null,
         marketplace_fee_amount_brl:
@@ -347,26 +526,29 @@ export default async function handleSalesDetail(req, res) {
       });
     }
 
+    let general = buildSaleDetailGeneralBlock(row, orderForGeneral, itemForFinancial);
+    if (isMercadoLivre && mlAccessToken) {
+      try {
+        general = await enrichMercadoLivreSaleTypeDisplay(general, {
+          order: orderForGeneral,
+          item: itemForFinancial,
+          row,
+          accessToken: mlAccessToken,
+          marketplaceAccountId: marketplaceAccountIdForMl,
+        });
+      } catch (saleTypeErr) {
+        console.warn("[sales/detail] sale_type_display_enrichment_skipped", {
+          message: saleTypeErr instanceof Error ? saleTypeErr.message : String(saleTypeErr),
+          item_id: itemId,
+        });
+      }
+    }
+
     return res.status(200).json({
       ok: true,
       blocks: {
         product: buildSaleDetailProductBlock(row, item),
-        general: {
-          sale_date: row.sale_date ?? null,
-          order_internal_id: row.order_internal_id ?? null,
-          external_order_id: row.external_order_id ?? null,
-          marketplace: row.marketplace ?? null,
-          marketplace_label: row.marketplace_label ?? null,
-          buyer_display_name: row.buyer_display_name ?? null,
-          account_alias: row.account_alias ?? row.ml_account_alias ?? null,
-          order_status: row.order_status ?? order?.order_status ?? null,
-          quantity: row.quantity ?? null,
-          sku_display: row.sku_display ?? null,
-          listing_id_display: row.listing_id_display ?? null,
-          delivery_label: delivery.delivery_label,
-          combine_delivery: delivery.combine_delivery,
-          import_status_label: buildImportStatusLabel(row),
-        },
+        general,
         financial_breakdown: financial,
         sale_context_metrics: saleContextMetrics,
         profit_margin: {
@@ -375,6 +557,8 @@ export default async function handleSalesDetail(req, res) {
           margin_percent: financial.margin_percent ?? null,
           health: financial.health ?? financial.health_status ?? null,
           health_status: financial.health_status ?? financial.health ?? null,
+          health_label: financial.health_label ?? financial.result?.health_label ?? null,
+          offer_status_semantic: financial.offer_status_semantic ?? financial.result?.offer_status_semantic ?? null,
         },
         pricing_comparison: {
           listing_internal_id: listingInternalId,

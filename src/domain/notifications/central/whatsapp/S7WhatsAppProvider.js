@@ -3,7 +3,7 @@
 // =============================================================================
 
 import { config } from "../../../../infra/config.js";
-import { evaluateWhatsAppSendPolicy } from "./whatsappSandboxPolicy.js";
+import { resolveWhatsAppProcessorSendPolicy } from "../sales/manualSaleRayxLiveDelivery.js";
 import { maskPhoneForLog } from "../../notificationLog.js";
 import { logWhatsAppNotification } from "./whatsappLog.js";
 import { resolveProviderAdapter } from "../providers/abstraction/ProviderResolver.js";
@@ -70,12 +70,20 @@ export async function sendS7WhatsApp(input) {
     input.metadata?.dispatch_id != null ? String(input.metadata.dispatch_id) : null;
   const attempt = Number(input.metadata?.attempt ?? 1) || 1;
 
-  const channelPolicy = evaluateWhatsAppSendPolicy(to);
+  const channelPolicy = resolveWhatsAppProcessorSendPolicy({
+    to,
+    metadata: input.metadata && typeof input.metadata === "object" ? input.metadata : {},
+  });
+
   if (!channelPolicy.allowed) {
     logWhatsAppNotification("BLOCKED", {
       reason: channelPolicy.reason ?? "NOT_WHITELISTED",
       mode: channelPolicy.mode,
       to_masked: maskPhoneForLog(to),
+      outbox_policy_source: channelPolicy.outbox_policy_source,
+      processor_whitelist_applied: channelPolicy.processor_whitelist_applied,
+      processor_live_bypass_respected: channelPolicy.processor_live_bypass_respected,
+      final_send_allowed: false,
     });
     logProviderSendOutcome({
       channel: S7_PROVIDER_CHANNEL.WHATSAPP,
@@ -93,6 +101,19 @@ export async function sendS7WhatsApp(input) {
       error: channelPolicy.reason ?? "NOT_WHITELISTED",
       blocked: true,
     };
+  }
+
+  if (channelPolicy.processor_live_bypass_respected) {
+    logWhatsAppNotification("PROCESS_POLICY", {
+      dispatch_id: dispatchId,
+      outbox_policy_source: channelPolicy.outbox_policy_source,
+      processor_whitelist_applied: channelPolicy.processor_whitelist_applied,
+      processor_live_bypass_respected: true,
+      whitelist_bypass_reason: channelPolicy.whitelist_bypass_reason,
+      final_send_allowed: true,
+      provider_send_called: true,
+      to_masked: maskPhoneForLog(to),
+    });
   }
 
   const { adapter, deliveryMode, tier, policyReason } = resolveProviderAdapter(

@@ -24,6 +24,8 @@ function inboxField(row, key, fallback = "") {
  * @param {Record<string, unknown>} row
  */
 function mapInboxItem(row) {
+  const eventRow =
+    row.event && typeof row.event === "object" && !Array.isArray(row.event) ? row.event : null;
   const category = String(inboxField(row, "category_code", "") ?? "");
   const typeKey = String(inboxField(row, "type_key", "") ?? "");
   const metaRead = inboxField(row, "is_read", null);
@@ -55,6 +57,10 @@ function mapInboxItem(row) {
           : null,
     metadata: row.metadata && typeof row.metadata === "object" ? row.metadata : {},
     event_id: row.event_id != null ? String(row.event_id) : null,
+    event_payload:
+      eventRow?.payload && typeof eventRow.payload === "object" ? eventRow.payload : null,
+    event_metadata:
+      eventRow?.metadata && typeof eventRow.metadata === "object" ? eventRow.metadata : null,
   };
 }
 
@@ -65,7 +71,7 @@ function mapInboxItem(row) {
 async function countUnreadInApp(supabase, sellerId) {
   const { data: rows, error: listErr } = await supabase
     .from("s7_notification_dispatches")
-    .select("id, metadata, rendered_subject, rendered_body, created_at")
+    .select("id, metadata, rendered_subject, rendered_body, created_at, event:s7_notification_events(id,payload,metadata,created_at)")
     .eq("seller_id", sellerId)
     .eq("channel", S7_NOTIFICATION_CHANNEL.IN_APP)
     .order("created_at", { ascending: false })
@@ -94,7 +100,7 @@ export async function listSellerNotificationInbox(supabase, input) {
   let query = supabase
     .from("s7_notification_dispatches")
     .select(
-      "id, seller_id, event_id, channel, status, created_at, metadata, rendered_subject, rendered_body, priority"
+      "id, seller_id, event_id, channel, status, created_at, metadata, rendered_subject, rendered_body, priority, event:s7_notification_events(id,payload,metadata,created_at)"
     )
     .eq("seller_id", sellerId)
     .eq("channel", S7_NOTIFICATION_CHANNEL.IN_APP)

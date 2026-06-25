@@ -1,0 +1,6 @@
+⚠️ Suse7
+
+Carência no plano Plano Pro (sandbox 3.5B) até 30/06/2026.
+
+Abra:
+http://localhost:5173/perfil/assinatura/minha-assinatura

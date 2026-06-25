@@ -8,6 +8,7 @@ import {
 } from "./dailySalesSummaryAutomationConstants.js";
 
 const HH_MM_RE = /^([01]\d|2[0-3]):([0-5]\d)$/;
+const DAILY_SALES_SUMMARY_MIN_INTERVAL_MINUTES = 4 * 60;
 
 /**
  * @param {string} raw
@@ -46,6 +47,15 @@ export function normalizeDailySalesSummaryTimes(raw) {
 }
 
 /**
+ * @param {string} time
+ */
+function parseDailySalesSummaryTimeToMinutes(time) {
+  if (!isValidDailySalesSummaryTime(time)) return null;
+  const [hour, minute] = String(time).split(":").map(Number);
+  return hour * 60 + minute;
+}
+
+/**
  * @param {unknown} raw
  */
 export function normalizeDailySalesSummaryChannels(raw) {
@@ -55,7 +65,8 @@ export function normalizeDailySalesSummaryChannels(raw) {
   return {
     whatsapp: src.whatsapp !== false,
     email: src.email !== false,
-    in_app: src.in_app !== false,
+    // Regra de produto: resumo diário interno sempre gera sininho (in_app obrigatório).
+    in_app: true,
     popup: src.popup !== false,
   };
 }
@@ -94,6 +105,22 @@ export function validateDailySalesSummaryAutomationPatch(patch, current = {}) {
 
   if (times.length > 2) {
     return { ok: false, error: "SCHEDULE_TOO_MANY_TIMES", message: "Máximo de 2 horários por dia." };
+  }
+
+  if (times.length === 2) {
+    const first = parseDailySalesSummaryTimeToMinutes(times[0]);
+    const second = parseDailySalesSummaryTimeToMinutes(times[1]);
+    if (
+      Number.isInteger(first) &&
+      Number.isInteger(second) &&
+      Math.abs(second - first) < DAILY_SALES_SUMMARY_MIN_INTERVAL_MINUTES
+    ) {
+      return {
+        ok: false,
+        error: "SCHEDULE_MIN_INTERVAL_NOT_MET",
+        message: "Use no máximo 2 horários com intervalo mínimo de 4 horas entre eles.",
+      };
+    }
   }
 
   const rawTimes = Array.isArray(nextConfigRaw.times) ? nextConfigRaw.times : [];

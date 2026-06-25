@@ -4,7 +4,6 @@
 // ======================================================
 
 import { requireAuthUser } from "./_helpers/requireAuthUser.js";
-import { getValidMLToken } from "./_helpers/mlToken.js";
 import { buildMercadoLivreListingPricingScenariosPayload } from "../../domain/pricing/mercadoLivreListingPricingScenarios.js";
 
 export default async function handleListingPricingScenarios(req, res) {
@@ -31,6 +30,12 @@ export default async function handleListingPricingScenarios(req, res) {
         ? String(body.external_listing_id).trim()
         : "";
   const listingId = body.listingId != null ? String(body.listingId).trim() : "";
+  const scenarioScope =
+    body.scenarioScope != null
+      ? String(body.scenarioScope).trim().toLowerCase()
+      : body.scenario_scope != null
+        ? String(body.scenario_scope).trim().toLowerCase()
+        : "";
 
   if (!listingExternalId && !listingId) {
     return res.status(400).json({
@@ -40,16 +45,6 @@ export default async function handleListingPricingScenarios(req, res) {
   }
 
   const { user, supabase } = auth;
-
-  /** Token OAuth do usuário — frete premium via GET /items/:id/shipping_options (sem credencial em código). */
-  let mlAccessToken = null;
-  try {
-    mlAccessToken = await getValidMLToken(user.id);
-  } catch (e) {
-    console.info("[ML_PRICING_SCENARIOS] ml_token_unavailable", {
-      message: e instanceof Error ? e.message : String(e),
-    });
-  }
 
   const referenceZipCode =
     process.env.SUSE7_ML_PRICING_REFERENCE_ZIP?.trim() ||
@@ -61,7 +56,7 @@ export default async function handleListingPricingScenarios(req, res) {
     result = await buildMercadoLivreListingPricingScenariosPayload(supabase, user.id, {
       listingExternalId: listingExternalId || undefined,
       listingId: listingId || undefined,
-      mlAccessToken,
+      scenarioScope: scenarioScope || undefined,
       referenceZipCode,
     });
   } catch (e) {
@@ -76,6 +71,17 @@ export default async function handleListingPricingScenarios(req, res) {
   if (!result.ok) {
     return res.status(result.status ?? 400).json({ ok: false, error: result.error });
   }
+
+  console.info("[pricing-rayx] pricing-scenarios built", {
+    listing_external_id: listingExternalId || listingId || null,
+    scenario_scope: scenarioScope || null,
+    baseline_sale_price_brl: result.data?.baseline?.marketplace?.sale_price_brl ?? null,
+    baseline_shipping_brl: result.data?.baseline?.marketplace?.shipping_cost_amount_brl ?? null,
+    baseline_shipping_source: result.data?.baseline?.marketplace?.shipping_cost_source ?? null,
+    promotion_count: Array.isArray(result.data?.promotion_scenarios)
+      ? result.data.promotion_scenarios.length
+      : 0,
+  });
 
   return res.status(200).json({ ok: true, ...result.data });
 }

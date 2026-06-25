@@ -15,7 +15,6 @@ import { readPricingSimulationConfigFromRawJson } from "../../domain/pricing/lis
 import {
 
   buildCommercialAdjustmentLines,
-
   fetchListingHealthCommercialFlagsDetailed,
 
   isSaleCommercialDebugEnabled,
@@ -25,6 +24,7 @@ import {
   resolveSaleCommercialLookup,
 
 } from "../../domain/sales/saleListingHealthCommercial.js";
+import { buildRayxContingencyAdjustmentLines } from "../../domain/sales/saleDetailContingencyMargin.js";
 
 
 
@@ -291,18 +291,12 @@ export async function attachSaleDetailPricingVariables(
 
   const gross = financial.gross_amount ?? financial.sale_price;
 
-  const commercialLines = buildCommercialAdjustmentLines(
-
+  const commercialLines = buildRayxContingencyAdjustmentLines(
     /** @type {import("../../domain/sales/saleListingHealthCommercial.js").PricingSimulationConfig} */ (
-
       pricingFlags
-
     ),
-
     pricingVariables,
-
     gross,
-
   );
 
 

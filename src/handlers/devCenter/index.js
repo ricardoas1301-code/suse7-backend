@@ -8,6 +8,9 @@ import { config } from "../../infra/config.js";
 import { ok, fail, getTraceId } from "../../infra/http.js";
 import { resolveDevCenterAccess, DEV_CENTER_AUTH_MESSAGES } from "./devCenterAccess.js";
 import { handleDevCenterAdminRoutes } from "./devCenterAdminRoutes.js";
+import { handleDevCenterAdminPlansRoutes } from "./devCenterAdminPlansRoutes.js";
+import { handleDevCenterAdminFeaturesRoutes } from "./devCenterAdminFeaturesRoutes.js";
+import { handleDocumentacaoVivaRoutes } from "./devCenterDocumentacaoVivaRoutes.js";
 import { insertDevHistory } from "./devCenterHistory.js";
 
 const UUID_RE =
@@ -192,6 +195,30 @@ export async function handleDevCenter(req, res, path) {
       body,
     });
     if (adminHandled) {
+      return;
+    }
+
+    const docVivaHandled = await handleDocumentacaoVivaRoutes(req, res, path, method, supabase, traceId, {
+      user,
+      body,
+    });
+    if (docVivaHandled) {
+      return;
+    }
+
+    const adminPlansHandled = await handleDevCenterAdminPlansRoutes(req, res, path, method, supabase, traceId, {
+      user,
+      body,
+    });
+    if (adminPlansHandled) {
+      return;
+    }
+
+    const adminFeaturesHandled = await handleDevCenterAdminFeaturesRoutes(req, res, path, method, supabase, traceId, {
+      user,
+      body,
+    });
+    if (adminFeaturesHandled) {
       return;
     }
 

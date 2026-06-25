@@ -1,0 +1,6 @@
+🚨 Suse7
+
+Pagamento do plano Plano Pro (sandbox 3.5B) está pendente. Regularize no painel.
+
+Abra:
+http://localhost:5173/perfil/assinatura/historico

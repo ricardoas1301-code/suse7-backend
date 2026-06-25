@@ -1,0 +1,46 @@
+name: Billing Maintenance Cron
+
+# Contrato PROD:
+#   POST secrets.S7_PROD_BILLING_PROCESS_PERIOD_EXPIRATIONS_JOB_URL
+#   POST secrets.S7_PROD_BILLING_PROCESS_OVERDUES_JOB_URL
+#   Header X-Job-Secret: secrets.S7_PROD_JOB_SECRET
+#   Body opcional: {"limit":50}
+
+on:
+  schedule:
+    - cron: "0 6 * * *"
+  workflow_dispatch: {}
+
+jobs:
+  run-prod:
+    runs-on: ubuntu-latest
+    env:
+      PERIOD_JOB_URL: ${{ secrets.S7_PROD_BILLING_PROCESS_PERIOD_EXPIRATIONS_JOB_URL }}
+      OVERDUES_JOB_URL: ${{ secrets.S7_PROD_BILLING_PROCESS_OVERDUES_JOB_URL }}
+      JOB_SECRET: ${{ secrets.S7_PROD_JOB_SECRET }}
+    steps:
+      - name: Trigger production billing maintenance jobs
+        run: |
+          set -euo pipefail
+          if [ -z "${PERIOD_JOB_URL}" ] || [ -z "${OVERDUES_JOB_URL}" ] || [ -z "${JOB_SECRET}" ]; then
+            echo "::error::Missing PROD billing cron secrets (URLs and/or S7_PROD_JOB_SECRET)"
+            exit 1
+          fi
+
+          for job_name in period-expirations overdues; do
+            if [ "${job_name}" = "period-expirations" ]; then
+              url="${PERIOD_JOB_URL}"
+            else
+              url="${OVERDUES_JOB_URL}"
+            fi
+            echo "[billing-cron-prod] firing ${job_name}"
+            http_code=$(curl -sS -o "/tmp/billing-${job_name}-prod.json" -w "%{http_code}" -X POST "${url}" \
+              -H "Content-Type: application/json" \
+              -H "X-Job-Secret: ${JOB_SECRET}" \
+              -d '{"limit":50}')
+            echo "[billing-cron-prod] ${job_name} http_status=${http_code}"
+            if [ "${http_code}" -lt 200 ] || [ "${http_code}" -ge 300 ]; then
+              echo "::error::Falha PROD ${job_name}: HTTP ${http_code}"
+              exit 1
+            fi
+          done

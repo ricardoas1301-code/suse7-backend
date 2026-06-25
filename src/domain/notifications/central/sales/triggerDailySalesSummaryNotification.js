@@ -19,10 +19,10 @@ import {
 function resolveEnabledChannels(channels) {
   /** @type {string[]} */
   const list = [];
-  if (channels.in_app !== false) list.push(S7_NOTIFICATION_CHANNEL.IN_APP);
+  // Regra de produto: canal interno sempre gera sininho.
+  list.push(S7_NOTIFICATION_CHANNEL.IN_APP);
   if (channels.email !== false) list.push(S7_NOTIFICATION_CHANNEL.EMAIL);
   if (channels.whatsapp !== false) list.push(S7_NOTIFICATION_CHANNEL.WHATSAPP);
-  if (channels.popup !== false) list.push(S7_NOTIFICATION_CHANNEL.PUSH);
   return list;
 }
 
@@ -38,13 +38,31 @@ function resolveEnabledChannels(channels) {
  * }} input
  */
 export async function triggerDailySalesSummaryNotification(supabase, input) {
-  const templatePayload = buildDailySalesSummaryTemplatePayload(
+  const templatePayloadBase = buildDailySalesSummaryTemplatePayload(
     input.executivePayload,
     { period_start: input.periodStart, period_end: input.periodEnd },
   );
+  const channelsConfig =
+    input.channels && typeof input.channels === "object"
+      ? {
+          in_app: true,
+          popup: input.channels.popup !== false,
+          email: input.channels.email !== false,
+          whatsapp: input.channels.whatsapp !== false,
+        }
+      : {
+          in_app: true,
+          popup: true,
+          email: true,
+          whatsapp: true,
+        };
+  const templatePayload = {
+    ...templatePayloadBase,
+    channels: channelsConfig,
+  };
 
   const scheduledIso = input.scheduledAt.toISOString();
-  const channelsFilter = resolveEnabledChannels(input.channels);
+  const channelsFilter = resolveEnabledChannels(channelsConfig);
 
   const published = await publishNotificationEvent(supabase, {
     category: DAILY_SALES_SUMMARY_CATEGORY,
@@ -64,6 +82,7 @@ export async function triggerDailySalesSummaryNotification(supabase, input) {
       period_end: input.periodEnd.toISOString(),
       scheduled_at: scheduledIso,
       assets_mode: "template_only",
+      channels: channelsConfig,
     },
   });
 

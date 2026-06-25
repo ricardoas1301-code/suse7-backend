@@ -17,7 +17,7 @@ import { applyMlOrderDetailToMarketplaceSales } from "../../modules/marketplaces
 import { advanceMlSalesWatermark } from "./mlSalesAccountWatermark.js";
 import {
   buildMlConnectionUiPack,
-  fetchMlTokenProbeForUser,
+  fetchMlTokenProbeForMlSeller,
   fetchMarketplaceAccountsWithActiveMlPipeline,
 } from "./marketplaceAccountConnectionHealth.js";
 
@@ -180,21 +180,11 @@ export async function runIncrementalMlSalesPollWave(supabase, opts = {}) {
   }
 
   const accountIds = accounts.map((a) => (a?.id != null ? String(a.id).trim() : "")).filter(Boolean);
-  const userIds = [...new Set(accounts.map((a) => (a?.user_id != null ? String(a.user_id).trim() : "")).filter(Boolean))];
 
   const [activeByAcct, pipelineSet] = await Promise.all([
     fetchActiveMlJobCountsByAccount(supabase, accountIds),
     fetchMarketplaceAccountsWithActiveMlPipeline(supabase, accountIds, ML_MARKETPLACE_SLUG),
   ]);
-
-  /** @type {Map<string, { present: boolean; expires_at: string | null; has_refresh: boolean }>} */
-  const tokenProbeByUser = new Map();
-  await Promise.all(
-    userIds.map(async (uid) => {
-      const probe = await fetchMlTokenProbeForUser(supabase, uid, ML_MARKETPLACE_SLUG);
-      tokenProbeByUser.set(uid, probe);
-    })
-  );
 
   const out = {
     accounts_attempted: 0,
@@ -209,7 +199,10 @@ export async function runIncrementalMlSalesPollWave(supabase, opts = {}) {
     const userId = acc?.user_id != null ? String(acc.user_id).trim() : "";
     if (!accountId || !userId) continue;
 
-    const tokenProbe = tokenProbeByUser.get(userId) ?? { present: false, expires_at: null, has_refresh: false };
+    const extForProbe = acc?.external_seller_id != null ? String(acc.external_seller_id).trim() : "";
+    const tokenProbe = extForProbe
+      ? await fetchMlTokenProbeForMlSeller(supabase, userId, ML_MARKETPLACE_SLUG, extForProbe)
+      : { present: false, expires_at: null, has_refresh: false };
     const pipelineActive = pipelineSet.has(accountId);
     const connectionPack = buildMlConnectionUiPack({ status: acc.status }, tokenProbe, pipelineActive);
     const salesAutoSyncEffective =
@@ -233,7 +226,7 @@ export async function runIncrementalMlSalesPollWave(supabase, opts = {}) {
 
     let accessToken;
     try {
-      accessToken = await getValidMLToken(userId);
+      accessToken = await getValidMLToken(userId, { marketplaceAccountId: accountId });
     } catch (e) {
       const em = e?.message ? String(e.message) : String(e);
       out.errors.push(`${accountId}:token:${em}`);
@@ -347,7 +340,8 @@ export async function runIncrementalMlSalesPollWave(supabase, opts = {}) {
               nowIso,
               summaryStub,
               accessToken,
-              { syncRunId: `incremental:${accountId}`, orderIndex: null, total: null }
+              { syncRunId: `incremental:${accountId}`, orderIndex: null, total: null, syncType: "ml_incremental_sales_poll" },
+              { syncType: "ml_incremental_sales_poll" }
             ),
             ORDER_TIMEOUT_MS,
             "incremental_order"

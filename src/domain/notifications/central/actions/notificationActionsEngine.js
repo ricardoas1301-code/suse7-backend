@@ -401,20 +401,26 @@ async function executePlannedAction(supabase, action, event, template, severity)
     });
   }
   if (isEmail) {
-    logEmailNotification(delivery.ok && delivery.queued ? "OUTBOX_ENQUEUED" : "DELIVERY_FAILED", {
+    logEmailNotification(
+      delivery.ok ? (delivery.queued ? "OUTBOX_ENQUEUED" : "DELIVERED") : "DELIVERY_FAILED",
+      {
       dispatch_id: dispatchId,
       seller_id: sellerId,
       event_id: eventId,
       queued: Boolean(delivery.queued),
-    });
+      }
+    );
   }
   if (isWhatsApp) {
-    logWhatsAppNotification(delivery.ok && delivery.queued ? "OUTBOX_ENQUEUED" : "DELIVERY_FAILED", {
+    logWhatsAppNotification(
+      delivery.ok ? (delivery.queued ? "OUTBOX_ENQUEUED" : "DELIVERED") : "DELIVERY_FAILED",
+      {
       dispatch_id: dispatchId,
       seller_id: sellerId,
       event_id: eventId,
       queued: Boolean(delivery.queued),
-    });
+      }
+    );
     logNotificationActions("WHATSAPP_OUTBOX_ENQUEUED", {
       dispatch_id: dispatchId,
       event_id: eventId,

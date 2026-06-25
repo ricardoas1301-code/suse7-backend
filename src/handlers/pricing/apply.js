@@ -3,6 +3,7 @@
 // ======================================================
 
 import { requireAuthUser } from "../ml/_helpers/requireAuthUser.js";
+import { gatePremiumHandler } from "../../billing/middleware/requirePlanAccess.js";
 import { getValidMLToken } from "../ml/_helpers/mlToken.js";
 import { applyMarketplacePrice } from "../../domain/pricing/marketplacePricingGateway.js";
 
@@ -15,6 +16,9 @@ export default async function handlePricingApply(req, res) {
   if (auth.error) {
     return res.status(auth.error.status).json({ ok: false, error: auth.error.message });
   }
+
+  const { user, supabase } = auth;
+  if (await gatePremiumHandler(res, supabase, user.id, { module: "precificacoes" })) return;
 
   let body = {};
   try {

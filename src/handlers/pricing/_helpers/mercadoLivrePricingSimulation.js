@@ -55,7 +55,7 @@ export async function loadMercadoLivreListingPricingInputs(supabase, userId, lis
   const { data: row, error: qErr } = await supabase
     .from("marketplace_listings")
     .select(
-      "id, user_id, title, marketplace, price, base_price, original_price, available_quantity, sold_quantity, status, external_listing_id, permalink, currency_id, pictures_count, variations_count, seller_sku, seller_custom_field, listing_type_id, raw_json, product_id, attention_reason, products(product_name, sku, cost_price, operational_cost, packaging_cost)"
+      "id, user_id, title, marketplace, price, base_price, original_price, available_quantity, sold_quantity, status, external_listing_id, marketplace_account_id, permalink, currency_id, pictures_count, variations_count, seller_sku, seller_custom_field, listing_type_id, raw_json, product_id, attention_reason, products(product_name, sku, cost_price, operational_cost, packaging_cost)"
     )
     .eq("id", listingUuid)
     .eq("user_id", userId)
@@ -148,6 +148,8 @@ export async function loadMercadoLivreListingPricingInputs(supabase, userId, lis
       ? String(profileTaxRow.imposto_percentual).trim()
       : null;
 
+  const marketplaceAccount = await resolveMercadoLivreListingMarketplaceAccount(supabase, userId, listing);
+
   return {
     ok: true,
     listing,
@@ -155,6 +157,69 @@ export async function loadMercadoLivreListingPricingInputs(supabase, userId, lis
     metrics,
     sellerTaxPct,
     external_listing_id: ext,
+    marketplace_account_id: marketplaceAccount.marketplace_account_id,
+    seller_id: marketplaceAccount.seller_id,
+  };
+}
+
+/**
+ * Resolve conta ML vinculada ao anúncio (coluna ou seller_id em raw_json).
+ * @param {import("@supabase/supabase-js").SupabaseClient} supabase
+ * @param {string} userId
+ * @param {Record<string, unknown>} listing
+ */
+export async function resolveMercadoLivreListingMarketplaceAccount(supabase, userId, listing) {
+  const direct =
+    listing.marketplace_account_id != null && String(listing.marketplace_account_id).trim() !== ""
+      ? String(listing.marketplace_account_id).trim()
+      : null;
+  if (direct) {
+    const { data: acc } = await supabase
+      .from("marketplace_accounts")
+      .select("id, external_seller_id")
+      .eq("id", direct)
+      .eq("user_id", userId)
+      .maybeSingle();
+    return {
+      marketplace_account_id: direct,
+      seller_id:
+        acc?.external_seller_id != null && String(acc.external_seller_id).trim() !== ""
+          ? String(acc.external_seller_id).trim()
+          : null,
+    };
+  }
+
+  const raw =
+    listing.raw_json != null && typeof listing.raw_json === "object"
+      ? /** @type {Record<string, unknown>} */ (listing.raw_json)
+      : null;
+  const sellerFromRaw =
+    raw?.seller_id != null && String(raw.seller_id).trim() !== ""
+      ? String(raw.seller_id).trim()
+      : raw?.seller != null && typeof raw.seller === "object"
+        ? /** @type {Record<string, unknown>} */ (raw.seller).id != null
+          ? String(/** @type {Record<string, unknown>} */ (raw.seller).id).trim()
+          : null
+        : null;
+  if (!sellerFromRaw) {
+    return { marketplace_account_id: null, seller_id: null };
+  }
+
+  const { data: accBySeller } = await supabase
+    .from("marketplace_accounts")
+    .select("id, external_seller_id")
+    .eq("user_id", userId)
+    .eq("external_seller_id", sellerFromRaw)
+    .maybeSingle();
+  if (!accBySeller?.id) {
+    return { marketplace_account_id: null, seller_id: sellerFromRaw };
+  }
+  return {
+    marketplace_account_id: String(accBySeller.id),
+    seller_id:
+      accBySeller.external_seller_id != null && String(accBySeller.external_seller_id).trim() !== ""
+        ? String(accBySeller.external_seller_id).trim()
+        : sellerFromRaw,
   };
 }
 
@@ -173,7 +238,7 @@ export async function loadMercadoLivreListingPricingInputsByExternalId(supabase,
   const { data: row, error: qErr } = await supabase
     .from("marketplace_listings")
     .select(
-      "id, user_id, title, marketplace, price, base_price, original_price, available_quantity, sold_quantity, status, external_listing_id, permalink, currency_id, pictures_count, variations_count, seller_sku, seller_custom_field, listing_type_id, raw_json, product_id, attention_reason, products(product_name, sku, cost_price, operational_cost, packaging_cost)"
+      "id, user_id, title, marketplace, price, base_price, original_price, available_quantity, sold_quantity, status, external_listing_id, marketplace_account_id, permalink, currency_id, pictures_count, variations_count, seller_sku, seller_custom_field, listing_type_id, raw_json, product_id, attention_reason, products(product_name, sku, cost_price, operational_cost, packaging_cost)"
     )
     .eq("user_id", userId)
     .in("external_listing_id", variants.length ? variants : [ext])
@@ -267,6 +332,8 @@ export async function loadMercadoLivreListingPricingInputsByExternalId(supabase,
       ? String(profileTaxRow.imposto_percentual).trim()
       : null;
 
+  const marketplaceAccount = await resolveMercadoLivreListingMarketplaceAccount(supabase, userId, listing);
+
   return {
     ok: true,
     listing,
@@ -274,6 +341,8 @@ export async function loadMercadoLivreListingPricingInputsByExternalId(supabase,
     metrics,
     sellerTaxPct,
     external_listing_id: extNorm,
+    marketplace_account_id: marketplaceAccount.marketplace_account_id,
+    seller_id: marketplaceAccount.seller_id,
   };
 }
 

@@ -1,12 +1,19 @@
 // ======================================================================
 // POST /api/marketplace/accounts/:id/start-initial-sync
 // Enfileira onda inicial (jobs) — idempotente via createMlInitialSyncJobsIfAbsent.
+//
+// Semântica de status (não misturar):
+// - marketplace_accounts.status: ciclo de vida da conexão OAuth (ex.: active, removed).
+// - sync-status / integration_stage / jobs: progresso da sincronização (awaiting_start, running, done).
+// A UI pode mostrar “aguardando sincronização” com conta active até o seller disparar esta rota.
 // ======================================================================
 
 import { requireAuthUser } from "../ml/_helpers/requireAuthUser.js";
 import { ML_MARKETPLACE_SLUG } from "../ml/_helpers/mlMarketplace.js";
 import {
   createMlInitialSyncJobsIfAbsent,
+  ML_ALL_ACCOUNT_SYNC_JOB_TYPES,
+  ML_FORCE_RESET_JOB_TYPES,
   ML_INITIAL_SYNC_JOB_TYPES_ORDERED,
 } from "../../services/marketplace/createMlInitialSyncJobs.js";
 import { config } from "../../infra/config.js";
@@ -25,6 +32,10 @@ export default async function handleMarketplaceAccountStartInitialSync(req, res,
 
   const auth = await requireAuthUser(req);
   if (auth.error) {
+    console.warn("[start-initial-sync] rejected_unauthenticated", {
+      status: auth.error.status,
+      code: auth.error.code ?? null,
+    });
     return res.status(auth.error.status).json({ ok: false, error: auth.error.message });
   }
 
@@ -46,8 +57,20 @@ export default async function handleMarketplaceAccountStartInitialSync(req, res,
   const m = path.match(/^\/api\/marketplace\/accounts\/([^/]+)\/start-initial-sync$/);
   const accountId = m?.[1] ?? null;
   if (!accountId || !UUID_REGEX.test(accountId)) {
-    return res.status(400).json({ ok: false, error: "ID inválido." });
+    console.warn("[start-initial-sync] rejected_missing_account", {
+      user_id: user.id,
+      reason: "invalid_or_missing_marketplace_account_id",
+      path,
+    });
+    return res.status(400).json({ ok: false, error: "ID inválido.", code: "invalid_marketplace_account_id" });
   }
+
+  console.info("[start-initial-sync] request_received", {
+    user_id: user.id,
+    marketplace_account_id: accountId,
+    force,
+    method: req.method,
+  });
 
   try {
     console.info("[ML_ONBOARDING_SYNC_START_HANDLER_HIT]", {
@@ -77,20 +100,46 @@ export default async function handleMarketplaceAccountStartInitialSync(req, res,
       .maybeSingle();
 
     if (accErr) {
-      console.error("[marketplace/start-initial-sync] account_query", accErr);
+      console.error("[start-initial-sync] account_query_failed", { user_id: user.id, marketplace_account_id: accountId, message: accErr.message });
       return res.status(500).json({ ok: false, error: "Erro ao carregar conta." });
     }
     if (!acc?.id) {
-      return res.status(404).json({ ok: false, error: "Conta não encontrada." });
+      console.warn("[start-initial-sync] rejected_wrong_owner_or_missing", {
+        user_id: user.id,
+        marketplace_account_id: accountId,
+      });
+      return res.status(404).json({ ok: false, error: "Conta não encontrada.", code: "account_not_found" });
     }
+
+    console.info("[start-initial-sync] account_loaded", {
+      user_id: user.id,
+      marketplace_account_id: acc.id,
+      marketplace: acc.marketplace ?? null,
+      status: acc.status ?? null,
+      has_seller_company_id: Boolean(acc.seller_company_id),
+    });
+    console.info("[start-initial-sync] ownership_ok", {
+      user_id: user.id,
+      marketplace_account_id: acc.id,
+    });
 
     const mp = String(acc.marketplace || "").trim();
     if (mp !== ML_MARKETPLACE_SLUG) {
-      return res.status(400).json({ ok: false, error: "Tipo de marketplace não suportado nesta rota." });
+      console.warn("[start-initial-sync] rejected_unsupported_marketplace", {
+        user_id: user.id,
+        marketplace_account_id: accountId,
+        marketplace: mp,
+      });
+      return res.status(400).json({ ok: false, error: "Tipo de marketplace não suportado nesta rota.", code: "unsupported_marketplace" });
     }
 
     if (String(acc.status || "").toLowerCase() !== "active") {
-      return res.status(400).json({ ok: false, error: "Conta inativa; reconecte o Mercado Livre." });
+      console.warn("[start-initial-sync] rejected_inactive_account", {
+        user_id: user.id,
+        marketplace_account_id: accountId,
+        status: acc.status,
+      });
+      return res.status(400).json({ ok: false, error: "Conta inativa; reconecte o Mercado Livre.", code: "account_inactive" });
     }
 
     const sellerCompanyId =
@@ -98,8 +147,23 @@ export default async function handleMarketplaceAccountStartInitialSync(req, res,
         ? String(acc.seller_company_id).trim()
         : null;
 
+    if (!sellerCompanyId) {
+      console.warn("[start-initial-sync] rejected_missing_seller_company", {
+        user_id: user.id,
+        marketplace_account_id: accountId,
+        note: "Rodar diagnóstico scripts/marketplace_accounts_backfill_seller_company_id.sql quando aplicável.",
+      });
+      return res.status(400).json({
+        ok: false,
+        error:
+          "Esta conta não está vinculada a um CNPJ no Suse7. Associe uma empresa em Perfil → Dados da Empresa ou execute o backfill seguro no banco.",
+        code: "seller_company_id_required",
+        marketplace_account_id: accountId,
+      });
+    }
+
     if (force) {
-      const forceTypes = ["ml_initial_sales_history"];
+      const forceTypes = ML_FORCE_RESET_JOB_TYPES;
       const { error: forceErr } = await supabase
         .from("marketplace_account_sync_jobs")
         .update({
@@ -134,11 +198,33 @@ export default async function handleMarketplaceAccountStartInitialSync(req, res,
       sellerCompanyId,
     });
 
+    console.info("[start-initial-sync] job_enqueue_result", {
+      user_id: user.id,
+      marketplace_account_id: accountId,
+      seller_company_id: sellerCompanyId,
+      created: result.created,
+      skipped: result.skipped,
+    });
+
+    if (typeof result.created === "number" && result.created > 0) {
+      console.info("[start-initial-sync] job_created", {
+        user_id: user.id,
+        marketplace_account_id: accountId,
+        jobs_inserted: result.created,
+      });
+    } else if (result.skipped === true) {
+      console.info("[start-initial-sync] job_skipped_idempotent", {
+        user_id: user.id,
+        marketplace_account_id: accountId,
+        reason: "wave_exists_or_guard",
+      });
+    }
+
     const { data: plannedRows, error: plannedErr } = await supabase
       .from("marketplace_account_sync_jobs")
       .select("id, job_type, status, marketplace_account_id")
       .eq("marketplace_account_id", accountId)
-      .in("job_type", ML_INITIAL_SYNC_JOB_TYPES_ORDERED)
+      .in("job_type", ML_ALL_ACCOUNT_SYNC_JOB_TYPES)
       .in("status", ["pending", "running", "done", "error"])
       .order("created_at", { ascending: false })
       .limit(40);
@@ -209,11 +295,34 @@ export default async function handleMarketplaceAccountStartInitialSync(req, res,
         .catch(() => {});
     }
 
+    const sampleJobIds = planned
+      .filter((r) => String(r.marketplace_account_id || "") === String(accountId))
+      .slice(0, 8)
+      .map((r) => r.id)
+      .filter(Boolean);
+
+    console.info("[start-initial-sync] response_ok", {
+      user_id: user.id,
+      marketplace_account_id: accountId,
+      seller_company_id: sellerCompanyId,
+      marketplace: mp,
+      status: acc.status,
+      jobs_planned_sample_ids: sampleJobIds,
+    });
+
     return res.status(200).json({
       ok: true,
       marketplace_account_id: accountId,
+      seller_company_id: sellerCompanyId,
+      marketplace: mp,
+      status: acc.status,
       created: result.created,
       skipped: result.skipped,
+      message:
+        result.skipped === true
+          ? "Sincronização inicial já estava enfileirada ou em andamento para esta conta."
+          : "Sincronização inicial enfileirada para esta conta Mercado Livre.",
+      job_ids_sample: sampleJobIds.length ? sampleJobIds : undefined,
     });
   } catch (e) {
     console.error("[ML_ONBOARDING_SYNC_FAILED]", {

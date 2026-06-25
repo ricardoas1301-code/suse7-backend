@@ -146,6 +146,11 @@ export function resolveExecutiveSummaryPeriod(query) {
   } else if (!hasDatetimeRange && preset === "month") {
     start = new Date(Date.UTC(todayUtc.getUTCFullYear(), todayUtc.getUTCMonth(), 1));
     end = todayUtc;
+  } else if (!hasDatetimeRange && preset === "lifetime") {
+    start = null;
+    end = null;
+    startMs = null;
+    endMsExclusive = null;
   } else if (!hasDatetimeRange && !start && !end) {
     return { ok: false, error: `period_preset desconhecido: ${presetRaw}` };
   }

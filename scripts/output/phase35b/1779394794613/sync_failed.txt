@@ -1,0 +1,6 @@
+🚨 Suse7
+
+Sincronização não concluída. Tente novamente no Suse7.
+
+Abra:
+http://localhost:5173/notificacoes

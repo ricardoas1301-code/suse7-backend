@@ -296,6 +296,7 @@ export function buildCommercialAdjustmentLines(flags, pricingVariables, grossMon
           : null;
 
     lines.push({
+      key: spec.flagKey,
       label: spec.label,
       amount_brl: amountBrl != null ? amountBrl : "0.00",
       percent: pct,

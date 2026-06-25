@@ -1,0 +1,6 @@
+⚠️ Suse7
+
+Venda com margem negativa em Kit Premium ML.
+
+Abra:
+http://localhost:5173/vendas

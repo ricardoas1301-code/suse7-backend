@@ -78,6 +78,7 @@ export function refreshMercadoLivreItemMarketplaceFeeContract(item, order = null
     const rebateResolved = resolveMercadoLivreMarketplaceRebate({
       feeGrossDec: new Decimal(marketplaceFeeAfter.amount_brl),
       line: line && typeof line === "object" ? line : null,
+      qty,
       logContext: {
         sale_id: item.id != null ? String(item.id) : null,
         item_id: item.id != null ? String(item.id) : null,
@@ -94,6 +95,7 @@ export function refreshMercadoLivreItemMarketplaceFeeContract(item, order = null
     feeGrossDec:
       marketplaceFeeAfter?.amount_brl != null ? new Decimal(marketplaceFeeAfter.amount_brl) : null,
     line: line && typeof line === "object" ? line : null,
+    qty,
     logContext: {
       sale_id: item.id != null ? String(item.id) : null,
       item_id: item.id != null ? String(item.id) : null,

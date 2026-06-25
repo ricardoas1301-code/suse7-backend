@@ -1,0 +1,45 @@
+name: Backend SSOT Guard CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  ssot-guard:
+    name: SSOT Guard Check
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Install dependencies
+        run: |
+          if [ -d "suse7-backend" ]; then
+            cd suse7-backend
+          fi
+          npm install
+
+      - name: Run SSOT Guard
+        run: |
+          if [ -d "suse7-backend" ]; then
+            cd suse7-backend
+          fi
+          npm run ssot:guard
+
+      - name: Upload SSOT Guard report artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ssot-guard-report
+          path: |
+            suse7-backend/scripts/output/ssot_guard_check_*.json
+            scripts/output/ssot_guard_check_*.json
+          if-no-files-found: warn

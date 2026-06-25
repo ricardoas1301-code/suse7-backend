@@ -7,20 +7,14 @@
 
 
 import {
-
   buildVendasSalesItemQOrFilter,
-
   chunkIds,
-
   fetchOrderIdsFromItemTextSearch,
-
   fetchVendasSearchOrderIds,
-
   normalizeSearchQuery,
-
   splitSearchTokens,
-
 } from "../../handlers/sales/_vendasSalesRows.js";
+import { chunkExecutiveProductListingIds } from "./saleExecutiveProductScope.js";
 
 
 
@@ -186,10 +180,9 @@ export const EXECUTIVE_SUMMARY_ORDER_IDS_IN_CHUNK_SIZE = (() => {
  */
 export async function fetchAllExecutiveSummaryOrderIdsByPeriod(supabase, userId, filters) {
   const period = filters.period;
-  const hasPeriod =
+  const hasPeriodBounds =
     (period?.start_ms != null && Number.isFinite(period.start_ms)) ||
     (period?.end_ms_exclusive != null && Number.isFinite(period.end_ms_exclusive));
-  if (!hasPeriod) return [];
 
   /** @type {string[]} */
   const allIds = [];
@@ -203,11 +196,13 @@ export async function fetchAllExecutiveSummaryOrderIdsByPeriod(supabase, userId,
     if (filters.marketplace_account_id) q = q.eq("marketplace_account_id", filters.marketplace_account_id);
     if (filters.seller_company_id) q = q.eq("seller_company_id", filters.seller_company_id);
 
-    if (period?.start_ms != null && Number.isFinite(period.start_ms)) {
-      q = q.gte("date_created_marketplace", new Date(period.start_ms).toISOString());
-    }
-    if (period?.end_ms_exclusive != null && Number.isFinite(period.end_ms_exclusive)) {
-      q = q.lt("date_created_marketplace", new Date(period.end_ms_exclusive).toISOString());
+    if (hasPeriodBounds) {
+      if (period?.start_ms != null && Number.isFinite(period.start_ms)) {
+        q = q.gte("date_created_marketplace", new Date(period.start_ms).toISOString());
+      }
+      if (period?.end_ms_exclusive != null && Number.isFinite(period.end_ms_exclusive)) {
+        q = q.lt("date_created_marketplace", new Date(period.end_ms_exclusive).toISOString());
+      }
     }
 
     const { data, error } = await q
@@ -283,6 +278,145 @@ async function fetchExecutiveSummaryItemsForOrderIds(
 }
 
 /**
+ * @param {import("@supabase/supabase-js").SupabaseClient} supabase
+ * @param {string} userId
+ * @param {{
+ *   marketplace?: string | null;
+ *   marketplace_account_id?: string | null;
+ *   seller_company_id?: string | null;
+ *   q?: string | null;
+ *   period?: { start_ms: number | null; end_ms_exclusive: number | null };
+ * }} filters
+ * @param {string[]} listingChunk
+ */
+async function fetchExecutiveSummaryItemsByListingIds(supabase, userId, filters, listingChunk) {
+  if (!listingChunk.length) return [];
+
+  const period = filters.period;
+  const hasPeriod =
+    (period?.start_ms != null && Number.isFinite(period.start_ms)) ||
+    (period?.end_ms_exclusive != null && Number.isFinite(period.end_ms_exclusive));
+
+  const orderEmbedSelect =
+    `${ITEM_SELECT},sales_orders!inner(id,order_status,order_substatus,marketplace,marketplace_account_id,seller_company_id,date_created_marketplace,paid_at,date_closed_marketplace,created_at,raw_json,external_order_id)`;
+
+  /**
+   * @param {string} selectExpr
+   * @param {boolean} useOrderEmbed
+   */
+  async function runSelect(selectExpr, useOrderEmbed) {
+    let itemsQuery = supabase.from("sales_order_items").select(selectExpr).eq("user_id", userId);
+    if (filters.marketplace) itemsQuery = itemsQuery.eq("marketplace", filters.marketplace);
+    if (filters.marketplace_account_id) {
+      itemsQuery = itemsQuery.eq("marketplace_account_id", filters.marketplace_account_id);
+    }
+    if (filters.seller_company_id) {
+      itemsQuery = itemsQuery.eq("seller_company_id", filters.seller_company_id);
+    }
+    itemsQuery = itemsQuery.in("external_listing_id", listingChunk);
+
+    if (useOrderEmbed && hasPeriod) {
+      if (period?.start_ms != null && Number.isFinite(period.start_ms)) {
+        itemsQuery = itemsQuery.gte(
+          "sales_orders.date_created_marketplace",
+          new Date(period.start_ms).toISOString(),
+        );
+      }
+      if (period?.end_ms_exclusive != null && Number.isFinite(period.end_ms_exclusive)) {
+        itemsQuery = itemsQuery.lt(
+          "sales_orders.date_created_marketplace",
+          new Date(period.end_ms_exclusive).toISOString(),
+        );
+      }
+    }
+
+    const { data, error } = await itemsQuery.order("created_at", { ascending: false });
+    if (error) throw error;
+
+    const rows = Array.isArray(data) ? data : [];
+    if (!useOrderEmbed) return rows;
+
+    return rows.map((row) => {
+      if (!row || typeof row !== "object") return /** @type {Record<string, unknown>} */ (row);
+      const { sales_orders: _nested, ...rest } = /** @type {Record<string, unknown>} */ (row);
+      return rest;
+    });
+  }
+
+  try {
+    if (hasPeriod) {
+      let rows = await runSelect(orderEmbedSelect, true);
+      if (rows.length === 0) {
+        rows = await runSelect("*", true);
+      }
+      return rows;
+    }
+
+    let rows = await runSelect(ITEM_SELECT, false);
+    if (rows.length === 0) {
+      rows = await runSelect("*", false);
+    }
+    return rows;
+  } catch (err) {
+    if (isShapeError(err)) {
+      return hasPeriod ? runSelect("*", true) : runSelect("*", false);
+    }
+    throw err;
+  }
+}
+
+/**
+ * Scan por anúncios vinculados ao produto — evita varrer todos os pedidos do seller.
+ *
+ * @param {import("@supabase/supabase-js").SupabaseClient} supabase
+ * @param {string} userId
+ * @param {{
+ *   marketplace?: string | null;
+ *   marketplace_account_id?: string | null;
+ *   seller_company_id?: string | null;
+ *   q?: string | null;
+ *   period?: { start_ms: number | null; end_ms_exclusive: number | null };
+ *   product_scope?: { external_listing_ids?: string[] };
+ * }} filters
+ * @param {string[]} listingIds
+ */
+async function* iterateExecutiveSummaryBatchesByListingIds(supabase, userId, filters, listingIds) {
+  const chunks = chunkExecutiveProductListingIds(listingIds);
+  let batchIndex = 0;
+  /** @type {Set<string>} */
+  const seenOrderIds = new Set();
+
+  for (const listingChunk of chunks) {
+    const items = await fetchExecutiveSummaryItemsByListingIds(
+      supabase,
+      userId,
+      filters,
+      listingChunk,
+    );
+    if (items.length === 0) continue;
+
+    const orderIds = [
+      ...new Set(
+        items
+          .map((it) => (it?.sales_order_id != null ? String(it.sales_order_id) : ""))
+          .filter(Boolean),
+      ),
+    ];
+    for (const oid of orderIds) seenOrderIds.add(oid);
+
+    const ordersById = await fetchExecutiveSummaryOrdersById(supabase, userId, orderIds);
+    batchIndex += 1;
+    yield {
+      items,
+      ordersById,
+      orderIds,
+      batchIndex,
+      totalOrderIds: seenOrderIds.size,
+    };
+  }
+}
+
+/**
  * Itera lotes completos do recorte (todos os pedidos do período, sem truncar).
  *
  * @param {import("@supabase/supabase-js").SupabaseClient} supabase
@@ -303,6 +437,16 @@ async function fetchExecutiveSummaryItemsForOrderIds(
  * }, void, void>}
  */
 export async function* iterateExecutiveSummaryBatches(supabase, userId, filters) {
+  const productScope = filters.product_scope;
+  if (productScope?.product_id) {
+    const listingIds = Array.isArray(productScope.external_listing_ids)
+      ? productScope.external_listing_ids.filter(Boolean)
+      : [];
+    if (listingIds.length === 0) return;
+    yield* iterateExecutiveSummaryBatchesByListingIds(supabase, userId, filters, listingIds);
+    return;
+  }
+
   const qNormalized = filters.q ? normalizeSearchQuery(filters.q) : null;
   /** @type {string[]} */
   let orderIdsForSearch = [];

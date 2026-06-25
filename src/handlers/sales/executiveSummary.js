@@ -23,7 +23,25 @@ import {
 /**
  * @param {import("http").IncomingMessage} req
  */
+function queryHasExplicitExecutivePeriod(query) {
+  const q = query ?? {};
+  if (q.period_preset != null && String(q.period_preset).trim() !== "") return true;
+  if (q.start_date != null && String(q.start_date).trim() !== "") return true;
+  if (q.end_date != null && String(q.end_date).trim() !== "") return true;
+  if (q.period_start != null && String(q.period_start).trim() !== "") return true;
+  if (q.period_end != null && String(q.period_end).trim() !== "") return true;
+  if (q.start_datetime != null && String(q.start_datetime).trim() !== "") return true;
+  if (q.end_datetime != null && String(q.end_datetime).trim() !== "") return true;
+  if (q.period_start_datetime != null && String(q.period_start_datetime).trim() !== "") return true;
+  if (q.period_end_datetime != null && String(q.period_end_datetime).trim() !== "") return true;
+  return false;
+}
+
 function parseExecutiveSummaryFilters(req) {
+  const productId =
+    req.query?.product_id != null && String(req.query.product_id).trim() !== ""
+      ? String(req.query.product_id).trim()
+      : null;
   const marketplace =
     req.query?.marketplace != null && String(req.query.marketplace).trim() !== ""
       ? String(req.query.marketplace).trim()
@@ -45,8 +63,29 @@ function parseExecutiveSummaryFilters(req) {
   const rankingLimitRaw = req.query?.ranking_limit;
   const ranking_limit =
     rankingLimitRaw != null ? Math.min(10, Math.max(1, parseInt(String(rankingLimitRaw), 10) || 10)) : 10;
+  const productRankingLimitRaw = req.query?.product_ranking_limit;
+  const product_ranking_limit =
+    productRankingLimitRaw != null
+      ? Math.min(10000, Math.max(1, parseInt(String(productRankingLimitRaw), 10) || 10))
+      : undefined;
 
-  const periodResult = resolveExecutiveSummaryPeriod(req.query);
+  /** Raio-X do produto sem período explícito → histórico consolidado (sem varrer 60d de todo o seller). */
+  const periodResult =
+    productId && !queryHasExplicitExecutivePeriod(req.query)
+      ? {
+          ok: true,
+          period: {
+            start_date: null,
+            end_date: null,
+            start_datetime: null,
+            end_datetime: null,
+            preset: "lifetime",
+            start_ms: null,
+            end_ms_exclusive: null,
+          },
+          warnings: [],
+        }
+      : resolveExecutiveSummaryPeriod(req.query);
   if (!periodResult.ok) {
     return { ok: false, error: periodResult.error };
   }
@@ -54,6 +93,7 @@ function parseExecutiveSummaryFilters(req) {
   return {
     ok: true,
     filters: {
+      product_id: productId,
       marketplace,
       marketplace_account_id: marketplaceAccountId,
       seller_company_id: sellerCompanyId,
@@ -61,6 +101,7 @@ function parseExecutiveSummaryFilters(req) {
       filter,
       period: periodResult.period,
       ranking_limit,
+      ...(product_ranking_limit != null ? { product_ranking_limit } : {}),
       period_warnings: periodResult.warnings ?? [],
     },
   };
@@ -71,6 +112,7 @@ function parseExecutiveSummaryFilters(req) {
  */
 function buildExecutiveSummaryQueryLog(req) {
   return {
+    product_id: req.query?.product_id ?? null,
     marketplace: req.query?.marketplace ?? null,
     marketplace_account_id: req.query?.marketplace_account_id ?? null,
     seller_company_id: req.query?.seller_company_id ?? null,

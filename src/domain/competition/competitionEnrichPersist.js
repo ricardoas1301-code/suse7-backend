@@ -3,7 +3,12 @@
 // ============================================================
 
 import { enrichCompetitorListing } from "./competitionListingEnricher.js";
-import { competitorPatchFromEnrichedRaw, normalizeDiscoveredCompetitor } from "./competitionNormalizer.js";
+import { competitorPatchFromEnrichedRaw, normalizeDiscoveredCompetitor, normalizeCompetitorPictureUrls } from "./competitionNormalizer.js";
+import {
+  hasPersistedLiveCommercialData,
+  ML_LISTING_STATUS_INFERIDO_POR_HTTP,
+  resolveListingStatusPersistUpdate,
+} from "./competitionListingStatus.js";
 import {
   enrichWithTimeout,
   isEnrichResultComplete,
@@ -45,7 +50,13 @@ function mergeInitialEnrichExtras(extras, initialExtras = {}) {
 }
 
 /** Mescla enrich no objeto normalizado de persistência + extras de meta. */
-export function applyEnrichedRawToNormalized(normalized, enrichedRaw, sourceStrategy, initialExtras = {}) {
+export function applyEnrichedRawToNormalized(
+  normalized,
+  enrichedRaw,
+  sourceStrategy,
+  initialExtras = {},
+  enrichDebug = null
+) {
   const base = { ...(normalized && typeof normalized === "object" ? normalized : {}) };
   const init = initialExtras && typeof initialExtras === "object" ? initialExtras : {};
   let extras = {
@@ -58,6 +69,18 @@ export function applyEnrichedRawToNormalized(normalized, enrichedRaw, sourceStra
     if (!base.competitor_store_name && init.payload_store_name) {
       base.competitor_store_name = init.payload_store_name;
     }
+    const statusUpdate = resolveListingStatusPersistUpdate(null, enrichDebug);
+    if (statusUpdate.mode === "set") {
+      if (
+        hasPersistedLiveCommercialData(base) &&
+        statusUpdate.status &&
+        ML_LISTING_STATUS_INFERIDO_POR_HTTP.has(statusUpdate.status)
+      ) {
+        // Mantém status anterior quando enrich falhou mas há dados comerciais persistidos.
+      } else {
+        base.competitor_listing_status = statusUpdate.status;
+      }
+    }
     return { normalized: base, enrichExtras: extras, enrichOk: false };
   }
 
@@ -69,6 +92,10 @@ export function applyEnrichedRawToNormalized(normalized, enrichedRaw, sourceStra
   extras.listing_type = discovered.listing_type ?? extras.listing_type;
   extras.reputation =
     discovered.reputation && Object.keys(discovered.reputation).length ? discovered.reputation : extras.reputation;
+  extras.competitor_pictures = normalizeCompetitorPictureUrls(
+    enrichedRaw?.competitor_pictures,
+    enrichPatch.competitor_thumbnail ?? base.competitor_thumbnail
+  );
 
   const merged = {
     ...base,
@@ -83,6 +110,13 @@ export function applyEnrichedRawToNormalized(normalized, enrichedRaw, sourceStra
   };
 
   extras = mergeInitialEnrichExtras(extras, init);
+
+  const statusUpdate = resolveListingStatusPersistUpdate(enrichedRaw, enrichDebug);
+  if (statusUpdate.mode === "set") {
+    merged.competitor_listing_status = statusUpdate.status;
+  } else if (statusUpdate.mode === "clear") {
+    merged.competitor_listing_status = null;
+  }
 
   const enrichOk = Boolean(
     merged.competitor_thumbnail || merged.last_seen_price != null || merged.competitor_store_name
@@ -113,6 +147,7 @@ export async function enrichCompetitorForPersist(accessToken, normalized, opts =
       listingId: String(listingId),
       permalink: normalized.competitor_permalink ?? null,
       titleHint: normalized.competitor_title ?? null,
+      fastDailyRefresh: opts.fastDailyRefresh === true,
       debug: enrichDebug,
     });
 
@@ -136,13 +171,21 @@ export async function enrichCompetitorForPersist(accessToken, normalized, opts =
   }
 
   const enrichedRaw = enrichOut?.raw ?? null;
-  const applied = applyEnrichedRawToNormalized(normalized, enrichedRaw, sourceStrategy, initialExtras);
+  const applied = applyEnrichedRawToNormalized(
+    normalized,
+    enrichedRaw,
+    sourceStrategy,
+    initialExtras,
+    enrichDebug
+  );
   const metaMissing = listMissingCriticalMetaFields(applied.enrichExtras);
 
   let directItemAudit = null;
   let salesHintResolution = null;
+  const skipSalesAudit = opts.skipSalesAudit === true;
+  const skipSalesResolver = opts.skipSalesResolver === true;
 
-  if (accessToken && listingId) {
+  if (accessToken && listingId && !skipSalesAudit) {
     console.info("[S7_COMPETITION_ENRICH_AUDIT_PATH]", {
       listing_id: listingId,
       has_access_token: Boolean(accessToken),
@@ -179,7 +222,12 @@ export async function enrichCompetitorForPersist(accessToken, normalized, opts =
   }
 
   const currentSales = Number(applied.enrichExtras?.sales_hint);
-  if (!(Number.isFinite(currentSales) && currentSales > 0) && accessToken && listingId) {
+  if (
+    !(Number.isFinite(currentSales) && currentSales > 0) &&
+    accessToken &&
+    listingId &&
+    !skipSalesResolver
+  ) {
     try {
       const resolution = await resolveCompetitionSalesHint({
         accessToken,

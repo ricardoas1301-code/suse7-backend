@@ -24,6 +24,7 @@ import {
 import { syncProductVariantsAfterParentUpdate } from "./variantSync.js";
 import { resolveCatalogCompleteness } from "../../domain/productCatalogCompleteness.js";
 import { syncListingsFinancialBlockForProduct } from "../ml/_helpers/mlListingProductLink.js";
+import { gatePremiumHandler } from "../../billing/middleware/requirePlanAccess.js";
 
 export async function handleProductsUpsert(req, res) {
   if (req.method !== "POST") {
@@ -48,6 +49,8 @@ export async function handleProductsUpsert(req, res) {
     if (authError || !user?.id) {
       return fail(res, { code: "UNAUTHORIZED", message: "Token inválido" }, 401, traceId);
     }
+
+    if (await gatePremiumHandler(res, supabase, user.id, { module: "produtos" })) return;
 
     const body = typeof req.body === "string" ? JSON.parse(req.body || "{}") : req.body || {};
     const { product, mode: modeRaw = "create", variants = [] } = body;
@@ -128,7 +131,7 @@ export async function handleProductsUpsert(req, res) {
       const { data: existing, error: fetchError } = await supabase
         .from("products")
         .select(
-          "id, format, user_id, status, catalog_source, catalog_completeness, cost_price, packaging_cost, operational_cost"
+          "id, format, user_id, status, catalog_source, catalog_completeness, cost_price, packaging_cost, operational_cost, stock_quantity, stock_source"
         )
         .eq("id", productId)
         .eq("user_id", user.id)
@@ -328,6 +331,19 @@ export async function handleProductsUpsert(req, res) {
     updatePayload.completion_status =
       updatePayload.catalog_completeness === "complete" ? "complete" : "incomplete";
     updatePayload.missing_required_costs = updatePayload.catalog_completeness !== "complete";
+
+    const nextStock = updatePayload.stock_quantity;
+    const prevStock = existing?.stock_quantity;
+    if (
+      nextStock != null &&
+      prevStock != null &&
+      Number(nextStock) !== Number(prevStock)
+    ) {
+      updatePayload.stock_source = "manual";
+    } else if (nextStock != null && prevStock == null && catalogSourceForUpdate === "manual") {
+      updatePayload.stock_source = "manual";
+    }
+
     const { data: updatedRows, error: updateError } = await supabase
       .from("products")
       .update(updatePayload)

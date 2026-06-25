@@ -79,15 +79,24 @@ export function applyCors(req, res) {
     "https://suse7.com.br",
     "https://www.suse7.com.br",
     "http://localhost:5173",
+    "http://localhost:5174",
+    "http://localhost:5175",
+    "http://localhost:5176",
     "https://localhost:5173",
     "http://localhost:3000",
     "https://localhost:3000",
     "http://localhost:3001",
     "http://127.0.0.1:5173",
+    "http://127.0.0.1:5174",
+    "http://127.0.0.1:5175",
+    "http://127.0.0.1:5176",
     "https://127.0.0.1:5173",
     "http://127.0.0.1:3000",
     "http://127.0.0.1:3001",
     "http://[::1]:5173",
+    "http://[::1]:5174",
+    "http://[::1]:5175",
+    "http://[::1]:5176",
     "http://[::1]:3000",
   ]);
 
@@ -102,26 +111,57 @@ export function applyCors(req, res) {
   }
 
   const origin = req.headers?.origin;
+  const referer = req.headers?.referer;
+  let inferredOrigin = null;
+  if (!origin && typeof referer === "string" && referer.trim()) {
+    try {
+      const u = new URL(referer);
+      inferredOrigin = `${u.protocol}//${u.host}`;
+    } catch {
+      inferredOrigin = null;
+    }
+  }
   const strictLocal = process.env.CORS_STRICT_LOCALHOST === "1";
 
   /** Origem autorizada a receber Access-Control-Allow-Origin espelhado */
+  const originCandidate = origin ?? inferredOrigin;
   const originPermitida =
-    origin && (allowedOrigins.has(origin) || (!strictLocal && isLocalDevOrigin(origin)))
-      ? origin
+    originCandidate &&
+    (allowedOrigins.has(originCandidate) || (!strictLocal && isLocalDevOrigin(originCandidate)))
+      ? originCandidate
       : null;
+
+  if (req.method === "OPTIONS" && process.env.S7_CORS_DEBUG === "1") {
+    console.info("[S7_CORS_DEBUG]", {
+      origin: origin ?? null,
+      strictLocal,
+      originPermitida: originPermitida ?? null,
+      host: req.headers?.host ?? null,
+      acrh: req.headers?.["access-control-request-headers"] ?? null,
+    });
+  }
 
   // ---------------------------------------
   // Define o Access-Control-Allow-Origin (obrigatório para o browser prosseguir após OPTIONS)
   // ---------------------------------------
   if (originPermitida) {
     res.setHeader("Access-Control-Allow-Origin", originPermitida);
+  } else if (req.method === "OPTIONS") {
+    /**
+     * Hotfix DEV: alguns clientes (e alguns proxies) podem omitir `Origin` no preflight.
+     * Sem Allow-Origin o browser aborta o request real (especialmente quando há Authorization header).
+     * Para OPTIONS sem Origin em ambiente de dev/local, liberamos *sem credenciais*.
+     */
+    res.setHeader("Access-Control-Allow-Origin", "*");
   }
 
   // ---------------------------------------
   // Headers CORS padrão para API com token
   // ---------------------------------------
   res.setHeader("Vary", "Origin");
-  res.setHeader("Access-Control-Allow-Credentials", "true");
+  if (!(req.method === "OPTIONS" && !originPermitida)) {
+    res.setHeader("Access-Control-Allow-Credentials", "true");
+  }
   res.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", buildAllowHeaders(req));
   res.setHeader("Access-Control-Max-Age", "86400");
