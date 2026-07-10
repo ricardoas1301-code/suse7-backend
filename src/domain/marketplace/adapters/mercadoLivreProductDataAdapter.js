@@ -4,7 +4,6 @@
 // ======================================================================
 
 import { ML_MARKETPLACE_SLUG } from "../../../handlers/ml/_helpers/mlMarketplace.js";
-import { normalizeAdTitles } from "../../../utils/normalizeAdTitles.js";
 import { resolveMercadoLivreCommercialSeoKeywords } from "./mercadoLivreSeoKeywords.js";
 
 export const ML_PRODUCT_IMPORT_MAX_IMAGES = 7;
@@ -127,7 +126,7 @@ function resolveMercadoLivreNcm(item) {
  * Medidas de envio (embalagem vendedor) — não confundir com montado.
  * @param {Record<string, unknown> | null | undefined} item
  */
-function resolveMercadoLivreShippingDimensions(item) {
+export function resolveMercadoLivreShippingDimensions(item) {
   return {
     width: parseDecimalOrNull(pickAttrValue(item, ["SELLER_PACKAGE_WIDTH", "PACKAGE_WIDTH", "WIDTH"])),
     height: parseDecimalOrNull(pickAttrValue(item, ["SELLER_PACKAGE_HEIGHT", "PACKAGE_HEIGHT", "HEIGHT"])),
@@ -142,7 +141,7 @@ function resolveMercadoLivreShippingDimensions(item) {
  * Medidas do produto montado — só se houver atributos explícitos (sem PACKAGE).
  * @param {Record<string, unknown> | null | undefined} item
  */
-function resolveMercadoLivreAssembledDimensions(item) {
+export function resolveMercadoLivreAssembledDimensions(item) {
   const w = parseDecimalOrNull(pickAttrValue(item, ["ASSEMBLED_WIDTH", "PRODUCT_WIDTH"]));
   const h = parseDecimalOrNull(pickAttrValue(item, ["ASSEMBLED_HEIGHT", "PRODUCT_HEIGHT"]));
   const l = parseDecimalOrNull(pickAttrValue(item, ["ASSEMBLED_LENGTH", "PRODUCT_LENGTH", "PRODUCT_DEPTH"]));
@@ -199,7 +198,6 @@ export function normalizeMercadoLivreProductData(item, description, resolvedSku,
     ncm: resolveMercadoLivreNcm(item),
     seo_keywords: resolveMercadoLivreCommercialSeoKeywords(item, pickAttrValue),
     category_ml_id: item?.category_id != null ? String(item.category_id) : null,
-    ad_titles: normalizeAdTitles([{ value: title || resolvedSku }]),
     product_images,
     picture_urls: pictures,
     stock_quantity: resolveMercadoLivreAvailableStock(item),

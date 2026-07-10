@@ -23,6 +23,7 @@ import {
   resolveSaleInternalTaxProfile,
   saleDetailMoneyToDecimal as toMoneyDecimal,
 } from "../../domain/sales/saleDetailInternalCosts.js";
+import { captureOperationalCostsSnapshotForPersist } from "../../domain/sales/saleRayxOperationalCostsSnapshot.js";
 
 export const ML_FINANCIAL_ENRICHMENT_SOURCE = "mercado_livre_financial_enrichment_v1";
 export { ML_FINANCIAL_SNAPSHOT_VERSION };
@@ -118,6 +119,7 @@ function buildDerivedHistoricalFinancialSnapshots(opts) {
   const existingAds = pickExistingSnapshot(existingFinancial, "ads_snapshot");
   const existingProfit = pickExistingSnapshot(existingFinancial, "profit_snapshot");
   const existingMargin = pickExistingSnapshot(existingFinancial, "margin_snapshot");
+  const existingContingencyMargin = pickExistingSnapshot(existingFinancial, "contingency_margin_snapshot");
 
   const qtyRaw =
     opts.itemRow?.quantity != null
@@ -257,6 +259,7 @@ function buildDerivedHistoricalFinancialSnapshots(opts) {
         source: "profit_snapshot_over_gross_sale",
         estimated: estimatedFlag || !result.is_definitive,
       },
+    contingency_margin_snapshot: existingContingencyMargin ?? null,
   };
 }
 
@@ -851,6 +854,37 @@ async function persistFinancialEnrichmentToDatabase(supabase, userId, salesOrder
         reconstruction_reference_date: ctx.reconstructionReferenceDate,
       },
     });
+
+    try {
+      const operationalCapture = await captureOperationalCostsSnapshotForPersist(
+        supabase,
+        userId,
+        row,
+        order,
+        linkedListing,
+        revenue.gross_sale_amount_brl ?? contract.gross_sale_amount_brl ?? null,
+        existingFinancial,
+      );
+      if (operationalCapture?.contingency_margin_snapshot) {
+        contract.contingency_margin_snapshot = operationalCapture.contingency_margin_snapshot;
+        if (operationalCapture.ads_snapshot) {
+          contract.ads_snapshot = {
+            ...(contract.ads_snapshot && typeof contract.ads_snapshot === "object"
+              ? contract.ads_snapshot
+              : {}),
+            ...operationalCapture.ads_snapshot,
+          };
+        }
+      }
+    } catch (operationalCaptureErr) {
+      console.warn("[sales/detail] operational_costs_snapshot_capture_skipped", {
+        message:
+          operationalCaptureErr instanceof Error
+            ? operationalCaptureErr.message
+            : String(operationalCaptureErr),
+        item_id: row.id,
+      });
+    }
 
     if (isEnrichmentDebugEnabled()) {
       console.log("[sales/detail] ml_financial_formula_debug", {

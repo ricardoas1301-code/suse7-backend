@@ -39,9 +39,9 @@ function buildLimitsFromUsage(usageResolution) {
 /**
  * @param {import("@supabase/supabase-js").SupabaseClient} supabase
  * @param {string} userId
- * @param {{ module?: string | null; ensureBaby?: boolean }} [options]
+ * @param {{ module?: string | null; ensureBaby?: boolean; usageScope?: "full" | "gate" }} [options]
  */
-export async function resolveBillingAccess(supabase, userId, options = {}) {
+export async function resolveBillingAccessCore(supabase, userId, options = {}) {
   if (options.ensureBaby !== false) {
     try {
       await ensureInternalBabySubscription(supabase, userId);
@@ -76,7 +76,10 @@ export async function resolveBillingAccess(supabase, userId, options = {}) {
 
   let usageResolution;
   try {
-    usageResolution = await resolveMonthlySalesUsage(supabase, userId, access.plan_id, cycle ?? undefined);  } catch (error) {
+    usageResolution = await resolveMonthlySalesUsage(supabase, userId, access.plan_id, cycle ?? undefined, {
+      scope: options.usageScope === "gate" ? "gate" : "full",
+    });
+  } catch (error) {
     logBillingError("usage", "resolve_billing_access_usage_failed", error, { user_id: userId });
     usageResolution = buildDefaultMonthlySalesUsageResolution(
       error instanceof Error ? error.message : "usage_unavailable",
@@ -136,5 +139,19 @@ export async function resolveBillingAccess(supabase, userId, options = {}) {
     usage_fallback: Boolean(usageResolution.fallback),
     usage_growth_grace: growthPolicy.growth_grace,
     show_usage_growth_notice: growthPolicy.show_growth_notice,
+    usage_cache_status: usageResolution.usage_cache_status ?? null,
   };
+}
+
+/**
+ * @param {import("@supabase/supabase-js").SupabaseClient} supabase
+ * @param {string} userId
+ * @param {{ module?: string | null; ensureBaby?: boolean; usageScope?: "full" | "gate" }} [options]
+ */
+export async function resolveBillingAccess(supabase, userId, options = {}) {
+  if (options.usageScope === "gate") {
+    const { resolveBillingAccessGateCached } = await import("./billingAccessGateCache.js");
+    return resolveBillingAccessGateCached(supabase, userId, options);
+  }
+  return resolveBillingAccessCore(supabase, userId, options);
 }

@@ -98,7 +98,7 @@ export function formatMercadoLivreListingTypeLabel(listingTypeId) {
   if (listingTypeId == null || String(listingTypeId).trim() === "") return null;
   const id = String(listingTypeId).trim().toLowerCase();
   if (id.includes("gold_pro")) return "Premium";
-  if (id.includes("gold_special")) return "Clássico";
+  if (id.includes("gold_special") || id.includes("gold_classic")) return "Clássico";
   if (id.includes("gold_premium")) return "Premium";
   if (id.includes("gold")) return "Ouro";
   if (id.includes("free")) return "Grátis";

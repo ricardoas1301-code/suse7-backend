@@ -75,6 +75,15 @@ import { resolveRenewalStrategyForSubscription } from "../services/billingRenewa
 import { listBillingTimelineForUser } from "../services/billingTimelineEventService.js";
 import { computeRevenueHealthForUser } from "../services/billingRevenueHealthService.js";
 import { listBillingNotificationsForUser } from "../services/billingNotificationCenterService.js";
+import {
+  createBillingSubscriptionStatusPerfTracker,
+  dedupeSubscriptionStatusForUser,
+  getCachedSubscriptionStatusPayload,
+  setCachedSubscriptionStatusPayload,
+} from "../services/billingSubscriptionStatusPerformance.js";
+import { resolveBillingAccessGateCached } from "../services/billingAccessGateCache.js";
+import { logBillingAccessCoalescing } from "../services/billingAccessGateCache.js";
+import { invalidateBillingAccessCachesForUser } from "../services/billingAccessCacheInvalidation.js";
 
 /** Path canônico para match de rotas (decode + slashes + case). */
 /**
@@ -940,6 +949,7 @@ export async function handleBillingRoutes(req, res, path) {
         auditRoute: pathNorm,
         auditRequestId: traceId,
       });
+      invalidateBillingAccessCachesForUser(user.id, { reason: "plan_change_requested" });
       return ok(res, { ok: true, ...result, traceId });
     } catch (error) {
       const code = /** @type {{ code?: string }} */ (error)?.code;
@@ -985,6 +995,7 @@ export async function handleBillingRoutes(req, res, path) {
     const { user, supabase } = auth;
     try {
       const result = await requestSubscriptionCancellationAtPeriodEnd({ supabase, user });
+      invalidateBillingAccessCachesForUser(user.id, { reason: "subscription_cancel_requested" });
       return ok(res, { ok: true, ...result, traceId });
     } catch (error) {
       const code = /** @type {{ code?: string }} */ (error)?.code;
@@ -1008,11 +1019,15 @@ export async function handleBillingRoutes(req, res, path) {
     if (method !== "GET") {
       return fail(res, { code: "METHOD_NOT_ALLOWED", message: "Use GET" }, 405, traceId);
     }
+    const authStartedAt = Date.now();
     const auth = await requireAuthUser(req);
     if (auth.error) {
       return fail(res, { code: "UNAUTHORIZED", message: auth.error.message }, auth.error.status, traceId);
     }
     const { user, supabase } = auth;
+    const perf = createBillingSubscriptionStatusPerfTracker(traceId);
+    perf.mark("auth_validation_ms", authStartedAt);
+
     const statusLog = (step, payload = {}) => {
       console.info("[S7_BILLING_SUBSCRIPTION_STATUS]", {
         step,
@@ -1023,222 +1038,300 @@ export async function handleBillingRoutes(req, res, path) {
     };
 
     try {
-      statusLog("start", {
-        has_jwt: true,
-        method,
-        path: pathNorm,
-      });
+      return await dedupeSubscriptionStatusForUser(user.id, async () => {
+        const finishPerfEarly = (httpStatus, extra = {}) => {
+          perf.finish({
+            user_id: user.id,
+            http_status: httpStatus,
+            subscriptions_count: 0,
+            cache_status: extra.cache_status ?? "unknown",
+            ...extra,
+          });
+        };
 
-      let billing;
-      try {
-        billing = await resolveBillingAccess(supabase, user.id);
+        const cachedPayload = getCachedSubscriptionStatusPayload(user.id);
+        if (cachedPayload) {
+          finishPerfEarly(200, { cache_status: "status_payload_hit" });
+          logBillingAccessCoalescing({
+            user_id: user.id,
+            cache_hit: true,
+            inflight_reused: false,
+            waiters_count: 0,
+            scope: "subscription_status_payload",
+            total_ms: 0,
+          });
+          return ok(res, { ...cachedPayload, traceId });
+        }
+
+        statusLog("start", {
+          has_jwt: true,
+          method,
+          path: pathNorm,
+          gate: true,
+        });
+
+        const permissionsStartedAt = Date.now();
+        const subscriptionQueryStartedAt = Date.now();
+        const [billingResult, subsResult] = await Promise.all([
+          (async () => {
+            try {
+              return await resolveBillingAccessGateCached(supabase, user.id, { usageScope: "gate" });
+            } catch (error) {
+              logBillingError("billing", "subscription_status_failed", error, { user_id: user.id });
+              statusLog("billing_access_failed", {
+                error: error instanceof Error ? error.message : String(error ?? ""),
+              });
+              return {
+                access: {
+                  can_access: false,
+                  allowed: false,
+                  state: "none",
+                  plan_id: null,
+                  subscription_id: null,
+                  subscription_status: null,
+                  provider: null,
+                },
+                usage: {
+                  total_sales_month: 0,
+                  limit_sales_month: null,
+                  usage_percent: 0,
+                  near_limit: false,
+                },
+                breakdowns: {
+                  marketplaces: {},
+                  companies: {},
+                  accounts: {},
+                },
+                limits: null,
+                plan: null,
+                can_access: false,
+                billing_cycle_anchor: null,
+                current_period_start: null,
+                current_period_end: null,
+                next_billing_at: null,
+                usage_fallback: true,
+              };
+            }
+          })(),
+          supabase
+            .from("billing_subscriptions")
+            .select(
+              "id, plan_id, plan_key, provider, status, amount, currency, current_period_start, current_period_end, next_due_date, canceled_at, metadata, created_at, updated_at, provider_subscription_id"
+            )
+            .eq("user_id", user.id)
+            .order("created_at", { ascending: false })
+            .limit(10),
+        ]);
+        perf.mark("permissions_build_ms", permissionsStartedAt);
+
+        const billing = billingResult;
         statusLog("billing_access_resolved", {
           can_access: Boolean(billing?.can_access),
           plan_id: billing?.access?.plan_id ?? null,
           subscription_id: billing?.access?.subscription_id ?? null,
           provider: billing?.access?.provider ?? null,
+          usage_cache_status: billing?.limits?.usage_cache_status ?? billing?.usage_cache_status ?? null,
         });
-      } catch (error) {
-        logBillingError("billing", "subscription_status_failed", error, { user_id: user.id });
-        statusLog("billing_access_failed", {
-          error: error instanceof Error ? error.message : String(error ?? ""),
-        });
-        billing = {
-          access: {
-            can_access: false,
-            allowed: false,
-            state: "none",
-            plan_id: null,
-            subscription_id: null,
-            subscription_status: null,
-            provider: null,
-          },
-          usage: {
-            total_sales_month: 0,
-            limit_sales_month: null,
-            usage_percent: 0,
-            near_limit: false,
-          },
-          breakdowns: {
-            marketplaces: {},
-            companies: {},
-            accounts: {},
-          },
-          limits: null,
-          plan: null,
-          can_access: false,
-          billing_cycle_anchor: null,
-          current_period_start: null,
-          current_period_end: null,
-          next_billing_at: null,
-          usage_fallback: true,
+
+        const { data: subs, error: subsError } = subsResult;
+        perf.mark("subscription_query_ms", subscriptionQueryStartedAt);
+
+        if (subsError) {
+          logBillingError("billing", "subscription_status_list_failed", subsError, { user_id: user.id });
+          statusLog("subscriptions_list_failed", { error: subsError.message ?? String(subsError) });
+        }
+
+        const subsList = Array.isArray(subs) ? subs : [];
+        statusLog("subscriptions_list_ready", { count: subsList.length });
+
+        const usageCacheStatus = billing?.usage_cache_status ?? "unknown";
+
+        const finishPerf = (httpStatus, extra = {}) => {
+          perf.finish({
+            user_id: user.id,
+            http_status: httpStatus,
+            subscriptions_count: subsList.length,
+            cache_status: usageCacheStatus,
+            ...extra,
+          });
         };
-      }
 
-      const { data: subs, error: subsError } = await supabase
-        .from("billing_subscriptions")
-        .select(
-          "id, plan_id, plan_key, provider, status, amount, currency, current_period_start, current_period_end, next_due_date, canceled_at, metadata, created_at, updated_at, provider_subscription_id"
-        )
-        .eq("user_id", user.id)
-        .order("created_at", { ascending: false })
-        .limit(10);
+        if (subsList.length === 0 && !billing?.access?.subscription_id) {
+          statusLog("subscription_not_found", {
+            reason: "subscription_not_found",
+          });
+          finishPerf(200);
+          const noSubPayload = {
+            ok: true,
+            has_subscription: false,
+            status: "none",
+            plan: null,
+            reason: "subscription_not_found",
+            access: billing.access,
+            usage: billing.usage,
+            breakdowns: billing.breakdowns,
+            limits: billing.limits,
+            can_access: Boolean(billing.can_access),
+          };
+          setCachedSubscriptionStatusPayload(user.id, noSubPayload);
+          return ok(res, { ...noSubPayload, traceId });
+        }
 
-      if (subsError) {
-        logBillingError("billing", "subscription_status_list_failed", subsError, { user_id: user.id });
-        statusLog("subscriptions_list_failed", { error: subsError.message ?? String(subsError) });
-      }
+        const subscriptions = subsList.map((sub) =>
+          enrichSubscriptionDelinquencyFields(
+            enrichSubscriptionPlanChangeFields(
+              enrichSubscriptionCancellationFields(
+                enrichSubscriptionWithBillingCycle(sub, resolveSubscriptionBillingCycle(sub))
+              )
+            )
+          )
+        );
 
-      const subsList = Array.isArray(subs) ? subs : [];
-      statusLog("subscriptions_list_ready", { count: subsList.length });
+        const presentation = resolveSubscriptionPresentation(subscriptions, billing.access?.subscription_id);
+        const primarySubscription = presentation.display_subscription ?? subscriptions[0] ?? null;
+        const activeSubscription = presentation.active_subscription;
+        const pendingCheckout = presentation.pending_checkout;
 
-      if (subsList.length === 0 && !billing?.access?.subscription_id) {
-        statusLog("subscription_not_found", {
-          reason: "subscription_not_found",
+        let pendingPayment = null;
+        const externalStartedAt = Date.now();
+        const subscriptionStatusGateLight = true;
+        if (!subscriptionStatusGateLight && pendingCheckout?.subscription_id) {
+          try {
+            const providerApi = getBillingProvider(config.billingProviderDefault || "asaas");
+            const payRow = await findPendingCheckoutPaymentRow(supabase, pendingCheckout);
+            pendingPayment = await buildPendingPaymentPresentation(providerApi, pendingCheckout, payRow, {
+              skipProviderLiveFetch: true,
+            });
+          } catch (pendingPayError) {
+            logBillingError("billing", "pending_payment_presentation_failed", pendingPayError, {
+              user_id: user.id,
+              subscription_id: pendingCheckout.subscription_id,
+            });
+          }
+        }
+        perf.mark("external_calls_ms", externalStartedAt);
+
+        let overdueInvoiceUrl = null;
+        if (!subscriptionStatusGateLight) {
+          try {
+            overdueInvoiceUrl = await findLatestOverduePaymentInvoiceUrl(
+              supabase,
+              user.id,
+              primarySubscription?.id != null ? String(primarySubscription.id) : null
+            );
+          } catch (invoiceError) {
+            logBillingError("billing", "overdue_invoice_lookup_failed", invoiceError, { user_id: user.id });
+          }
+        }
+
+        let pendingRenewal = null;
+        let renewalNotice = null;
+        let renewalAccess = null;
+        if (!subscriptionStatusGateLight) {
+          try {
+            const activeSub = activeSubscription ? /** @type {Record<string, unknown>} */ (activeSubscription) : null;
+            pendingRenewal = await resolvePendingRenewalPresentation(supabase, user.id, activeSub);
+            if (activeSub?.id) {
+              const openCycle = await findOpenRenewalCycleForSubscription(supabase, String(activeSub.id));
+              if (openCycle) {
+                const strategyInfo = await resolveRenewalStrategyForSubscription(supabase, activeSub);
+                renewalNotice = await computeRenewalNotice(supabase, user.id, activeSub, openCycle, {
+                  strategy: strategyInfo.strategy,
+                });
+              }
+            }
+            renewalAccess = resolveRenewalAccessPresentation(
+              renewalNotice,
+              billing.access,
+              primarySubscription ? /** @type {Record<string, unknown>} */ (primarySubscription) : null
+            );
+          } catch (pendingRenewalError) {
+            logBillingError("billing", "pending_renewal_presentation_failed", pendingRenewalError, {
+              user_id: user.id,
+            });
+          }
+        } else {
+          renewalAccess = {
+            subscription_status: primarySubscription?.renewal_subscription_status ?? null,
+            access_status: "FULL",
+            access_restrictions: {
+              operational_blocked: false,
+              allowed_path_prefixes: [],
+              blocked_path_prefixes: [],
+              reason: null,
+            },
+          };
+        }
+
+        statusLog("response_sent", {
+          has_subscription: true,
+          active: Boolean(activeSubscription),
+          pending_checkout: Boolean(pendingCheckout),
+          subscriptions_count: subscriptions.length,
+          gate: true,
         });
-        return ok(res, {
+
+        const serializationStartedAt = Date.now();
+        const payload = {
           ok: true,
-          has_subscription: false,
-          status: "none",
-          plan: null,
-          reason: "subscription_not_found",
+          has_subscription: true,
+          status: primarySubscription?.status ?? billing.access?.subscription_status ?? null,
           access: billing.access,
           usage: billing.usage,
           breakdowns: billing.breakdowns,
           limits: billing.limits,
-          can_access: Boolean(billing.can_access),
+          plan: billing.plan,
+          can_access: billing.can_access,
+          show_usage_growth_notice: Boolean(billing.show_usage_growth_notice),
+          usage_growth_grace: billing.usage_growth_grace ?? null,
+          billing_cycle_anchor: billing.billing_cycle_anchor ?? null,
+          current_period_start: billing.current_period_start ?? null,
+          current_period_end: billing.current_period_end ?? null,
+          next_billing_at: billing.next_billing_at ?? null,
+          cancel_at_period_end: Boolean(primarySubscription?.cancel_at_period_end),
+          cancel_requested_at: primarySubscription?.cancel_requested_at ?? null,
+          access_ends_at: primarySubscription?.access_ends_at ?? billing.current_period_end ?? null,
+          downgrade_target_plan_key: primarySubscription?.downgrade_target_plan_key ?? null,
+          plan_change_at_period_end: Boolean(primarySubscription?.plan_change_at_period_end),
+          plan_change_requested_at: primarySubscription?.plan_change_requested_at ?? null,
+          plan_change_target_plan_slug: primarySubscription?.plan_change_target_plan_slug ?? null,
+          plan_change_access_ends_at: primarySubscription?.plan_change_access_ends_at ?? null,
+          delinquency_status:
+            primarySubscription?.delinquency_status ?? billing.access?.delinquency_status ?? null,
+          overdue_since: primarySubscription?.overdue_since ?? billing.access?.overdue_since ?? null,
+          grace_period_ends_at:
+            primarySubscription?.grace_period_ends_at ?? billing.access?.grace_period_ends_at ?? null,
+          access_suspended_at:
+            primarySubscription?.access_suspended_at ?? billing.access?.access_suspended_at ?? null,
+          delinquency_warning: Boolean(billing.access?.delinquency_warning),
+          overdue_invoice_url: overdueInvoiceUrl,
+          subscriptions,
+          active_subscription: activeSubscription,
+          pending_checkout: pendingCheckout
+            ? {
+                ...pendingCheckout,
+                payment: pendingPayment,
+              }
+            : null,
+          pending_renewal: pendingRenewal,
+          renewal_notice: renewalNotice,
+          subscription_status:
+            renewalAccess?.subscription_status ?? primarySubscription?.renewal_subscription_status ?? null,
+          access_status: renewalAccess?.access_status ?? "FULL",
+          access_restrictions: renewalAccess?.access_restrictions ?? {
+            operational_blocked: false,
+            allowed_path_prefixes: [],
+            blocked_path_prefixes: [],
+            reason: null,
+          },
+          grace_period_until:
+            primarySubscription?.grace_period_ends_at ?? billing.access?.grace_period_ends_at ?? null,
           traceId,
-        });
-      }
-
-      const subscriptions = subsList.map((sub) =>
-        enrichSubscriptionDelinquencyFields(
-          enrichSubscriptionPlanChangeFields(
-            enrichSubscriptionCancellationFields(
-              enrichSubscriptionWithBillingCycle(sub, resolveSubscriptionBillingCycle(sub))
-            )
-          )
-        )
-      );
-
-      const presentation = resolveSubscriptionPresentation(subscriptions, billing.access?.subscription_id);
-      const primarySubscription = presentation.display_subscription ?? subscriptions[0] ?? null;
-      const activeSubscription = presentation.active_subscription;
-      const pendingCheckout = presentation.pending_checkout;
-
-    let pendingPayment = null;
-    if (pendingCheckout?.subscription_id) {
-      try {
-        const providerApi = getBillingProvider(config.billingProviderDefault || "asaas");
-        const payRow = await findPendingCheckoutPaymentRow(supabase, pendingCheckout);
-        pendingPayment = await buildPendingPaymentPresentation(providerApi, pendingCheckout, payRow);
-      } catch (pendingPayError) {
-        logBillingError("billing", "pending_payment_presentation_failed", pendingPayError, {
-          user_id: user.id,
-          subscription_id: pendingCheckout.subscription_id,
-        });
-      }
-    }
-
-    let overdueInvoiceUrl = null;
-    try {
-      overdueInvoiceUrl = await findLatestOverduePaymentInvoiceUrl(
-        supabase,
-        user.id,
-        primarySubscription?.id != null ? String(primarySubscription.id) : null
-      );
-    } catch (invoiceError) {
-      logBillingError("billing", "overdue_invoice_lookup_failed", invoiceError, { user_id: user.id });
-    }
-
-    let pendingRenewal = null;
-    let renewalNotice = null;
-    let renewalAccess = null;
-    let revenueHealth = null;
-    try {
-      revenueHealth = await computeRevenueHealthForUser(supabase, user.id, { persist: false });
-    } catch (healthErr) {
-      logBillingError("billing", "revenue_health_status_failed", healthErr, { user_id: user.id });
-    }
-    try {
-      const activeSub = activeSubscription ? /** @type {Record<string, unknown>} */ (activeSubscription) : null;
-      pendingRenewal = await resolvePendingRenewalPresentation(supabase, user.id, activeSub);
-      if (activeSub?.id) {
-        const openCycle = await findOpenRenewalCycleForSubscription(supabase, String(activeSub.id));
-        if (openCycle) {
-          const strategyInfo = await resolveRenewalStrategyForSubscription(supabase, activeSub);
-          renewalNotice = await computeRenewalNotice(supabase, user.id, activeSub, openCycle, {
-            strategy: strategyInfo.strategy,
-          });
-        }
-      }
-      renewalAccess = resolveRenewalAccessPresentation(
-        renewalNotice,
-        billing.access,
-        primarySubscription ? /** @type {Record<string, unknown>} */ (primarySubscription) : null
-      );
-    } catch (pendingRenewalError) {
-      logBillingError("billing", "pending_renewal_presentation_failed", pendingRenewalError, { user_id: user.id });
-    }
-
-      statusLog("response_sent", {
-        has_subscription: true,
-        active: Boolean(activeSubscription),
-        pending_checkout: Boolean(pendingCheckout),
-        subscriptions_count: subscriptions.length,
-      });
-
-      return ok(res, {
-      ok: true,
-      has_subscription: true,
-      status: primarySubscription?.status ?? billing.access?.subscription_status ?? null,
-      access: billing.access,
-      usage: billing.usage,
-      breakdowns: billing.breakdowns,
-      limits: billing.limits,
-      plan: billing.plan,
-      can_access: billing.can_access,
-      show_usage_growth_notice: Boolean(billing.show_usage_growth_notice),
-      usage_growth_grace: billing.usage_growth_grace ?? null,
-      billing_cycle_anchor: billing.billing_cycle_anchor ?? null,
-      current_period_start: billing.current_period_start ?? null,
-      current_period_end: billing.current_period_end ?? null,
-      next_billing_at: billing.next_billing_at ?? null,
-      cancel_at_period_end: Boolean(primarySubscription?.cancel_at_period_end),
-      cancel_requested_at: primarySubscription?.cancel_requested_at ?? null,
-      access_ends_at: primarySubscription?.access_ends_at ?? billing.current_period_end ?? null,
-      downgrade_target_plan_key: primarySubscription?.downgrade_target_plan_key ?? null,
-      plan_change_at_period_end: Boolean(primarySubscription?.plan_change_at_period_end),
-      plan_change_requested_at: primarySubscription?.plan_change_requested_at ?? null,
-      plan_change_target_plan_slug: primarySubscription?.plan_change_target_plan_slug ?? null,
-      plan_change_access_ends_at: primarySubscription?.plan_change_access_ends_at ?? null,
-      delinquency_status: primarySubscription?.delinquency_status ?? billing.access?.delinquency_status ?? null,
-      overdue_since: primarySubscription?.overdue_since ?? billing.access?.overdue_since ?? null,
-      grace_period_ends_at: primarySubscription?.grace_period_ends_at ?? billing.access?.grace_period_ends_at ?? null,
-      access_suspended_at: primarySubscription?.access_suspended_at ?? billing.access?.access_suspended_at ?? null,
-      delinquency_warning: Boolean(billing.access?.delinquency_warning),
-      overdue_invoice_url: overdueInvoiceUrl,
-      subscriptions,
-      active_subscription: activeSubscription,
-      pending_checkout: pendingCheckout
-        ? {
-            ...pendingCheckout,
-            payment: pendingPayment,
-          }
-        : null,
-      pending_renewal: pendingRenewal,
-      renewal_notice: renewalNotice,
-      subscription_status: renewalAccess?.subscription_status ?? primarySubscription?.renewal_subscription_status ?? null,
-      access_status: renewalAccess?.access_status ?? "FULL",
-      access_restrictions: renewalAccess?.access_restrictions ?? {
-        operational_blocked: false,
-        allowed_path_prefixes: [],
-        blocked_path_prefixes: [],
-        reason: null,
-      },
-      grace_period_until: primarySubscription?.grace_period_ends_at ?? billing.access?.grace_period_ends_at ?? null,
-      revenue_health: revenueHealth,
-      traceId,
+        };
+        perf.mark("serialization_ms", serializationStartedAt);
+        finishPerf(200, { plan_query_ms: null, profile_lookup_ms: null });
+        setCachedSubscriptionStatusPayload(user.id, payload);
+        return ok(res, { ...payload, traceId });
       });
     } catch (unexpected) {
       const errorId = Date.now();
@@ -1247,6 +1340,13 @@ export async function handleBillingRoutes(req, res, path) {
         error: unexpected instanceof Error ? unexpected.message : String(unexpected ?? ""),
       });
       logBillingError("billing", "subscription_status_unexpected_error", unexpected, { user_id: user.id, errorId });
+      perf.finish({
+        user_id: user.id,
+        http_status: 200,
+        subscriptions_count: 0,
+        cache_status: "error",
+        error_id: errorId,
+      });
       return ok(res, {
         ok: true,
         has_subscription: false,

@@ -69,7 +69,7 @@ function decimalsClose(a, b, tolerance = 0.05) {
 }
 
 function isSalesDetailRevenueDebugEnabled() {
-  return process.env.NODE_ENV !== "production" || process.env.S7_SALES_DETAIL_DEBUG === "1";
+  return process.env.S7_SALES_DETAIL_DEBUG === "1";
 }
 
 /** @param {Record<string, unknown> | null | undefined} line */

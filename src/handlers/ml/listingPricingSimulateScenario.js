@@ -9,6 +9,7 @@ import { requireAuthUser } from "./_helpers/requireAuthUser.js";
 import { getValidMLToken } from "./_helpers/mlToken.js";
 import { gatePremiumHandler } from "../../billing/middleware/requirePlanAccess.js";
 import { parseExtrasPrecificacaoInteligenteFromBody } from "../../domain/pricing/aplicarExtrasPrecificacaoInteligente.js";
+import { parsePromotionSelectionContextFromBody } from "../../domain/pricing/mercadoLivrePromotionCalcCardSelectionParity.js";
 import { MercadoLivrePricingSimulator } from "../../domain/pricing/marketplacePricingSimulator.js";
 
 export default async function handleListingPricingSimulateScenario(req, res) {
@@ -92,6 +93,7 @@ export default async function handleListingPricingSimulateScenario(req, res) {
     "01310100";
 
   const financialExtras = parseExtrasPrecificacaoInteligenteFromBody(body);
+  const promotionSelection = parsePromotionSelectionContextFromBody(body);
 
   let result;
   try {
@@ -104,6 +106,7 @@ export default async function handleListingPricingSimulateScenario(req, res) {
       mlAccessToken,
       referenceZipCode,
       financialExtras,
+      promotionSelection,
     });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);

@@ -127,8 +127,11 @@ export async function handleProductsUpsert(req, res) {
       );
     }
 
+    /** Produto existente (somente no fluxo de update). */
+    let existing = null;
+
     if (isUpdate) {
-      const { data: existing, error: fetchError } = await supabase
+      const { data: existingRow, error: fetchError } = await supabase
         .from("products")
         .select(
           "id, format, user_id, status, catalog_source, catalog_completeness, cost_price, packaging_cost, operational_cost, stock_quantity, stock_source"
@@ -136,6 +139,8 @@ export async function handleProductsUpsert(req, res) {
         .eq("id", productId)
         .eq("user_id", user.id)
         .single();
+
+      existing = existingRow;
 
       if (fetchError || !existing) {
         return fail(res, { code: "PRODUCT_NOT_FOUND", message: "Produto não encontrado" }, 404, traceId);

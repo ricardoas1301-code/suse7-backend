@@ -198,7 +198,6 @@ export async function enrichProductsFromPreparedListingBatch(supabase, userId, p
       gtin: normalized.gtin,
       ncm: normalized.ncm,
       seo_keywords: normalized.seo_keywords,
-      ad_titles: normalized.ad_titles,
       product_images: normalizeProductImagesForDb(normalized.product_images),
       stock_quantity: normalized.stock_quantity,
       width: normalized.width,

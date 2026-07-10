@@ -55,7 +55,7 @@ export async function loadMercadoLivreListingPricingInputs(supabase, userId, lis
   const { data: row, error: qErr } = await supabase
     .from("marketplace_listings")
     .select(
-      "id, user_id, title, marketplace, price, base_price, original_price, available_quantity, sold_quantity, status, external_listing_id, marketplace_account_id, permalink, currency_id, pictures_count, variations_count, seller_sku, seller_custom_field, listing_type_id, raw_json, product_id, attention_reason, products(product_name, sku, cost_price, operational_cost, packaging_cost)"
+      "id, user_id, title, marketplace, price, base_price, original_price, available_quantity, sold_quantity, status, external_listing_id, marketplace_account_id, permalink, currency_id, pictures_count, variations_count, seller_sku, seller_custom_field, listing_type_id, raw_json, product_id, attention_reason, updated_at, products(product_name, sku, cost_price, operational_cost, packaging_cost)"
     )
     .eq("id", listingUuid)
     .eq("user_id", userId)
@@ -238,7 +238,7 @@ export async function loadMercadoLivreListingPricingInputsByExternalId(supabase,
   const { data: row, error: qErr } = await supabase
     .from("marketplace_listings")
     .select(
-      "id, user_id, title, marketplace, price, base_price, original_price, available_quantity, sold_quantity, status, external_listing_id, marketplace_account_id, permalink, currency_id, pictures_count, variations_count, seller_sku, seller_custom_field, listing_type_id, raw_json, product_id, attention_reason, products(product_name, sku, cost_price, operational_cost, packaging_cost)"
+      "id, user_id, title, marketplace, price, base_price, original_price, available_quantity, sold_quantity, status, external_listing_id, marketplace_account_id, permalink, currency_id, pictures_count, variations_count, seller_sku, seller_custom_field, listing_type_id, raw_json, product_id, attention_reason, updated_at, products(product_name, sku, cost_price, operational_cost, packaging_cost)"
     )
     .eq("user_id", userId)
     .in("external_listing_id", variants.length ? variants : [ext])

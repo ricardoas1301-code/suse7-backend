@@ -52,9 +52,12 @@ const requiredLimits = ["monthly_sales_limit"];
 const results = [];
 
 for (const target of targets) {
-  const res = await fetch(`${target.baseUrl}/api/billing/subscription/status`, {
+  const url = `${target.baseUrl}/api/billing/subscription/status`;
+  const startedAt = Date.now();
+  const res = await fetch(url, {
     headers: { Authorization: `Bearer ${token}` },
   });
+  const durationMs = Date.now() - startedAt;
   const text = await res.text();
   let body = null;
   try {
@@ -97,8 +100,27 @@ for (const target of targets) {
   }
 
   results.push(
-    `PASS ${target.label}: 200 access.can_access=${Boolean(body.access?.can_access)} usage.total_sales_month=${body.usage.total_sales_month} cycle=${body.usage.period_start}..${body.usage.period_end} subscriptions=${Array.isArray(body.subscriptions) ? body.subscriptions.length : 0}`
-  );}
+    `PASS ${target.label}: 200 duration_ms=${durationMs} access.can_access=${Boolean(body.access?.can_access)} usage.total_sales_month=${body.usage.total_sales_month} cycle=${body.usage.period_start}..${body.usage.period_end} subscriptions=${Array.isArray(body.subscriptions) ? body.subscriptions.length : 0}`
+  );
+}
+
+const localBase = targets.find((t) => t.label === "local")?.baseUrl;
+if (localBase) {
+  const concurrentUrl = `${localBase}/api/billing/subscription/status`;
+  const concurrentStartedAt = Date.now();
+  const [a, b] = await Promise.all([
+    fetch(concurrentUrl, { headers: { Authorization: `Bearer ${token}` } }),
+    fetch(concurrentUrl, { headers: { Authorization: `Bearer ${token}` } }),
+  ]);
+  const concurrentMs = Date.now() - concurrentStartedAt;
+  const concurrentOk = a.status === 200 && b.status === 200;
+  const line = `${concurrentOk ? "PASS" : "FAIL"} local_concurrent: status_a=${a.status} status_b=${b.status} wall_ms=${concurrentMs}`;
+  if (concurrentOk) console.log(line);
+  else {
+    console.error(line);
+    process.exitCode = 1;
+  }
+}
 
 for (const line of results) {
   if (line.startsWith("PASS")) console.log(line);

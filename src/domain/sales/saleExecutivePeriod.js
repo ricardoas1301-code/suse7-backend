@@ -122,6 +122,17 @@ export function resolveExecutiveSummaryPeriod(query) {
     end = endDatetimeIn;
     startMs = startDatetimeIn.getTime();
     endMsExclusive = endDatetimeIn.getTime() + 1;
+  } else if (startDatetimeIn && presetRaw === "operational_cycle") {
+    /** Ciclo operacional parcial — fim implícito = agora (estável para dedupe/single-flight). */
+    const endNow = new Date();
+    if (startDatetimeIn.getTime() > endNow.getTime()) {
+      return { ok: false, error: "start_datetime não pode ser posterior ao momento atual." };
+    }
+    preset = "operational_cycle";
+    start = startDatetimeIn;
+    end = endNow;
+    startMs = startDatetimeIn.getTime();
+    endMsExclusive = endNow.getTime() + 1;
   }
 
   if (!hasDatetimeRange && preset === "custom") {
@@ -142,6 +153,14 @@ export function resolveExecutiveSummaryPeriod(query) {
   } else if (!hasDatetimeRange && preset === "60d") {
     start = new Date(todayUtc);
     start.setUTCDate(start.getUTCDate() - 59);
+    end = todayUtc;
+  } else if (!hasDatetimeRange && /^\d+d$/.test(preset)) {
+    const dayCount = Number.parseInt(preset.slice(0, -1), 10);
+    if (!Number.isFinite(dayCount) || dayCount < 1) {
+      return { ok: false, error: `period_preset desconhecido: ${presetRaw}` };
+    }
+    start = new Date(todayUtc);
+    start.setUTCDate(start.getUTCDate() - (dayCount - 1));
     end = todayUtc;
   } else if (!hasDatetimeRange && preset === "month") {
     start = new Date(Date.UTC(todayUtc.getUTCFullYear(), todayUtc.getUTCMonth(), 1));

@@ -123,11 +123,7 @@ export function resolveMercadoLivreMarketplaceRebate(ctx) {
     rebateDecision = "accepted";
   }
 
-  const shouldLog =
-    process.env.S7_RAYX_REBATE_LOG === "1" ||
-    logContext.sale_id != null ||
-    logContext.item_id != null ||
-    logContext.external_order_id != null;
+  const shouldLog = process.env.S7_RAYX_REBATE_LOG === "1";
 
   if (shouldLog) {
     console.log("[S7 RAYX REBATE RESOLVE]", {

@@ -21,6 +21,7 @@ console.log("[S7 API Router] boot — ML OAuth diag: GET /api/ml/oauth-config");
 console.log("[S7 API Router] boot — billing: GET /api/billing/ping · GET /api/billing/plans · POST /api/billing/checkout/card · POST /api/billing/checkout/start · GET /api/billing/webhooks/asaas/health · POST /api/billing/webhooks/asaas · POST /api/jobs/billing-renewal-engine · POST /api/jobs/billing-consistency-check · POST /api/billing/renewals/:id/pay");
 console.log("[S7 API Router] boot — notifications: POST /api/jobs/daily-sales-summary-automation");
 console.log("[S7 API Router] boot — competition: POST /api/jobs/competition-daily-snapshot");
+console.log("[S7 API Router] boot — pricing: POST /api/jobs/pricing-current-state-backfill");
 console.log("[S7 API Router] boot — notifications: POST /api/notifications/manual/competition-report");
 
 /**
@@ -489,6 +490,30 @@ export default async function handler(req, res) {
       const mod = await import("../src/handlers/ml/listingsList.js");
       return await mod.default(req, res);
     }
+    if (path === "/api/ml/listings/detail" && req.method === "GET") {
+      const mod = await import("../src/handlers/ml/listingEditorDetail.js");
+      return await mod.default(req, res);
+    }
+    if (path === "/api/ml/listings/content") {
+      const mod = await import("../src/handlers/ml/listingEditorContentUpdate.js");
+      return await mod.default(req, res);
+    }
+    if (path === "/api/ml/listings/stock-settings") {
+      const mod = await import("../src/handlers/ml/listingEditorStockSettingsUpdate.js");
+      return await mod.default(req, res);
+    }
+    if (path === "/api/ml/listings/primary-picture-settings") {
+      const mod = await import("../src/handlers/ml/listingEditorPrimaryPictureSettingsUpdate.js");
+      return await mod.default(req, res);
+    }
+    if (path === "/api/ml/listings/description-settings") {
+      const mod = await import("../src/handlers/ml/listingEditorDescriptionSettingsUpdate.js");
+      return await mod.default(req, res);
+    }
+    if (path === "/api/ml/listings/measurement-settings") {
+      const mod = await import("../src/handlers/ml/listingEditorMeasurementSettingsUpdate.js");
+      return await mod.default(req, res);
+    }
     if (path === "/api/ml/listings/set-sku") {
       const mod = await import("../src/handlers/ml/listingSetSku.js");
       return await mod.default(req, res);
@@ -500,6 +525,14 @@ export default async function handler(req, res) {
     if (path === "/api/ml/listings/pricing-scenarios") {
       const mod = await import("../src/handlers/ml/listingPricingScenarios.js");
       return await mod.default(req, res);
+    }
+    const mlListingPromotionsDebugMatch = path.match(
+      /^\/api\/ml\/listings\/([^/]+)\/promotions\/debug\/?$/,
+    );
+    if (mlListingPromotionsDebugMatch && req.method === "GET") {
+      req.params = { ...(req.params || {}), listingId: mlListingPromotionsDebugMatch[1] };
+      const mod = await import("../src/handlers/ml/listingPromotionsFreshnessDebug.js");
+      return mod.default(req, res);
     }
     if (path === "/api/ml/listings/pricing-simulate-scenario" && req.method === "POST") {
       const mod = await import("../src/handlers/ml/listingPricingSimulateScenario.js");
@@ -610,6 +643,34 @@ export default async function handler(req, res) {
       const mod = await import("../src/handlers/products/catalogFinancial.js");
       return mod.handleProductsCatalogFinancial(req, res);
     }
+    if (path === "/api/dashboard/products-health-summary" && req.method === "GET") {
+      const mod = await import("../src/handlers/dashboard/productsHealthSummary.js");
+      return mod.handleDashboardProductsHealthSummary(req, res);
+    }
+    if (path === "/api/dashboard/listings-health-summary" && req.method === "GET") {
+      const mod = await import("../src/handlers/dashboard/listingsHealthSummary.js");
+      return mod.handleDashboardListingsHealthSummary(req, res);
+    }
+    if (path === "/api/dashboard/competition-health-summary" && req.method === "GET") {
+      const mod = await import("../src/handlers/dashboard/competitionHealthSummary.js");
+      return mod.handleDashboardCompetitionHealthSummary(req, res);
+    }
+    if (path === "/api/dashboard/pricing-health-summary" && req.method === "GET") {
+      const mod = await import("../src/handlers/dashboard/pricingHealthSummary.js");
+      return mod.handleDashboardPricingHealthSummary(req, res);
+    }
+    if (/^\/api\/products\/[^/]+\/images\/sync-listings\/?$/.test(path)) {
+      const mod = await import("../src/handlers/products/productImageSync.js");
+      return mod.default(req, res);
+    }
+    if (/^\/api\/products\/[^/]+\/titles\/sync-listings\/?$/.test(path)) {
+      const mod = await import("../src/handlers/products/productTitleSync.js");
+      return mod.default(req, res);
+    }
+    if (/^\/api\/products\/[^/]+\/descriptions\/sync-listings\/?$/.test(path)) {
+      const mod = await import("../src/handlers/products/productDescriptionSync.js");
+      return mod.default(req, res);
+    }
     if (path === "/api/jobs/stock-min-check") {
       const mod = await import("../src/handlers/jobs/stockMinCheck.js");
       return mod.handleJobsStockMinCheck(req, res);
@@ -625,6 +686,10 @@ export default async function handler(req, res) {
     if (path === "/api/jobs/competition-daily-snapshot") {
       const mod = await import("../src/handlers/jobs/competitionDailySnapshotJob.js");
       return mod.handleJobsCompetitionDailySnapshot(req, res);
+    }
+    if (path === "/api/jobs/pricing-current-state-backfill") {
+      const mod = await import("../src/handlers/jobs/pricingCurrentStateBackfillJob.js");
+      return mod.handleJobsPricingCurrentStateBackfill(req, res);
     }
     if (path === "/api/jobs/billing-process-period-expirations") {
       const mod = await import("../src/handlers/jobs/billingPeriodExpirationsJob.js");

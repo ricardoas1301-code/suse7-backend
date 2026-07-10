@@ -289,7 +289,6 @@ export function buildMarketplaceDraftProductPayload(
     ncm: normalized.ncm,
     seo_keywords: normalized.seo_keywords,
     category_ml_id: normalized.category_ml_id,
-    ad_titles: normalized.ad_titles,
     product_images: normalized.product_images,
     stock_quantity: normalized.stock_quantity,
     stock_source: normalized.stock_source,

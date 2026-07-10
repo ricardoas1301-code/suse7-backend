@@ -303,3 +303,47 @@ export async function enrichExecutiveListingRankingRows(supabase, userId, rows) 
     };
   });
 }
+
+/**
+ * @param {import("@supabase/supabase-js").SupabaseClient} supabase
+ * @param {string} userId
+ * @param {Record<string, unknown>[][]} lists
+ */
+export async function enrichExecutiveListingRankingRowsOnce(supabase, userId, ...lists) {
+  /** @type {Map<string, Record<string, unknown>>} */
+  const unique = new Map();
+  for (const list of lists) {
+    if (!Array.isArray(list)) continue;
+    for (const row of list) {
+      const key = `${row.marketplace ?? ""}::${row.marketplace_account_id ?? ""}::${row.listing_id ?? ""}`;
+      if (!unique.has(key)) unique.set(key, row);
+    }
+  }
+  if (unique.size === 0) return lists;
+
+  const enriched = await enrichExecutiveListingRankingRows(supabase, userId, [...unique.values()]);
+  /** @type {Map<string, string>} */
+  const thumbByRowKey = new Map();
+  for (const row of enriched) {
+    const key = `${row.marketplace ?? ""}::${row.marketplace_account_id ?? ""}::${row.listing_id ?? ""}`;
+    const thumb = pickHttpUrl(row.image_url);
+    if (thumb) thumbByRowKey.set(key, thumb);
+  }
+
+  return lists.map((list) => {
+    if (!Array.isArray(list)) return list;
+    return list.map((row) => {
+      const existing = pickHttpUrl(row?.image_url);
+      if (existing) return row;
+      const key = `${row.marketplace ?? ""}::${row.marketplace_account_id ?? ""}::${row.listing_id ?? ""}`;
+      const thumb = thumbByRowKey.get(key);
+      if (!thumb) return row;
+      return {
+        ...row,
+        image_url: thumb,
+        listing_thumbnail_url: thumb,
+        product_thumbnail_url: thumb,
+      };
+    });
+  });
+}

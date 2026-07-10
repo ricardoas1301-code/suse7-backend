@@ -1,12 +1,13 @@
 // ======================================================
 // Métricas acumuladas — anúncio e produto (Raio-x da venda).
-// Fonte preferencial: listing_sales_metrics; fallback: sales_order_items.
+// Anúncio: listing_sales_metrics → fallback sales_order_items.
+// Produto: SSOT catalog-financial-lite (mesmo motor do Raio-X do Produto).
 // ======================================================
 
 import Decimal from "decimal.js";
+import { resolveProductLifetimeSalesMetricsFromCatalogSsot } from "../products/buildProductCatalogFinancial.js";
 import { externalListingIdKeyVariants } from "../../handlers/ml/_helpers/listingGridJoinKeys.js";
 import { ML_MARKETPLACE_LISTING_ALIASES } from "../../handlers/ml/_helpers/mlMarketplace.js";
-import { normalizeExternalListingId } from "../../handlers/ml/_helpers/mlSalesPersist.js";
 import { resolveSaleCommercialLookup } from "./saleListingHealthCommercial.js";
 
 /**
@@ -82,7 +83,9 @@ async function fetchListingMetricsRow(supabase, userId, marketplace, extVariants
  */
 async function fallbackListingMetricsFromOrderItems(supabase, userId, lookup) {
   const variants = externalListingIdKeyVariants(lookup.externalListingId);
-  if (variants.length === 0) return { qty: null, amount: null };
+  if (variants.length === 0) {
+    return { qty: null, amount: null, source: "none" };
+  }
 
   let q = supabase
     .from("sales_order_items")
@@ -108,7 +111,7 @@ async function fallbackListingMetricsFromOrderItems(supabase, userId, lookup) {
   if (error) {
     const msg = String(error.message ?? "").toLowerCase();
     if (msg.includes("column") || String(error.code ?? "") === "42703") {
-      return { qty: null, amount: null };
+      return { qty: null, amount: null, source: "none" };
     }
     throw error;
   }
@@ -135,10 +138,11 @@ async function fallbackListingMetricsFromOrderItems(supabase, userId, lookup) {
     }
   }
 
-  if (!saw) return { qty: null, amount: null };
+  if (!saw) return { qty: null, amount: null, source: "none" };
   return {
     qty: qty.isZero() ? null : String(qty.toNumber()),
     amount: gross.isZero() ? null : moneyDecimalString(gross),
+    source: "sales_order_items_fallback",
   };
 }
 
@@ -151,7 +155,13 @@ async function fallbackListingMetricsFromOrderItems(supabase, userId, lookup) {
 async function fetchListingAccumulatedMetrics(supabase, userId, item, order, hints) {
   const resolved = resolveSaleCommercialLookup(item, order, hints);
   const ext = resolved.externalListingId;
-  if (!ext) return { listing_sales_quantity: null, listing_sales_amount_brl: null };
+  if (!ext) {
+    return {
+      listing_sales_quantity: null,
+      listing_sales_amount_brl: null,
+      source: "none",
+    };
+  }
 
   const variants = externalListingIdKeyVariants(ext);
   const marketplaces =
@@ -179,6 +189,7 @@ async function fetchListingAccumulatedMetrics(supabase, userId, item, order, hin
     return {
       listing_sales_quantity: qty,
       listing_sales_amount_brl: gross != null ? moneyDecimalString(new Decimal(String(gross))) : null,
+      source: "listing_sales_metrics",
     };
   }
 
@@ -186,159 +197,7 @@ async function fetchListingAccumulatedMetrics(supabase, userId, item, order, hin
   return {
     listing_sales_quantity: fallback.qty,
     listing_sales_amount_brl: fallback.amount,
-  };
-}
-
-/**
- * @param {import("@supabase/supabase-js").SupabaseClient} supabase
- * @param {string} userId
- * @param {string} productId
- * @param {string} accountId
- * @param {string} sellerCompanyId
- */
-async function fetchProductAccumulatedMetrics(supabase, userId, productId, accountId, sellerCompanyId) {
-  const pid = String(productId).trim();
-  if (!pid) {
-    return { product_sales_quantity: null, product_sales_amount_brl: null };
-  }
-
-  let listingsQuery = supabase
-    .from("marketplace_listings")
-    .select("marketplace, external_listing_id, marketplace_account_id, seller_company_id")
-    .eq("user_id", userId)
-    .eq("product_id", pid);
-
-  if (accountId) {
-    listingsQuery = listingsQuery.eq("marketplace_account_id", accountId);
-  }
-
-  const { data: listings, error: lErr } = await listingsQuery;
-  if (lErr) {
-    const msg = String(lErr.message ?? "").toLowerCase();
-    if (!msg.includes("column") && String(lErr.code ?? "") !== "42703") throw lErr;
-  }
-
-  /** @type {Array<{ marketplace: string; external_listing_id: string }>} */
-  const pairs = [];
-  for (const row of listings || []) {
-    if (!row || typeof row !== "object") continue;
-    const r = /** @type {Record<string, unknown>} */ (row);
-    if (sellerCompanyId) {
-      const sc = r.seller_company_id != null ? String(r.seller_company_id).trim() : "";
-      if (sc && sc !== sellerCompanyId) continue;
-    }
-    const mkt = r.marketplace != null ? String(r.marketplace).trim() : "";
-    const ext = normalizeExternalListingId(r.external_listing_id);
-    if (!mkt || !ext) continue;
-    pairs.push({ marketplace: mkt, external_listing_id: ext });
-  }
-
-  if (pairs.length === 0) {
-    return { product_sales_quantity: null, product_sales_amount_brl: null };
-  }
-
-  const extIds = [...new Set(pairs.map((p) => p.external_listing_id))];
-  const marketplaces = [...new Set(pairs.map((p) => p.marketplace))];
-
-  const { data: metricRows, error: mErr } = await supabase
-    .from("listing_sales_metrics")
-    .select("marketplace, external_listing_id, qty_sold_total, gross_revenue_total")
-    .eq("user_id", userId)
-    .in("external_listing_id", extIds)
-    .in("marketplace", marketplaces);
-
-  if (mErr) {
-    if (isIgnorableMetricsSchemaError(mErr)) {
-      return { product_sales_quantity: null, product_sales_amount_brl: null };
-    }
-    throw mErr;
-  }
-
-  const pairKeys = new Set(pairs.map((p) => `${p.marketplace}\t${p.external_listing_id}`));
-
-  let qty = new Decimal(0);
-  let gross = new Decimal(0);
-  let saw = false;
-
-  for (const row of metricRows || []) {
-    if (!row || typeof row !== "object") continue;
-    const r = /** @type {Record<string, unknown>} */ (row);
-    const mkt = r.marketplace != null ? String(r.marketplace).trim() : "";
-    const ext = normalizeExternalListingId(r.external_listing_id);
-    if (!pairKeys.has(`${mkt}\t${ext}`)) continue;
-
-    const qn = toNum(r.qty_sold_total);
-    if (qn != null) {
-      qty = qty.plus(Math.trunc(qn));
-      saw = true;
-    }
-    const g = toNum(r.gross_revenue_total);
-    if (g != null) {
-      gross = gross.plus(new Decimal(String(g)));
-      saw = true;
-    }
-  }
-
-  if (saw) {
-    return {
-      product_sales_quantity: qty.isZero() ? null : String(qty.toNumber()),
-      product_sales_amount_brl: gross.isZero() ? null : moneyDecimalString(gross),
-    };
-  }
-
-  let itemsQuery = supabase
-    .from("sales_order_items")
-    .select("quantity, gross_amount, unit_price, marketplace, external_listing_id")
-    .eq("user_id", userId)
-    .in("external_listing_id", extIds)
-    .in("marketplace", marketplaces);
-
-  if (accountId) itemsQuery = itemsQuery.eq("marketplace_account_id", accountId);
-  if (sellerCompanyId) itemsQuery = itemsQuery.eq("seller_company_id", sellerCompanyId);
-
-  const { data: items, error: iErr } = await itemsQuery;
-  if (iErr) {
-    const msg = String(iErr.message ?? "").toLowerCase();
-    if (msg.includes("column") || String(iErr.code ?? "") === "42703") {
-      return { product_sales_quantity: null, product_sales_amount_brl: null };
-    }
-    throw iErr;
-  }
-
-  qty = new Decimal(0);
-  gross = new Decimal(0);
-  saw = false;
-
-  for (const row of items || []) {
-    if (!row || typeof row !== "object") continue;
-    const r = /** @type {Record<string, unknown>} */ (row);
-    const mkt = r.marketplace != null ? String(r.marketplace).trim() : "";
-    const ext = normalizeExternalListingId(r.external_listing_id);
-    if (!pairKeys.has(`${mkt}\t${ext}`)) continue;
-
-    const qn = toNum(r.quantity);
-    if (qn != null && qn > 0) {
-      qty = qty.plus(Math.trunc(qn));
-      saw = true;
-    }
-    let g = toNum(r.gross_amount);
-    if (g == null) {
-      const unit = toNum(r.unit_price);
-      if (unit != null && qn != null && qn > 0) g = unit * qn;
-    }
-    if (g != null) {
-      gross = gross.plus(new Decimal(String(g)));
-      saw = true;
-    }
-  }
-
-  if (!saw) {
-    return { product_sales_quantity: null, product_sales_amount_brl: null };
-  }
-
-  return {
-    product_sales_quantity: qty.isZero() ? null : String(qty.toNumber()),
-    product_sales_amount_brl: gross.isZero() ? null : moneyDecimalString(gross),
+    source: fallback.source,
   };
 }
 
@@ -356,6 +215,34 @@ export const EMPTY_SALE_CONTEXT_METRICS = {
   product_sales_quantity: null,
   product_sales_amount_brl: null,
 };
+
+/**
+ * @param {{
+ *   saleId?: string | null;
+ *   orderId?: string | null;
+ *   listingId?: string | null;
+ *   productId?: string | null;
+ *   listingMetrics: Record<string, unknown>;
+ *   productMetrics: Record<string, unknown>;
+ * }} ctx
+ */
+function logSaleRayxAccumulatedPerformanceDebug(ctx) {
+  if (process.env.S7_SALE_RAYX_ACCUMULATED_PERFORMANCE_DEBUG !== "1") return;
+
+  console.log("[S7_SALE_RAYX_ACCUMULATED_PERFORMANCE]", {
+    sale_id: ctx.saleId ?? null,
+    order_id: ctx.orderId ?? null,
+    listing_id: ctx.listingId ?? null,
+    product_id: ctx.productId ?? null,
+    listing_qty: ctx.listingMetrics.listing_sales_quantity ?? null,
+    listing_gross_amount: ctx.listingMetrics.listing_sales_amount_brl ?? null,
+    product_qty: ctx.productMetrics.product_sales_quantity ?? null,
+    product_gross_amount: ctx.productMetrics.product_sales_amount_brl ?? null,
+    source_listing: ctx.listingMetrics.source ?? null,
+    source_product: ctx.productMetrics.source ?? null,
+    fallback_used: ctx.productMetrics.fallback_used === true,
+  });
+}
 
 /**
  * @param {import("@supabase/supabase-js").SupabaseClient} supabase
@@ -386,7 +273,6 @@ export async function fetchSaleContextMetrics(supabase, userId, item, order, uiR
       listingExternalId: listingRow?.external_listing_id ?? null,
       listingMarketplace: listingRow?.marketplace ?? null,
     };
-    const lookup = resolveSaleCommercialLookup(item, order, lookupHints);
 
     const productId = uiRow?.product_id != null ? String(uiRow.product_id).trim() : "";
     const [listingMetrics, productMetrics] = await Promise.all([
@@ -397,36 +283,51 @@ export async function fetchSaleContextMetrics(supabase, userId, item, order, uiR
         return {
           listing_sales_quantity: null,
           listing_sales_amount_brl: null,
+          source: "error",
         };
       }),
       productId
-        ? fetchProductAccumulatedMetrics(
-            supabase,
-            userId,
-            productId,
-            lookup.accountId,
-            lookup.sellerCompanyId,
-          ).catch((error) => {
+        ? resolveProductLifetimeSalesMetricsFromCatalogSsot(supabase, userId, productId).catch((error) => {
             console.warn("[sales/detail] product_accumulated_metrics_failed", {
               message: error instanceof Error ? error.message : String(error),
             });
             return {
               product_sales_quantity: null,
               product_sales_amount_brl: null,
+              source: "error",
+              fallback_used: true,
             };
           })
         : Promise.resolve({
             product_sales_quantity: null,
             product_sales_amount_brl: null,
+            source: "missing_product_id",
+            fallback_used: true,
           }),
     ]);
 
-    return {
+    const payload = {
       listing_sales_quantity: listingMetrics.listing_sales_quantity,
       listing_sales_amount_brl: listingMetrics.listing_sales_amount_brl,
       product_sales_quantity: productMetrics.product_sales_quantity,
       product_sales_amount_brl: productMetrics.product_sales_amount_brl,
     };
+
+    logSaleRayxAccumulatedPerformanceDebug({
+      saleId: item?.id != null ? String(item.id) : null,
+      orderId: item?.sales_order_id != null ? String(item.sales_order_id) : order?.id != null ? String(order.id) : null,
+      listingId:
+        uiRow?.listing_id_display != null
+          ? String(uiRow.listing_id_display)
+          : item?.external_listing_id != null
+            ? String(item.external_listing_id)
+            : null,
+      productId: productId || null,
+      listingMetrics,
+      productMetrics,
+    });
+
+    return payload;
   } catch (error) {
     console.warn("[sales/detail] sale_context_metrics_failed", {
       message: error instanceof Error ? error.message : String(error),

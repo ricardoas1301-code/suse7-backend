@@ -30,12 +30,13 @@ export default async function handleListingPricingScenarios(req, res) {
         ? String(body.external_listing_id).trim()
         : "";
   const listingId = body.listingId != null ? String(body.listingId).trim() : "";
+  // Modal PI / Raio-x: default soberano — força live fetch + guard de freshness (S1.PROMO-LIVE-ON-OPEN).
   const scenarioScope =
     body.scenarioScope != null
       ? String(body.scenarioScope).trim().toLowerCase()
       : body.scenario_scope != null
         ? String(body.scenario_scope).trim().toLowerCase()
-        : "";
+        : "pricing_opportunities";
 
   if (!listingExternalId && !listingId) {
     return res.status(400).json({

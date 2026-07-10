@@ -43,6 +43,10 @@ import {
   snapshotListingPricesCoerenteComPreco,
 } from "./mercadoLivreOfficialScenarioResolvers.js";
 import { logPricingPiOfficialApiCall } from "./pricingFlowDiffLog.js";
+import {
+  inferMercadoLivreShippingContext,
+  resolveMercadoLivreScenarioShipping,
+} from "./mercadoLivreScenarioShipping.js";
 
 const ROUND = Decimal.ROUND_HALF_UP;
 const MIN_SUSPICIOUS_SHIPPING_BRL = new Decimal("30.00");

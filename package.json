@@ -29,8 +29,13 @@
     "test:fale-conosco-motor-official": "node ./scripts/test_fale_conosco_motor_official_unit.mjs",
     "test:pricing-engine-homologada": "node ./tests/pricing/regressaoEnginePi.mjs",
     "test:pricing-engine-homologada:live": "node ./tests/pricing/regressaoEnginePi.mjs --live",
-    "test:competition-daily-snapshot-diff": "node ./scripts/test_competition_daily_snapshot_diff_unit.mjs",
-    "ssot:guard": "node ./scripts/ssot_guard_check.mjs",
+    "test:listing-health-buckets": "node ./scripts/test_listing_health_buckets_unit.mjs",
+    "test:product-health-buckets": "node ./scripts/test_product_health_buckets_unit.mjs",
+    "test:competition-health-buckets": "node ./scripts/test_competition_health_buckets_unit.mjs",
+    "test:pricing-health-buckets": "node ./scripts/test_pricing_health_buckets_unit.mjs",
+    "test:normalize-ml-shipping-summary": "node ./scripts/test_normalize_ml_shipping_summary_unit.mjs",
+    "test:listing-summary-kpis": "node ./scripts/test_normalize_ml_shipping_summary_unit.mjs",
+    "test": "npm run test:listing-health-buckets && npm run test:product-health-buckets && npm run test:competition-health-buckets && npm run test:pricing-health-buckets",
     "backfill:recent-cost-snapshots": "node ./scripts/backfill_recent_cost_snapshots_dev.mjs"
   },
   "dependencies": {

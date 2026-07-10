@@ -9,6 +9,12 @@ import { gatePremiumHandler } from "../../billing/middleware/requirePlanAccess.j
 import { buildVendasUiRowsFromOrderItems } from "./list.js";
 import { buildSaleDetailFinancialBreakdown } from "./saleDetailFinancial.js";
 import { finalizeSaleDetailFinancialWithContingency } from "../../domain/sales/saleDetailContingencyMargin.js";
+import {
+  buildSaleRayxOperationalCostsDisplayBlock,
+  pickNonZeroOperationalCostLinesForContingency,
+  resolveSaleRayxOperationalCostsFromSnapshot,
+} from "../../domain/sales/saleRayxOperationalCostsSnapshot.js";
+import { moneyFromPercentOfGross } from "../../domain/sales/saleListingHealthCommercial.js";
 import { EMPTY_SALE_CONTEXT_METRICS, fetchSaleContextMetrics } from "../../domain/sales/saleDetailContextMetrics.js";
 import {
   attachFreshMercadoLivreShipmentSnapshot,
@@ -239,12 +245,25 @@ function resolveContingencySnapshot(item, order) {
       ? /** @type {Record<string, unknown>} */ (orderFin.contingency_margin_snapshot)
       : null);
 
+  const grossMoney =
+    snap?.gross_sale_amount_brl ??
+    itemFin?.gross_sale_amount_brl ??
+    itemFin?.gross_amount_brl ??
+    item?.gross_amount ??
+    item?.net_amount ??
+    null;
+
   const toLine = (key, label, amount, percent) => {
-    if (amount == null || String(amount).trim() === "") return null;
+    let amountBrl = amount != null && String(amount).trim() !== "" ? String(amount) : null;
+    if (amountBrl == null && percent != null && String(percent).trim() !== "" && grossMoney != null) {
+      const derived = moneyFromPercentOfGross(grossMoney, percent);
+      if (derived != null) amountBrl = derived;
+    }
+    if (amountBrl == null || String(amountBrl).trim() === "") return null;
     return {
       key,
       label,
-      amount_brl: String(amount),
+      amount_brl: amountBrl,
       percent: percent != null && String(percent).trim() !== "" ? String(percent) : null,
     };
   };
@@ -474,14 +493,28 @@ export default async function handleSalesDetail(req, res) {
     };
 
     const contingencySnapshot = resolveContingencySnapshot(itemForFinancial, order);
-    if (contingencySnapshot) {
+    const grossForOperationalDisplay =
+      financial.marketplace_revenue &&
+      typeof financial.marketplace_revenue === "object" &&
+      /** @type {Record<string, unknown>} */ (financial.marketplace_revenue).gross_sale_amount_brl != null
+        ? /** @type {Record<string, unknown>} */ (financial.marketplace_revenue).gross_sale_amount_brl
+        : financial.gross_amount ?? financial.sale_price ?? null;
+    const historicalOperational = resolveSaleRayxOperationalCostsFromSnapshot(
+      itemForFinancial,
+      order,
+      grossForOperationalDisplay,
+    );
+    const contingencyLinesForProfit = pickNonZeroOperationalCostLinesForContingency(
+      historicalOperational.lines,
+    );
+
+    if (contingencyLinesForProfit.length > 0) {
       financial = {
         ...financial,
-        commercial_adjustment_lines: contingencySnapshot.lines,
-        pricing_variables_source: contingencySnapshot.source,
+        commercial_adjustment_lines: contingencyLinesForProfit,
+        pricing_variables_source: contingencySnapshot?.source ?? "historical_financial_snapshot",
       };
     } else {
-      // Protege verdade histórica: sem snapshot de contingência, não usa configuração viva.
       financial = {
         ...financial,
         commercial_adjustment_lines: [],
@@ -490,6 +523,29 @@ export default async function handleSalesDetail(req, res) {
     }
 
     financial = finalizeSaleDetailFinancialWithContingency(financial);
+
+    financial = {
+      ...financial,
+      operational_costs_display: buildSaleRayxOperationalCostsDisplayBlock({
+        item: itemForFinancial,
+        order,
+        financial,
+        saleId: itemId,
+        orderId: orderId,
+        listingId:
+          row.listing_id_display != null
+            ? String(row.listing_id_display)
+            : itemForFinancial.external_listing_id != null
+              ? String(itemForFinancial.external_listing_id)
+              : null,
+        saleDate:
+          order?.date_created_marketplace != null
+            ? String(order.date_created_marketplace)
+            : itemForFinancial.created_at != null
+              ? String(itemForFinancial.created_at)
+              : null,
+      }),
+    };
 
     if (process.env.NODE_ENV !== "production" || process.env.S7_SALES_DETAIL_DEBUG === "1") {
       const mr =

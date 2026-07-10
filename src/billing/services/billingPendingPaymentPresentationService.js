@@ -118,8 +118,9 @@ export async function findPendingCheckoutPaymentRow(supabase, pendingCheckout) {
  * @param {import("../providers/BillingProvider.js").BillingProvider | null} providerApi
  * @param {Record<string, unknown>} pendingCheckout
  * @param {Record<string, unknown> | null} payRow
+ * @param {{ skipProviderLiveFetch?: boolean }} [options]
  */
-export async function buildPendingPaymentPresentation(providerApi, pendingCheckout, payRow) {
+export async function buildPendingPaymentPresentation(providerApi, pendingCheckout, payRow, options = {}) {
   if (!payRow?.provider_payment_id) {
     const method = resolvePendingCheckoutPaymentMethod(pendingCheckout, null);
     const action = resolvePendingPaymentAction("pending", method);
@@ -168,7 +169,11 @@ export async function buildPendingPaymentPresentation(providerApi, pendingChecko
     open_error_message: null,
   };
 
-  if (action.action_type === PAYMENT_HISTORY_ACTION_TYPE.VIEW_PIX_QR && providerApi) {
+  if (
+    action.action_type === PAYMENT_HISTORY_ACTION_TYPE.VIEW_PIX_QR &&
+    providerApi &&
+    !options.skipProviderLiveFetch
+  ) {
     const pix = await fetchPixCheckoutPayload(providerApi, String(payRow.provider_payment_id));
     if (pix) {
       presentation.pix_qr_code = pix.qr_code_image ?? null;

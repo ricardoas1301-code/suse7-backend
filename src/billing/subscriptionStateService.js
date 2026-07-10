@@ -8,6 +8,7 @@ import { SUBSCRIPTION_STATUS } from "./billingConstants.js";
 import { derivePeriodEndFromNextBilling, startOfUtcDay } from "./services/billingCycleService.js";
 import { applyPaymentOverdueDelinquency } from "./services/billingDunningService.js";
 import { activateSubscriptionFromPaidPayment } from "./services/billingSubscriptionActivationService.js";
+import { invalidateBillingAccessCachesForUser } from "./services/billingAccessCacheInvalidation.js";
 import { emitAsaasWebhookPhase30Signals } from "./services/billingAsaasWebhookTimelineService.js";
 /**
  * @param {unknown} value
@@ -319,6 +320,7 @@ export async function applyAsaasWebhookEvent(supabase, norm, webhookCtx = {}) {
       }
       case "PAYMENT_REFUNDED": {
         await updateSubscriptionByProviderId(supabase, subAsaas, { status: SUBSCRIPTION_STATUS.REFUNDED });
+        if (userId) invalidateBillingAccessCachesForUser(userId, { reason: "payment_refunded" });
         break;
       }
       case "PAYMENT_DELETED":
@@ -349,7 +351,10 @@ export async function applyAsaasWebhookEvent(supabase, norm, webhookCtx = {}) {
   }
 
   if (norm.kind === "subscription" && norm.subscription && norm.subscriptionId) {
-    const { providerSubscriptionId } = await resolveUserAndSubscriptionFromSubscription(supabase, norm.subscription);
+    const { providerSubscriptionId, userId: subscriptionUserId } = await resolveUserAndSubscriptionFromSubscription(
+      supabase,
+      norm.subscription,
+    );
     const subAsaas = providerSubscriptionId || norm.subscriptionId;
     const remoteStatus = asTrimmedString(norm.subscription.status);
     const nextDueDate = parseAsaasDateOnly(norm.subscription.nextDueDate);
@@ -371,5 +376,8 @@ export async function applyAsaasWebhookEvent(supabase, norm, webhookCtx = {}) {
     }
 
     await updateSubscriptionByProviderId(supabase, subAsaas, patch);
+    if (subscriptionUserId) {
+      invalidateBillingAccessCachesForUser(subscriptionUserId, { reason: norm.eventType ?? "subscription_updated" });
+    }
   }
 }

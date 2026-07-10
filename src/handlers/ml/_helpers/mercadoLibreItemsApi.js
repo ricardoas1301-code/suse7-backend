@@ -637,6 +637,88 @@ export async function fetchItem(accessToken, itemId) {
   return json;
 }
 
+/**
+ * Detalhe completo do item para o Raio-X. Não lança erro para não derrubar o modal.
+ * @param {{ accessToken: string; itemId: string }} params
+ * @returns {Promise<{ ok: boolean; status: number | null; data: Record<string, unknown> | null; error_code: string | null }>}
+ */
+export async function fetchMercadoLivreItemFullDetail({ accessToken, itemId }) {
+  const url = `${ML_API}/items/${encodeURIComponent(itemId)}?include_attributes=all`;
+  try {
+    const res = await fetch(url, {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        Accept: "application/json",
+      },
+    });
+    const json = await res.json().catch(() => null);
+    if (!res.ok || !json || typeof json !== "object" || Array.isArray(json)) {
+      return {
+        ok: false,
+        status: res.status,
+        data: null,
+        error_code: String(json?.error ?? json?.message ?? `http_${res.status}`),
+      };
+    }
+    return {
+      ok: true,
+      status: res.status,
+      data: /** @type {Record<string, unknown>} */ (json),
+      error_code: null,
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      status: null,
+      data: null,
+      error_code: err instanceof Error ? err.message : "fetch_error",
+    };
+  }
+}
+
+/**
+ * Preços oficiais do item com todas as faixas. Usado apenas no detalhe/Raio-X.
+ * @param {{ accessToken: string; itemId: string }} params
+ * @returns {Promise<{ ok: boolean; status: number | null; data: Record<string, unknown> | null; error_code: string | null; show_all_prices_sent: true }>}
+ */
+export async function fetchMercadoLivreItemPricesShowAll({ accessToken, itemId }) {
+  const url = `${ML_API}/items/${encodeURIComponent(itemId)}/prices`;
+  try {
+    const res = await fetch(url, {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        Accept: "application/json",
+        "show-all-prices": "TRUE",
+      },
+    });
+    const json = await res.json().catch(() => null);
+    if (!res.ok || !json || typeof json !== "object" || Array.isArray(json)) {
+      return {
+        ok: false,
+        status: res.status,
+        data: null,
+        error_code: String(json?.error ?? json?.message ?? `http_${res.status}`),
+        show_all_prices_sent: true,
+      };
+    }
+    return {
+      ok: true,
+      status: res.status,
+      data: /** @type {Record<string, unknown>} */ (json),
+      error_code: null,
+      show_all_prices_sent: true,
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      status: null,
+      data: null,
+      error_code: err instanceof Error ? err.message : "fetch_error",
+      show_all_prices_sent: true,
+    };
+  }
+}
+
 /** Máx. de IDs por requisição no multiget público do ML (documentação ~20). */
 const ITEMS_MULTIGET_CHUNK = 20;
 
@@ -810,14 +892,18 @@ export async function fetchItemVisitsTotal(accessToken, itemId) {
 }
 
 /**
- * Qualidade / experiência: /performance (preferencial) e fallback /health.
+ * Qualidade: /performance (preferencial) e fallback legado /health.
  * @param {string} accessToken
  * @param {string} itemId
+ * @returns {Promise<{ payload: Record<string, unknown> | null; source: string | null; httpStatus: number | null }>}
  */
 export async function fetchItemListingPerformance(accessToken, itemId) {
   const id = encodeURIComponent(itemId);
-  const paths = [`/items/${id}/performance`, `/item/${id}/performance`, `/items/${id}/health`];
-  for (const p of paths) {
+  const performancePaths = [`/items/${id}/performance`, `/item/${id}/performance`];
+  let lastHttpStatus = null;
+  let sawPerformance404 = false;
+
+  for (const p of performancePaths) {
     const url = `${ML_API}${p}`;
     const res = await fetch(url, {
       headers: {
@@ -825,12 +911,74 @@ export async function fetchItemListingPerformance(accessToken, itemId) {
         Accept: "application/json",
       },
     });
+    lastHttpStatus = res.status;
     const json = await res.json().catch(() => ({}));
     if (res.ok && json && typeof json === "object" && !Array.isArray(json)) {
-      return json;
+      return {
+        payload: /** @type {Record<string, unknown>} */ (json),
+        source: "mercado_livre_performance",
+        httpStatus: res.status,
+      };
+    }
+    if (res.status === 404) sawPerformance404 = true;
+  }
+
+  if (sawPerformance404) {
+    return { payload: null, source: null, httpStatus: lastHttpStatus ?? 404 };
+  }
+
+  const healthUrl = `${ML_API}/items/${id}/health`;
+  const healthRes = await fetch(healthUrl, {
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      Accept: "application/json",
+    },
+  });
+  const healthJson = await healthRes.json().catch(() => ({}));
+  if (healthRes.ok && healthJson && typeof healthJson === "object" && !Array.isArray(healthJson)) {
+    return {
+      payload: /** @type {Record<string, unknown>} */ (healthJson),
+      source: "mercado_livre_health",
+      httpStatus: healthRes.status,
+    };
+  }
+  return { payload: null, source: null, httpStatus: healthRes.status ?? lastHttpStatus };
+}
+
+/**
+ * Experiência de compra oficial por item — GET /reputation/items/:id/purchase_experience/integrators
+ * @param {string} accessToken
+ * @param {string} itemId
+ * @returns {Promise<{ payload: Record<string, unknown> | null; httpStatus: number | null }>}
+ */
+export async function fetchItemPurchaseExperienceIntegrators(accessToken, itemId, opts = {}) {
+  const id = encodeURIComponent(itemId);
+  const locale = opts.locale != null && String(opts.locale).trim() !== "" ? String(opts.locale).trim() : "pt_BR";
+  const urls = [
+    `${ML_API}/reputation/items/${id}/purchase_experience/integrators?locale=${encodeURIComponent(locale)}`,
+    `${ML_API}/reputation/items/${id}/purchase_experience/integrators`,
+  ];
+  let lastStatus = null;
+  for (const url of urls) {
+    const res = await fetch(url, {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        Accept: "application/json",
+      },
+    });
+    lastStatus = res.status;
+    const json = await res.json().catch(() => ({}));
+    if (res.ok && json && typeof json === "object" && !Array.isArray(json)) {
+      return {
+        payload: /** @type {Record<string, unknown>} */ (json),
+        httpStatus: res.status,
+      };
+    }
+    if (res.status === 404) {
+      return { payload: null, httpStatus: res.status };
     }
   }
-  return null;
+  return { payload: null, httpStatus: lastStatus };
 }
 
 /**
@@ -1241,6 +1389,59 @@ export async function fetchSellerPromotionDetails(accessToken, promotionId, prom
 }
 
 /**
+ * Itens de uma promoção filtrados por anúncio — GET /seller-promotions/promotions/:id/items
+ *
+ * @param {string} accessToken
+ * @param {string} promotionId
+ * @param {string} promotionType
+ * @param {string} itemId
+ * @returns {Promise<Record<string, unknown>[]>}
+ */
+export async function fetchSellerPromotionItemsForListing(
+  accessToken,
+  promotionId,
+  promotionType,
+  itemId
+) {
+  const pid = promotionId != null ? String(promotionId).trim() : "";
+  const ptype = promotionType != null ? String(promotionType).trim() : "";
+  const iid = itemId != null ? String(itemId).trim() : "";
+  if (!pid || !ptype || !iid || !accessToken) return [];
+
+  const params = new URLSearchParams();
+  params.set("promotion_type", ptype);
+  params.set("item_id", iid);
+  params.set("app_version", "v2");
+  const url = `${ML_API}/seller-promotions/promotions/${encodeURIComponent(pid)}/items?${params.toString()}`;
+  const res = await fetch(url, {
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      Accept: "application/json",
+    },
+  });
+  const json = await res.json().catch(() => null);
+  if (!res.ok || json == null) {
+    if (mlFeeValidateLogsEnabled()) {
+      console.info("[ML_SALE_PRICE_PROMOTION][fetch_promotion_items_failed]", {
+        promotion_id: pid,
+        promotion_type: ptype,
+        item_id: iid,
+        http_status: res.status,
+        body_snippet: jsonSnippet(json, 600),
+      });
+    }
+    return [];
+  }
+  if (Array.isArray(json)) {
+    return /** @type {Record<string, unknown>[]} */ (json);
+  }
+  if (typeof json === "object" && Array.isArray(/** @type {Record<string, unknown>} */ (json).results)) {
+    return /** @type {Record<string, unknown>[]} */ (/** @type {Record<string, unknown>} */ (json).results);
+  }
+  return [];
+}
+
+/**
  * Lista promoções de um item — GET /seller-promotions/items/:id?app_version=v2
  * (retorna campanhas ativas, programadas e candidatas no contexto do item).
  *
@@ -1254,6 +1455,97 @@ export async function fetchSellerPromotionDetails(accessToken, promotionId, prom
  *   responseKeys: string[] | null;
  * }>}
  */
+/**
+ * Extrai linhas de promoção de respostas heterogêneas do GET /seller-promotions/items/:id.
+ *
+ * @param {unknown} json
+ * @returns {{ rows: Record<string, unknown>[]; paging: Record<string, unknown> | null; responseKeys: string[] | null }}
+ */
+export function extractSellerPromotionRowsFromItemPromotionsJson(json) {
+  /** @type {Record<string, unknown>[]} */
+  const rows = [];
+  /** @type {Record<string, unknown> | null} */
+  let paging = null;
+  /** @type {string[] | null} */
+  let responseKeys = null;
+
+  const pushRow = (row) => {
+    if (!row || typeof row !== "object") return;
+    const rec = /** @type {Record<string, unknown>} */ (row);
+    const hasIdentity =
+      rec.id != null ||
+      rec.promotion_id != null ||
+      rec.type != null ||
+      rec.promotion_type != null ||
+      rec.sub_type != null ||
+      rec.name != null ||
+      rec.promotion_name != null;
+    if (!hasIdentity) return;
+    rows.push(rec);
+  };
+
+  if (Array.isArray(json)) {
+    for (const row of json) pushRow(row);
+    return { rows, paging: null, responseKeys: rows.length > 0 ? Object.keys(rows[0]) : [] };
+  }
+
+  if (json == null || typeof json !== "object") {
+    return { rows, paging: null, responseKeys: null };
+  }
+
+  const root = /** @type {Record<string, unknown>} */ (json);
+  responseKeys = Object.keys(root);
+  if (root.paging != null && typeof root.paging === "object") {
+    paging = /** @type {Record<string, unknown>} */ (root.paging);
+  }
+
+  if (Array.isArray(root.results)) {
+    for (const row of root.results) pushRow(row);
+  }
+
+  const nestedKeys = [
+    "promotions",
+    "available_promotions",
+    "candidate_promotions",
+    "started_promotions",
+    "pending_promotions",
+    "items",
+    "data",
+  ];
+  for (const key of nestedKeys) {
+    const nested = root[key];
+    if (Array.isArray(nested)) {
+      for (const row of nested) pushRow(row);
+    } else if (nested != null && typeof nested === "object") {
+      const obj = /** @type {Record<string, unknown>} */ (nested);
+      for (const subKey of ["results", "candidates", "available", "started", "pending", "items"]) {
+        if (Array.isArray(obj[subKey])) {
+          for (const row of obj[subKey]) pushRow(row);
+        }
+      }
+    }
+  }
+
+  return { rows, paging, responseKeys };
+}
+
+/** @param {Record<string, unknown>[]} rows */
+function dedupeSellerPromotionRowsByStrongKey(rows) {
+  /** @type {Map<string, Record<string, unknown>>} */
+  const byKey = new Map();
+  for (const row of rows) {
+    const pid = row.id ?? row.promotion_id ?? "";
+    const offerId = row.ref_id ?? row.offer_id ?? "";
+    const ptype = row.type ?? row.promotion_type ?? "";
+    const subType = row.sub_type ?? "";
+    const name = row.name ?? row.promotion_name ?? "";
+    const key = [pid, offerId, ptype, subType, name].map((v) => (v != null ? String(v).trim() : "")).join("|");
+    if (key.replace(/\|/g, "") === "") continue;
+    if (!byKey.has(key)) byKey.set(key, row);
+  }
+  return Array.from(byKey.values());
+}
+
 export async function fetchSellerPromotionsByItemDetailed(accessToken, itemId) {
   const iid = itemId != null ? String(itemId).trim() : "";
   if (!iid || !accessToken) {
@@ -1265,66 +1557,92 @@ export async function fetchSellerPromotionsByItemDetailed(accessToken, itemId) {
       responseKeys: null,
     };
   }
-  const params = new URLSearchParams();
-  params.set("app_version", "v2");
-  const url = `${ML_API}/seller-promotions/items/${encodeURIComponent(iid)}?${params.toString()}`;
-  const res = await fetch(url, {
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      Accept: "application/json",
-    },
-  });
-  const json = await res.json().catch(() => null);
-  if (!res.ok) {
-    const errMsg =
-      json && typeof json === "object" && /** @type {Record<string, unknown>} */ (json).message != null
-        ? String(/** @type {Record<string, unknown>} */ (json).message)
-        : json && typeof json === "object" && /** @type {Record<string, unknown>} */ (json).error != null
-          ? String(/** @type {Record<string, unknown>} */ (json).error)
-          : `HTTP ${res.status}`;
-    if (mlFeeValidateLogsEnabled()) {
-      console.info("[ML_SALE_PRICE_PROMOTION][fetch_item_promotions_failed]", {
-        item_id: iid,
-        http_status: res.status,
-        body_snippet: jsonSnippet(json, 600),
-      });
+
+  /** @type {Record<string, unknown>[]} */
+  const collected = [];
+  /** @type {string[] | null} */
+  let responseKeys = null;
+  let httpStatus = null;
+  let offset = 0;
+  const pageLimit = 50;
+  let expectedTotal = null;
+  let pageGuard = 0;
+
+  while (pageGuard < 20) {
+    pageGuard += 1;
+    const params = new URLSearchParams();
+    params.set("app_version", "v2");
+    params.set("offset", String(offset));
+    params.set("limit", String(pageLimit));
+    const url = `${ML_API}/seller-promotions/items/${encodeURIComponent(iid)}?${params.toString()}`;
+    const res = await fetch(url, {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        Accept: "application/json",
+      },
+    });
+    httpStatus = res.status;
+    const json = await res.json().catch(() => null);
+    if (!res.ok) {
+      const errMsg =
+        json && typeof json === "object" && /** @type {Record<string, unknown>} */ (json).message != null
+          ? String(/** @type {Record<string, unknown>} */ (json).message)
+          : json && typeof json === "object" && /** @type {Record<string, unknown>} */ (json).error != null
+            ? String(/** @type {Record<string, unknown>} */ (json).error)
+            : `HTTP ${res.status}`;
+      if (mlFeeValidateLogsEnabled()) {
+        console.info("[ML_SALE_PRICE_PROMOTION][fetch_item_promotions_failed]", {
+          item_id: iid,
+          http_status: res.status,
+          body_snippet: jsonSnippet(json, 600),
+        });
+      }
+      return {
+        rows: dedupeSellerPromotionRowsByStrongKey(collected),
+        httpStatus: res.status,
+        ok: false,
+        error: errMsg,
+        responseKeys: json && typeof json === "object" ? Object.keys(/** @type {Record<string, unknown>} */ (json)) : null,
+      };
     }
-    return {
-      rows: [],
-      httpStatus: res.status,
-      ok: false,
-      error: errMsg,
-      responseKeys: json && typeof json === "object" ? Object.keys(/** @type {Record<string, unknown>} */ (json)) : null,
-    };
+
+    const parsed = extractSellerPromotionRowsFromItemPromotionsJson(json);
+    if (responseKeys == null) responseKeys = parsed.responseKeys;
+    if (parsed.rows.length > 0) {
+      collected.push(...parsed.rows);
+    }
+
+    const paging = parsed.paging;
+    const totalRaw = paging?.total ?? paging?.total_count ?? null;
+    const totalNum = totalRaw != null ? Number(String(totalRaw)) : NaN;
+    if (Number.isFinite(totalNum) && totalNum >= 0) {
+      expectedTotal = totalNum;
+    }
+
+    const pageRowCount = parsed.rows.length;
+    if (pageRowCount === 0) break;
+
+    if (expectedTotal != null && collected.length >= expectedTotal) break;
+
+    offset += pageRowCount;
   }
-  if (Array.isArray(json)) {
-    return {
-      rows: /** @type {Record<string, unknown>[]} */ (json),
-      httpStatus: res.status,
-      ok: true,
-      error: null,
-      responseKeys:
-        json.length > 0 && json[0] && typeof json[0] === "object"
-          ? Object.keys(/** @type {Record<string, unknown>} */ (json[0]))
-          : [],
-    };
+
+  const rows = dedupeSellerPromotionRowsByStrongKey(collected);
+  if (mlFeeValidateLogsEnabled()) {
+    console.info("[ML_SALE_PRICE_PROMOTION][fetch_item_promotions_paged]", {
+      item_id: iid,
+      collected_total: rows.length,
+      expected_total: expectedTotal,
+      pages_fetched: pageGuard,
+    });
   }
-  if (json && typeof json === "object" && Array.isArray(/** @type {Record<string, unknown>} */ (json).results)) {
-    const results = /** @type {Record<string, unknown>[]} */ (/** @type {Record<string, unknown>} */ (json).results);
-    return {
-      rows: results,
-      httpStatus: res.status,
-      ok: true,
-      error: null,
-      responseKeys: Object.keys(/** @type {Record<string, unknown>} */ (json)),
-    };
-  }
+
   return {
-    rows: [],
-    httpStatus: res.status,
+    rows,
+    httpStatus,
     ok: true,
     error: null,
-    responseKeys: json && typeof json === "object" ? Object.keys(/** @type {Record<string, unknown>} */ (json)) : null,
+    responseKeys,
   };
 }
 
@@ -1941,6 +2259,164 @@ export async function putMercadoLibreItemPrice(accessToken, itemId, price) {
         : json?.error != null
           ? String(json.error)
           : `ML put item HTTP ${res.status}`;
+    const err = new Error(msg);
+    /** @type {Error & { status?: number; body?: unknown }} */
+    const e = /** @type {any} */ (err);
+    e.status = res.status;
+    e.body = json;
+    throw err;
+  }
+  return /** @type {Record<string, unknown>} */ (json);
+}
+
+/**
+ * Atualização parcial do item (PUT /items/:id) para campos operacionais básicos.
+ * @param {string} accessToken
+ * @param {string} itemId
+ * @param {Record<string, unknown>} payload
+ * @returns {Promise<Record<string, unknown>>}
+ */
+export async function putMercadoLibreItemPartial(accessToken, itemId, payload) {
+  const id = String(itemId ?? "").trim();
+  if (!id) {
+    const err = new /** @type {Error & { status?: number; body?: unknown }} */ (Error)("itemId vazio");
+    err.status = 400;
+    throw err;
+  }
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    const err = new /** @type {Error & { status?: number; body?: unknown }} */ (Error)("Payload inválido");
+    err.status = 400;
+    throw err;
+  }
+  const url = `${ML_API}/items/${encodeURIComponent(id)}`;
+  const res = await fetch(url, {
+    method: "PUT",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      Accept: "application/json",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const msg =
+      json?.message != null
+        ? String(json.message)
+        : json?.error != null
+          ? String(json.error)
+          : `ML put item HTTP ${res.status}`;
+    const err = new Error(msg);
+    /** @type {Error & { status?: number; body?: unknown }} */
+    const e = /** @type {any} */ (err);
+    e.status = res.status;
+    e.body = json;
+    throw err;
+  }
+  return /** @type {Record<string, unknown>} */ (json);
+}
+
+/**
+ * Atualiza título do anúncio ML.
+ * @param {string} accessToken
+ * @param {string} itemId
+ * @param {string} title
+ */
+export async function putMercadoLibreItemTitle(accessToken, itemId, title) {
+  const value = String(title ?? "").trim();
+  if (!value) {
+    const err = new /** @type {Error & { status?: number; body?: unknown }} */ (Error)("Título inválido");
+    err.status = 400;
+    throw err;
+  }
+  return putMercadoLibreItemPartial(accessToken, itemId, { title: value });
+}
+
+/**
+ * Atualiza descrição do anúncio ML (PUT /items/:id/description).
+ * @param {string} accessToken
+ * @param {string} itemId
+ * @param {string} plainText
+ */
+export async function putMercadoLibreItemDescription(accessToken, itemId, plainText) {
+  const id = String(itemId ?? "").trim();
+  const value = String(plainText ?? "").trim();
+  if (!id) {
+    const err = new /** @type {Error & { status?: number; body?: unknown }} */ (Error)("itemId vazio");
+    err.status = 400;
+    throw err;
+  }
+  if (!value) {
+    const err = new /** @type {Error & { status?: number; body?: unknown }} */ (Error)("Descrição inválida");
+    err.status = 400;
+    throw err;
+  }
+  const url = `${ML_API}/items/${encodeURIComponent(id)}/description`;
+  const res = await fetch(url, {
+    method: "PUT",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      Accept: "application/json",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ plain_text: value }),
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const msg =
+      json?.message != null
+        ? String(json.message)
+        : json?.error != null
+          ? String(json.error)
+          : `ML put description HTTP ${res.status}`;
+    const err = new Error(msg);
+    /** @type {Error & { status?: number; body?: unknown }} */
+    const e = /** @type {any} */ (err);
+    e.status = res.status;
+    e.body = json;
+    throw err;
+  }
+  return /** @type {Record<string, unknown>} */ (json);
+}
+
+/**
+ * Cria descrição do anúncio ML (POST /items/:id/description).
+ * Usado quando o anúncio ainda não possui descrição (PUT retorna 404).
+ * @param {string} accessToken
+ * @param {string} itemId
+ * @param {string} plainText
+ */
+export async function postMercadoLibreItemDescription(accessToken, itemId, plainText) {
+  const id = String(itemId ?? "").trim();
+  const value = String(plainText ?? "");
+  if (!id) {
+    const err = new /** @type {Error & { status?: number; body?: unknown }} */ (Error)("itemId vazio");
+    err.status = 400;
+    throw err;
+  }
+  if (!value.trim()) {
+    const err = new /** @type {Error & { status?: number; body?: unknown }} */ (Error)("Descrição inválida");
+    err.status = 400;
+    throw err;
+  }
+  const url = `${ML_API}/items/${encodeURIComponent(id)}/description`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      Accept: "application/json",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ plain_text: value }),
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const msg =
+      json?.message != null
+        ? String(json.message)
+        : json?.error != null
+          ? String(json.error)
+          : `ML post description HTTP ${res.status}`;
     const err = new Error(msg);
     /** @type {Error & { status?: number; body?: unknown }} */
     const e = /** @type {any} */ (err);

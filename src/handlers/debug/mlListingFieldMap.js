@@ -290,7 +290,8 @@ export default async function handleMlListingFieldMap(req, res) {
       apiErrors.visits = e?.message || "visits_failed";
     }
     try {
-      performanceApi = await fetchItemListingPerformance(token, extId);
+      const performanceResult = await fetchItemListingPerformance(token, extId);
+      performanceApi = performanceResult?.payload ?? null;
     } catch (e) {
       apiErrors.performance = e?.message || "performance_failed";
     }

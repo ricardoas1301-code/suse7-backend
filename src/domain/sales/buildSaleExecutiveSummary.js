@@ -14,6 +14,7 @@ import { orderMatchesExecutivePeriod } from "./saleExecutivePeriod.js";
 import { matchesExecutiveSalesFilter } from "./saleExecutiveFilters.js";
 import {
   enrichExecutiveListingRankingRows,
+  enrichExecutiveListingRankingRowsOnce,
   pickHydratedRowImageUrl,
 } from "./executiveRankingImageUrl.js";
 import { resolveExecutiveRankingListingId } from "./saleExecutiveListingKey.js";
@@ -34,11 +35,7 @@ import {
 } from "./saleExecutiveSummaryTelemetry.js";
 import { hydrateExecutiveSummaryRankingRows } from "../../handlers/sales/list.js";
 import { createExecutiveSummaryPerf } from "./saleExecutiveSummaryPerf.js";
-import {
-  fetchExternalListingProductMap,
-  logS7ProductPerformance,
-  resolveExecutiveProductScope,
-} from "./saleExecutiveProductScope.js";
+import { logS7ProductPerformance, resolveExecutiveProductScope } from "./saleExecutiveProductScope.js";
 
 /**
  * ID de catálogo (marketplace_listings.external_listing_id) quando disponível.
@@ -194,9 +191,14 @@ export async function buildSaleExecutiveSummary(supabase, userId, filters, optio
     }
   }
 
-  const listingProductMap = filters.product_id
-    ? null
-    : await fetchExternalListingProductMap(supabase, userId);
+  /** Produto vem da hidratação por linha — evita varrer marketplace_listings inteiro a cada request. */
+  const listingProductMap = null;
+  /** @type {{ listingsMap: Map<string, Record<string, unknown>>; productsById: Map<string, Record<string, unknown>>; productsByNorm: Map<string, Record<string, unknown>> }} */
+  const executiveHydrationCache = {
+    listingsMap: new Map(),
+    productsById: new Map(),
+    productsByNorm: new Map(),
+  };
 
   const debugQuery = {
     product_id: filters.product_id ?? null,
@@ -342,6 +344,7 @@ export async function buildSaleExecutiveSummary(supabase, userId, filters, optio
           userId,
           eligibleItems,
           batchOrdersById,
+          executiveHydrationCache,
         );
       } catch (hydrateErr) {
         hydrationDegraded = true;
@@ -681,6 +684,11 @@ export async function buildSaleExecutiveSummary(supabase, userId, filters, optio
     return empty();
   }
   perf.mark("sales_query_end");
+  if (options.httpPerf) {
+    const ordersItemsMs = perf.stepDurationMs("sales_query_start", "sales_query_end");
+    options.httpPerf.setDuration("sales_orders_query_ms", ordersItemsMs);
+    options.httpPerf.setDuration("sales_items_query_ms", ordersItemsMs);
+  }
   perf.log("sales_query_end", {
     items_count: sourceItemsCount,
     duration_ms: perf.stepDurationMs("sales_query_start", "sales_query_end"),
@@ -688,6 +696,12 @@ export async function buildSaleExecutiveSummary(supabase, userId, filters, optio
 
   if (hydrationStarted) {
     perf.mark("hydration_end");
+    if (options.httpPerf) {
+      options.httpPerf.setDuration(
+        "snapshots_query_ms",
+        perf.stepDurationMs("hydration_start", "hydration_end")
+      );
+    }
     perf.log("hydration_end", {
       rows_count: hydratedRowsCount,
       degraded: hydrationDegraded,
@@ -873,6 +887,13 @@ export async function buildSaleExecutiveSummary(supabase, userId, filters, optio
   }
 
   perf.mark("profit_calc_end");
+  if (options.httpPerf) {
+    options.httpPerf.setDuration(
+      "financial_calculation_ms",
+      perf.stepDurationMs("profit_calc_start", "profit_calc_end")
+    );
+    options.httpPerf.setDuration("listing_aggregation_ms", perf.stepDurationMs("profit_calc_start", "profit_calc_end"));
+  }
   perf.log("profit_calc_end", {
     lines_processed: hydratedRowsCount,
     duration_ms: perf.stepDurationMs("profit_calc_start", "profit_calc_end"),
@@ -902,10 +923,24 @@ export async function buildSaleExecutiveSummary(supabase, userId, filters, optio
     duration_ms: perf.stepDurationMs("rankings_profit_start", "rankings_profit_end"),
   });
   perf.mark("rankings_thumb_enrich_start");
-  listingByQuantity = await enrichExecutiveListingRankingRows(supabase, userId, listingByQuantity);
-  listingByGross = await enrichExecutiveListingRankingRows(supabase, userId, listingByGross);
-  listingByProfit = await enrichExecutiveListingRankingRows(supabase, userId, listingByProfit);
+  const httpPerf = options.httpPerf;
+  if (httpPerf) {
+    httpPerf.setDuration("top_sales_ms", perf.stepDurationMs("rankings_quantity_start", "rankings_quantity_end"));
+    httpPerf.setDuration("top_revenue_ms", perf.stepDurationMs("rankings_revenue_start", "rankings_revenue_end"));
+    httpPerf.setDuration("top_profit_ms", perf.stepDurationMs("rankings_profit_start", "rankings_profit_end"));
+  }
+  const thumbEnrichStartedAt = Date.now();
+  [listingByQuantity, listingByGross, listingByProfit] = await enrichExecutiveListingRankingRowsOnce(
+    supabase,
+    userId,
+    listingByQuantity,
+    listingByGross,
+    listingByProfit
+  );
   perf.mark("rankings_thumb_enrich_end");
+  if (httpPerf) {
+    httpPerf.mark("normalization_ms", thumbEnrichStartedAt);
+  }
   perf.log("rankings_thumb_enrich_end", {
     with_image: listingByQuantity.filter((r) => r.image_url).length,
     duration_ms: perf.stepDurationMs("rankings_thumb_enrich_start", "rankings_thumb_enrich_end"),

@@ -7,9 +7,12 @@
 import Decimal from "decimal.js";
 
 import {
-  aplicarExtrasPrecificacaoInteligente,
   parseExtrasPrecificacaoInteligenteFromBody,
 } from "./aplicarExtrasPrecificacaoInteligente.js";
+import {
+  parsePromotionSelectionContextFromBody,
+  recalcularContratoFinanceiroPromocaoSelecionada,
+} from "./mercadoLivrePromotionCalcCardSelectionParity.js";
 import { simulateMercadoLivreListingTypeScenario } from "./mercadoLivreSimulateListingTypeScenario.js";
 
 const ROUND = Decimal.ROUND_HALF_UP;
@@ -145,6 +148,7 @@ export const MercadoLivrePricingSimulator = {
    *   mlAccessToken?: string | null;
    *   referenceZipCode?: string | null;
    *   financialExtras?: import("./aplicarExtrasPrecificacaoInteligente.js").ExtrasPrecificacaoInteligenteInput | null;
+   *   promotionSelection?: ReturnType<typeof parsePromotionSelectionContextFromBody> | null;
    * }} opts
    */
   async simulate(supabase, userId, opts) {
@@ -152,6 +156,11 @@ export const MercadoLivrePricingSimulator = {
       opts.financialExtras != null
         ? opts.financialExtras
         : parseExtrasPrecificacaoInteligenteFromBody(/** @type {Record<string, unknown>} */ (opts));
+
+    const promotionSelection =
+      opts.promotionSelection != null
+        ? opts.promotionSelection
+        : parsePromotionSelectionContextFromBody(/** @type {Record<string, unknown>} */ (opts));
 
     const result = await simulateMercadoLivreListingTypeScenario(supabase, userId, {
       ...opts,
@@ -162,7 +171,23 @@ export const MercadoLivrePricingSimulator = {
     const data = /** @type {Record<string, unknown>} */ (result.data);
     let scenario = /** @type {Record<string, unknown>} */ (data.scenario);
 
-    scenario = aplicarExtrasPrecificacaoInteligente(scenario, extras);
+    const listingTypeId =
+      data.listing_type_id != null ? String(data.listing_type_id) : null;
+
+    scenario = recalcularContratoFinanceiroPromocaoSelecionada(scenario, extras, {
+      listing_id: data.external_listing_id != null ? String(data.external_listing_id) : null,
+      listing_type_id: listingTypeId,
+      promotion_id: promotionSelection.promotion_id ?? null,
+      promotion_name: promotionSelection.promotion_name ?? null,
+      promotion_type: promotionSelection.promotion_type ?? null,
+      selected_final_price:
+        promotionSelection.selected_final_price ??
+        (data.resolved_sale_price_brl != null ? String(data.resolved_sale_price_brl) : null),
+      selected_discount_amount: promotionSelection.selected_discount_amount ?? null,
+      amount_to_receive_source: promotionSelection.amount_to_receive_source ?? null,
+      selected_rule: promotionSelection.selected_rule ?? null,
+      source_trace: promotionSelection.source_trace ?? null,
+    });
 
     const financial = mapMercadoLivreScenarioToFlatFinancialContract(scenario, {
       listing_external_id: data.external_listing_id != null ? String(data.external_listing_id) : null,

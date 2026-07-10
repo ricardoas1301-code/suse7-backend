@@ -185,10 +185,20 @@ const server = http.createServer(async (req, res) => {
 
   req.url = url.pathname + (url.search || "");
 
+  const { beginBackendConcurrencySnapshot, finishBackendConcurrencySnapshot } = await import(
+    "./infra/backendConcurrencySnapshot.js"
+  );
+  const concurrencyCtx = beginBackendConcurrencySnapshot({
+    endpoint: pathname,
+    requestId: `dev_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+  });
+
   const resCompat = createRes(res);
   try {
     await apiHandler(req, resCompat);
+    finishBackendConcurrencySnapshot(concurrencyCtx, { status: res.statusCode || 200 });
   } catch (err) {
+    finishBackendConcurrencySnapshot(concurrencyCtx, { status: 500 });
     console.error("[dev-server] handler error:", err);
     if (!res.headersSent) {
       res.writeHead(500, { "Content-Type": "application/json" });
@@ -201,6 +211,15 @@ server.on("error", (err) => {
   console.error("[BOOT] Falha ao abrir servidor HTTP — verifique se a porta está livre:", err?.message || err);
   process.exit(1);
 });
+
+if (process.env.NODE_ENV !== "production") {
+  process.on("unhandledRejection", (reason) => {
+    console.error("[dev-server] unhandledRejection — processo mantido em DEV:", reason);
+  });
+  process.on("uncaughtException", (err) => {
+    console.error("[dev-server] uncaughtException — processo mantido em DEV:", err);
+  });
+}
 
 server.listen(PORT, () => {
   console.log(`[BOOT] listening http://localhost:${PORT}`);

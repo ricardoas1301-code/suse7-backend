@@ -1,0 +1,2593 @@
+﻿[ML_AUTH] token_status: valid {
+  user_id: 'c8a62ec6-cfbe-4ad9-98ea-49fadebeda50',
+  ml_user_id: '1219786189',
+  marketplace_account_id: '234b633b-4726-429c-8ba5-45ac32c419ed',
+  expires_at: '2026-07-06T18:57:25.12+00:00'
+}
+[ML_AUTH] token_status: valid {
+  user_id: 'c8a62ec6-cfbe-4ad9-98ea-49fadebeda50',
+  ml_user_id: '2649629037',
+  marketplace_account_id: 'be36ef3e-cd3b-4b94-b071-4eb583ee4fce',
+  expires_at: '2026-07-06T18:15:26.963+00:00'
+}
+[ML_AUTH] token_status: valid {
+  user_id: 'c8a62ec6-cfbe-4ad9-98ea-49fadebeda50',
+  ml_user_id: '2649629037',
+  marketplace_account_id: 'be36ef3e-cd3b-4b94-b071-4eb583ee4fce',
+  expires_at: '2026-07-06T18:15:26.963+00:00'
+}
+[ML_AUTH] token_status: valid {
+  user_id: 'c8a62ec6-cfbe-4ad9-98ea-49fadebeda50',
+  ml_user_id: '2649629037',
+  marketplace_account_id: 'be36ef3e-cd3b-4b94-b071-4eb583ee4fce',
+  expires_at: '2026-07-06T18:15:26.963+00:00'
+}
+[ML_AUTH] token_status: valid {
+  user_id: 'c8a62ec6-cfbe-4ad9-98ea-49fadebeda50',
+  ml_user_id: '2649629037',
+  marketplace_account_id: 'be36ef3e-cd3b-4b94-b071-4eb583ee4fce',
+  expires_at: '2026-07-06T18:15:26.963+00:00'
+}
+[ML_AUTH] token_status: valid {
+  user_id: 'c8a62ec6-cfbe-4ad9-98ea-49fadebeda50',
+  ml_user_id: '2649629037',
+  marketplace_account_id: 'be36ef3e-cd3b-4b94-b071-4eb583ee4fce',
+  expires_at: '2026-07-06T18:15:26.963+00:00'
+}
+[ML_AUTH] token_status: valid {
+  user_id: 'c8a62ec6-cfbe-4ad9-98ea-49fadebeda50',
+  ml_user_id: '1219786189',
+  marketplace_account_id: '234b633b-4726-429c-8ba5-45ac32c419ed',
+  expires_at: '2026-07-06T18:57:25.12+00:00'
+}
+[ML_AUTH] token_status: valid {
+  user_id: 'c8a62ec6-cfbe-4ad9-98ea-49fadebeda50',
+  ml_user_id: '2649629037',
+  marketplace_account_id: 'be36ef3e-cd3b-4b94-b071-4eb583ee4fce',
+  expires_at: '2026-07-06T18:15:26.963+00:00'
+}
+{
+  "generated_at": "2026-07-06T14:29:25.795Z",
+  "listings": [
+    {
+      "listing_id": "MLB5742272490",
+      "api_rows_total": 7,
+      "api_named_count": 6,
+      "normalized_count": 6,
+      "listing_variations_count": 0,
+      "has_listing_variations": false,
+      "promotions": [
+        {
+          "promotion_id": "P-MLB17625056",
+          "promotion_name": "Aumente suas vendas",
+          "promotion_type": "SMART",
+          "promotion_family": "default",
+          "full_price_brl": "338.60",
+          "selected_final_price_brl": "295.60",
+          "official_discount_amount_brl": null,
+          "computed_discount_amount_brl": "43.00",
+          "selected_discount_amount_brl": "43.00",
+          "discount_percent_display": "12.7",
+          "discount_source": "ml_payload:seller_plus_meli_percentage",
+          "payout_brl": null,
+          "selected_rule": "registry:family_strategy",
+          "selected_source": "price",
+          "source_trace": [
+            "rule:registry:family_strategy",
+            "path:price",
+            "percent:ml_payload:seller_plus_meli_percentage",
+            "discount:calculated:original_minus_final"
+          ],
+          "candidates_count": 1,
+          "ignored_candidates": [],
+          "variation_range_audit": {
+            "listing_id": "MLB5742272490",
+            "parent_listing_id": "MLB5742272490",
+            "variation_id": null,
+            "promotion_id": "P-MLB17625056",
+            "promotion_name": "Aumente suas vendas",
+            "selected_final_price": "295.60",
+            "price_range_min": "295.60",
+            "price_range_max": "295.60",
+            "discount_range_min": "43.00",
+            "discount_range_max": "43.00",
+            "selected_variation_id": null,
+            "variation_ids_detected": [],
+            "listing_variations_count": 0,
+            "has_listing_variations": false,
+            "has_price_range": false,
+            "silent_single_price_selected": false,
+            "source_trace": [
+              "resolver:price",
+              "enrichment:promotion_items"
+            ],
+            "selected_source": "price"
+          },
+          "api_raw": {
+            "original_price": 338.6,
+            "price": 295.6,
+            "suggested_discounted_price": null,
+            "max_discounted_price": null,
+            "min_discounted_price": null,
+            "seller_percentage": 10.2,
+            "meli_percentage": 2.5,
+            "_suse7_list_min_discounted_price": null
+          }
+        },
+        {
+          "promotion_id": "P-MLB17695018",
+          "promotion_name": "Festival Casa Nova",
+          "promotion_type": "SMART",
+          "promotion_family": "default",
+          "full_price_brl": "338.60",
+          "selected_final_price_brl": "295.60",
+          "official_discount_amount_brl": null,
+          "computed_discount_amount_brl": "43.00",
+          "selected_discount_amount_brl": "43.00",
+          "discount_percent_display": "13",
+          "discount_source": "ml_payload:seller_plus_meli_percentage",
+          "payout_brl": null,
+          "selected_rule": "registry:family_strategy",
+          "selected_source": "price",
+          "source_trace": [
+            "rule:registry:family_strategy",
+            "path:price",
+            "percent:ml_payload:seller_plus_meli_percentage",
+            "discount:calculated:original_minus_final"
+          ],
+          "candidates_count": 1,
+          "ignored_candidates": [],
+          "variation_range_audit": {
+            "listing_id": "MLB5742272490",
+            "parent_listing_id": "MLB5742272490",
+            "variation_id": null,
+            "promotion_id": "P-MLB17695018",
+            "promotion_name": "Festival Casa Nova",
+            "selected_final_price": "295.60",
+            "price_range_min": "295.60",
+            "price_range_max": "295.60",
+            "discount_range_min": "43.00",
+            "discount_range_max": "43.00",
+            "selected_variation_id": null,
+            "variation_ids_detected": [],
+            "listing_variations_count": 0,
+            "has_listing_variations": false,
+            "has_price_range": false,
+            "silent_single_price_selected": false,
+            "source_trace": [
+              "resolver:price",
+              "enrichment:promotion_items"
+            ],
+            "selected_source": "price"
+          },
+          "api_raw": {
+            "original_price": 338.6,
+            "price": 295.6,
+            "suggested_discounted_price": null,
+            "max_discounted_price": null,
+            "min_discounted_price": null,
+            "seller_percentage": 10,
+            "meli_percentage": 2.7,
+            "_suse7_list_min_discounted_price": null
+          }
+        },
+        {
+          "promotion_id": "P-MLB17755360",
+          "promotion_name": "Venda Casa e Decor",
+          "promotion_type": "SMART",
+          "promotion_family": "default",
+          "full_price_brl": "338.60",
+          "selected_final_price_brl": "295.60",
+          "official_discount_amount_brl": null,
+          "computed_discount_amount_brl": "43.00",
+          "selected_discount_amount_brl": "43.00",
+          "discount_percent_display": "12.7",
+          "discount_source": "ml_payload:seller_plus_meli_percentage",
+          "payout_brl": null,
+          "selected_rule": "registry:family_strategy",
+          "selected_source": "price",
+          "source_trace": [
+            "rule:registry:family_strategy",
+            "path:price",
+            "percent:ml_payload:seller_plus_meli_percentage",
+            "discount:calculated:original_minus_final"
+          ],
+          "candidates_count": 1,
+          "ignored_candidates": [],
+          "variation_range_audit": {
+            "listing_id": "MLB5742272490",
+            "parent_listing_id": "MLB5742272490",
+            "variation_id": null,
+            "promotion_id": "P-MLB17755360",
+            "promotion_name": "Venda Casa e Decor",
+            "selected_final_price": "295.60",
+            "price_range_min": "295.60",
+            "price_range_max": "295.60",
+            "discount_range_min": "43.00",
+            "discount_range_max": "43.00",
+            "selected_variation_id": null,
+            "variation_ids_detected": [],
+            "listing_variations_count": 0,
+            "has_listing_variations": false,
+            "has_price_range": false,
+            "silent_single_price_selected": false,
+            "source_trace": [
+              "resolver:price",
+              "enrichment:promotion_items"
+            ],
+            "selected_source": "price"
+          },
+          "api_raw": {
+            "original_price": 338.6,
+            "price": 295.6,
+            "suggested_discounted_price": null,
+            "max_discounted_price": null,
+            "min_discounted_price": null,
+            "seller_percentage": 11.4,
+            "meli_percentage": 1.3,
+            "_suse7_list_min_discounted_price": null
+          }
+        },
+        {
+          "promotion_id": "P-MLB17765096",
+          "promotion_name": "7/7 SUPER Oferta CASA",
+          "promotion_type": "SMART",
+          "promotion_family": "default",
+          "full_price_brl": "338.60",
+          "selected_final_price_brl": "270.88",
+          "official_discount_amount_brl": null,
+          "computed_discount_amount_brl": "67.72",
+          "selected_discount_amount_brl": "67.72",
+          "discount_percent_display": "20",
+          "discount_source": "ml_payload:seller_plus_meli_percentage",
+          "payout_brl": null,
+          "selected_rule": "registry:family_strategy",
+          "selected_source": "price",
+          "source_trace": [
+            "rule:registry:family_strategy",
+            "path:price",
+            "percent:ml_payload:seller_plus_meli_percentage",
+            "discount:calculated:original_minus_final"
+          ],
+          "candidates_count": 1,
+          "ignored_candidates": [],
+          "variation_range_audit": {
+            "listing_id": "MLB5742272490",
+            "parent_listing_id": "MLB5742272490",
+            "variation_id": null,
+            "promotion_id": "P-MLB17765096",
+            "promotion_name": "7/7 SUPER Oferta CASA",
+            "selected_final_price": "270.88",
+            "price_range_min": "270.88",
+            "price_range_max": "270.88",
+            "discount_range_min": "67.72",
+            "discount_range_max": "67.72",
+            "selected_variation_id": null,
+            "variation_ids_detected": [],
+            "listing_variations_count": 0,
+            "has_listing_variations": false,
+            "has_price_range": false,
+            "silent_single_price_selected": false,
+            "source_trace": [
+              "resolver:price",
+              "enrichment:promotion_items"
+            ],
+            "selected_source": "price"
+          },
+          "api_raw": {
+            "original_price": 338.6,
+            "price": 270.88,
+            "suggested_discounted_price": null,
+            "max_discounted_price": null,
+            "min_discounted_price": null,
+            "seller_percentage": 14.3,
+            "meli_percentage": 5.7,
+            "_suse7_list_min_discounted_price": null
+          }
+        },
+        {
+          "promotion_id": "LGH-MLB1000",
+          "promotion_name": null,
+          "promotion_type": "LIGHTNING",
+          "promotion_family": "lightning",
+          "full_price_brl": "338.60",
+          "selected_final_price_brl": "286.60",
+          "official_discount_amount_brl": null,
+          "computed_discount_amount_brl": "52.00",
+          "selected_discount_amount_brl": "52.00",
+          "discount_percent_display": "16",
+          "discount_source": "calculated:original_minus_final",
+          "payout_brl": null,
+          "selected_rule": "panel:lightning_modest_official_tier",
+          "selected_source": "suggested_discounted_price",
+          "source_trace": [
+            "rule:panel:lightning_modest_official_tier",
+            "path:suggested_discounted_price",
+            "percent:calculated:original_minus_final",
+            "discount:calculated:original_minus_final"
+          ],
+          "candidates_count": 4,
+          "ignored_candidates": [
+            {
+              "candidate_path": "price",
+              "price": "289.50",
+              "reason": "not_selected_by_panel_parity"
+            },
+            {
+              "candidate_path": "max_discounted_price",
+              "price": "304.74",
+              "reason": "not_selected_by_panel_parity"
+            },
+            {
+              "candidate_path": "min_discounted_price",
+              "price": "101.58",
+              "reason": "not_selected_by_panel_parity"
+            }
+          ],
+          "variation_range_audit": {
+            "listing_id": "MLB5742272490",
+            "parent_listing_id": "MLB5742272490",
+            "variation_id": null,
+            "promotion_id": "LGH-MLB1000",
+            "promotion_name": null,
+            "selected_final_price": "286.60",
+            "price_range_min": "101.58",
+            "price_range_max": "304.74",
+            "discount_range_min": "33.86",
+            "discount_range_max": "237.02",
+            "selected_variation_id": null,
+            "variation_ids_detected": [],
+            "listing_variations_count": 0,
+            "has_listing_variations": false,
+            "has_price_range": true,
+            "silent_single_price_selected": true,
+            "source_trace": [
+              "resolver:suggested_discounted_price",
+              "enrichment:promotion_items",
+              "promotion:price_range_detected",
+              "warning:silent_single_price_without_variation"
+            ],
+            "selected_source": "suggested_discounted_price"
+          },
+          "api_raw": {
+            "original_price": 338.6,
+            "price": 289.5,
+            "suggested_discounted_price": 287.81,
+            "max_discounted_price": 304.74,
+            "min_discounted_price": 101.58,
+            "seller_percentage": null,
+            "meli_percentage": null,
+            "_suse7_list_min_discounted_price": 67.72
+          }
+        },
+        {
+          "promotion_id": "P-MLB17489058",
+          "promotion_name": "07.07 e Descontaco",
+          "promotion_type": "DEAL",
+          "promotion_family": "marketplace_deal",
+          "full_price_brl": "338.60",
+          "selected_final_price_brl": "295.60",
+          "official_discount_amount_brl": null,
+          "computed_discount_amount_brl": "43.00",
+          "selected_discount_amount_brl": "43.00",
+          "discount_percent_display": "13",
+          "discount_source": "calculated:original_minus_final",
+          "payout_brl": null,
+          "selected_rule": "panel:deal_intermediate_max_tier",
+          "selected_source": "max_discounted_price",
+          "source_trace": [
+            "rule:panel:deal_intermediate_max_tier",
+            "path:max_discounted_price",
+            "percent:calculated:original_minus_final",
+            "discount:calculated:original_minus_final"
+          ],
+          "candidates_count": 3,
+          "ignored_candidates": [
+            {
+              "candidate_path": "suggested_discounted_price",
+              "price": "261.74",
+              "reason": "not_selected_by_panel_parity"
+            },
+            {
+              "candidate_path": "min_discounted_price",
+              "price": "67.72",
+              "reason": "not_selected_by_panel_parity"
+            }
+          ],
+          "variation_range_audit": {
+            "listing_id": "MLB5742272490",
+            "parent_listing_id": "MLB5742272490",
+            "variation_id": null,
+            "promotion_id": "P-MLB17489058",
+            "promotion_name": "07.07 e Descontaco",
+            "selected_final_price": "295.60",
+            "price_range_min": "67.72",
+            "price_range_max": "295.60",
+            "discount_range_min": "43.00",
+            "discount_range_max": "270.88",
+            "selected_variation_id": null,
+            "variation_ids_detected": [],
+            "listing_variations_count": 0,
+            "has_listing_variations": false,
+            "has_price_range": true,
+            "silent_single_price_selected": true,
+            "source_trace": [
+              "resolver:max_discounted_price",
+              "enrichment:promotion_items",
+              "promotion:price_range_detected",
+              "warning:silent_single_price_without_variation"
+            ],
+            "selected_source": "max_discounted_price"
+          },
+          "api_raw": {
+            "original_price": 338.6,
+            "price": 0,
+            "suggested_discounted_price": 261.74,
+            "max_discounted_price": 295.6,
+            "min_discounted_price": 67.72,
+            "seller_percentage": null,
+            "meli_percentage": null,
+            "_suse7_list_min_discounted_price": null
+          }
+        }
+      ]
+    },
+    {
+      "listing_id": "MLB6086602390",
+      "api_rows_total": 7,
+      "api_named_count": 6,
+      "normalized_count": 6,
+      "listing_variations_count": 0,
+      "has_listing_variations": false,
+      "promotions": [
+        {
+          "promotion_id": "P-MLB17695018",
+          "promotion_name": "Festival Casa Nova",
+          "promotion_type": "SMART",
+          "promotion_family": "default",
+          "full_price_brl": "279.90",
+          "selected_final_price_brl": "254.91",
+          "official_discount_amount_brl": null,
+          "computed_discount_amount_brl": "24.99",
+          "selected_discount_amount_brl": "24.99",
+          "discount_percent_display": "9",
+          "discount_source": "ml_payload:seller_plus_meli_percentage",
+          "payout_brl": null,
+          "selected_rule": "registry:family_strategy",
+          "selected_source": "price",
+          "source_trace": [
+            "rule:registry:family_strategy",
+            "path:price",
+            "percent:ml_payload:seller_plus_meli_percentage",
+            "discount:calculated:original_minus_final"
+          ],
+          "candidates_count": 1,
+          "ignored_candidates": [],
+          "variation_range_audit": {
+            "listing_id": "MLB6086602390",
+            "parent_listing_id": "MLB6086602390",
+            "variation_id": null,
+            "promotion_id": "P-MLB17695018",
+            "promotion_name": "Festival Casa Nova",
+            "selected_final_price": "254.91",
+            "price_range_min": "254.91",
+            "price_range_max": "254.91",
+            "discount_range_min": "24.99",
+            "discount_range_max": "24.99",
+            "selected_variation_id": null,
+            "variation_ids_detected": [],
+            "listing_variations_count": 0,
+            "has_listing_variations": false,
+            "has_price_range": false,
+            "silent_single_price_selected": false,
+            "source_trace": [
+              "resolver:price",
+              "enrichment:promotion_items"
+            ],
+            "selected_source": "price"
+          },
+          "api_raw": {
+            "original_price": 279.9,
+            "price": 254.91,
+            "suggested_discounted_price": null,
+            "max_discounted_price": null,
+            "min_discounted_price": null,
+            "seller_percentage": 8,
+            "meli_percentage": 0.9,
+            "_suse7_list_min_discounted_price": null
+          }
+        },
+        {
+          "promotion_id": "P-MLB17625056",
+          "promotion_name": "Aumente suas vendas",
+          "promotion_type": "SMART",
+          "promotion_family": "default",
+          "full_price_brl": "279.90",
+          "selected_final_price_brl": "231.00",
+          "official_discount_amount_brl": null,
+          "computed_discount_amount_brl": "48.90",
+          "selected_discount_amount_brl": "48.90",
+          "discount_percent_display": "17.4",
+          "discount_source": "ml_payload:seller_plus_meli_percentage",
+          "payout_brl": null,
+          "selected_rule": "registry:family_strategy",
+          "selected_source": "price",
+          "source_trace": [
+            "rule:registry:family_strategy",
+            "path:price",
+            "percent:ml_payload:seller_plus_meli_percentage",
+            "discount:calculated:original_minus_final"
+          ],
+          "candidates_count": 1,
+          "ignored_candidates": [],
+          "variation_range_audit": {
+            "listing_id": "MLB6086602390",
+            "parent_listing_id": "MLB6086602390",
+            "variation_id": null,
+            "promotion_id": "P-MLB17625056",
+            "promotion_name": "Aumente suas vendas",
+            "selected_final_price": "231.00",
+            "price_range_min": "231.00",
+            "price_range_max": "231.00",
+            "discount_range_min": "48.90",
+            "discount_range_max": "48.90",
+            "selected_variation_id": null,
+            "variation_ids_detected": [],
+            "listing_variations_count": 0,
+            "has_listing_variations": false,
+            "has_price_range": false,
+            "silent_single_price_selected": false,
+            "source_trace": [
+              "resolver:price",
+              "enrichment:promotion_items"
+            ],
+            "selected_source": "price"
+          },
+          "api_raw": {
+            "original_price": 279.9,
+            "price": 231,
+            "suggested_discounted_price": null,
+            "max_discounted_price": null,
+            "min_discounted_price": null,
+            "seller_percentage": 15.7,
+            "meli_percentage": 1.7,
+            "_suse7_list_min_discounted_price": null
+          }
+        },
+        {
+          "promotion_id": "P-MLB17755360",
+          "promotion_name": "Venda Casa e Decor",
+          "promotion_type": "SMART",
+          "promotion_family": "default",
+          "full_price_brl": "279.90",
+          "selected_final_price_brl": "231.00",
+          "official_discount_amount_brl": null,
+          "computed_discount_amount_brl": "48.90",
+          "selected_discount_amount_brl": "48.90",
+          "discount_percent_display": "17.5",
+          "discount_source": "ml_payload:seller_plus_meli_percentage",
+          "payout_brl": null,
+          "selected_rule": "registry:family_strategy",
+          "selected_source": "price",
+          "source_trace": [
+            "rule:registry:family_strategy",
+            "path:price",
+            "percent:ml_payload:seller_plus_meli_percentage",
+            "discount:calculated:original_minus_final"
+          ],
+          "candidates_count": 1,
+          "ignored_candidates": [],
+          "variation_range_audit": {
+            "listing_id": "MLB6086602390",
+            "parent_listing_id": "MLB6086602390",
+            "variation_id": null,
+            "promotion_id": "P-MLB17755360",
+            "promotion_name": "Venda Casa e Decor",
+            "selected_final_price": "231.00",
+            "price_range_min": "231.00",
+            "price_range_max": "231.00",
+            "discount_range_min": "48.90",
+            "discount_range_max": "48.90",
+            "selected_variation_id": null,
+            "variation_ids_detected": [],
+            "listing_variations_count": 0,
+            "has_listing_variations": false,
+            "has_price_range": false,
+            "silent_single_price_selected": false,
+            "source_trace": [
+              "resolver:price",
+              "enrichment:promotion_items"
+            ],
+            "selected_source": "price"
+          },
+          "api_raw": {
+            "original_price": 279.9,
+            "price": 231,
+            "suggested_discounted_price": null,
+            "max_discounted_price": null,
+            "min_discounted_price": null,
+            "seller_percentage": 15.3,
+            "meli_percentage": 2.2,
+            "_suse7_list_min_discounted_price": null
+          }
+        },
+        {
+          "promotion_id": "P-MLB17765096",
+          "promotion_name": "7/7 SUPER Oferta CASA",
+          "promotion_type": "SMART",
+          "promotion_family": "default",
+          "full_price_brl": "279.90",
+          "selected_final_price_brl": "223.92",
+          "official_discount_amount_brl": null,
+          "computed_discount_amount_brl": "55.98",
+          "selected_discount_amount_brl": "55.98",
+          "discount_percent_display": "20",
+          "discount_source": "ml_payload:seller_plus_meli_percentage",
+          "payout_brl": null,
+          "selected_rule": "registry:family_strategy",
+          "selected_source": "price",
+          "source_trace": [
+            "rule:registry:family_strategy",
+            "path:price",
+            "percent:ml_payload:seller_plus_meli_percentage",
+            "discount:calculated:original_minus_final"
+          ],
+          "candidates_count": 1,
+          "ignored_candidates": [],
+          "variation_range_audit": {
+            "listing_id": "MLB6086602390",
+            "parent_listing_id": "MLB6086602390",
+            "variation_id": null,
+            "promotion_id": "P-MLB17765096",
+            "promotion_name": "7/7 SUPER Oferta CASA",
+            "selected_final_price": "223.92",
+            "price_range_min": "223.92",
+            "price_range_max": "223.92",
+            "discount_range_min": "55.98",
+            "discount_range_max": "55.98",
+            "selected_variation_id": null,
+            "variation_ids_detected": [],
+            "listing_variations_count": 0,
+            "has_listing_variations": false,
+            "has_price_range": false,
+            "silent_single_price_selected": false,
+            "source_trace": [
+              "resolver:price",
+              "enrichment:promotion_items"
+            ],
+            "selected_source": "price"
+          },
+          "api_raw": {
+            "original_price": 279.9,
+            "price": 223.92,
+            "suggested_discounted_price": null,
+            "max_discounted_price": null,
+            "min_discounted_price": null,
+            "seller_percentage": 14.7,
+            "meli_percentage": 5.3,
+            "_suse7_list_min_discounted_price": null
+          }
+        },
+        {
+          "promotion_id": "LGH-MLB1000",
+          "promotion_name": null,
+          "promotion_type": "LIGHTNING",
+          "promotion_family": "lightning",
+          "full_price_brl": "279.90",
+          "selected_final_price_brl": "252.36",
+          "official_discount_amount_brl": null,
+          "computed_discount_amount_brl": "27.54",
+          "selected_discount_amount_brl": "27.54",
+          "discount_percent_display": "10",
+          "discount_source": "calculated:original_minus_final",
+          "payout_brl": null,
+          "selected_rule": "panel:lightning_modest_official_tier",
+          "selected_source": "max_discounted_price",
+          "source_trace": [
+            "rule:panel:lightning_modest_official_tier",
+            "path:max_discounted_price",
+            "percent:calculated:original_minus_final",
+            "discount:calculated:original_minus_final"
+          ],
+          "candidates_count": 4,
+          "ignored_candidates": [
+            {
+              "candidate_path": "price",
+              "price": "264.96",
+              "reason": "not_selected_by_panel_parity"
+            },
+            {
+              "candidate_path": "suggested_discounted_price",
+              "price": "237.92",
+              "reason": "not_selected_by_panel_parity"
+            },
+            {
+              "candidate_path": "min_discounted_price",
+              "price": "83.97",
+              "reason": "not_selected_by_panel_parity"
+            }
+          ],
+          "variation_range_audit": {
+            "listing_id": "MLB6086602390",
+            "parent_listing_id": "MLB6086602390",
+            "variation_id": null,
+            "promotion_id": "LGH-MLB1000",
+            "promotion_name": null,
+            "selected_final_price": "252.36",
+            "price_range_min": "83.97",
+            "price_range_max": "264.96",
+            "discount_range_min": "14.94",
+            "discount_range_max": "195.93",
+            "selected_variation_id": null,
+            "variation_ids_detected": [],
+            "listing_variations_count": 0,
+            "has_listing_variations": false,
+            "has_price_range": true,
+            "silent_single_price_selected": true,
+            "source_trace": [
+              "resolver:max_discounted_price",
+              "enrichment:promotion_items",
+              "promotion:price_range_detected",
+              "warning:silent_single_price_without_variation"
+            ],
+            "selected_source": "max_discounted_price"
+          },
+          "api_raw": {
+            "original_price": 279.9,
+            "price": 264.96,
+            "suggested_discounted_price": 237.92,
+            "max_discounted_price": 251.9,
+            "min_discounted_price": 83.97,
+            "seller_percentage": null,
+            "meli_percentage": null,
+            "_suse7_list_min_discounted_price": 55.98
+          }
+        },
+        {
+          "promotion_id": "P-MLB17489058",
+          "promotion_name": "07.07 e Descontaco",
+          "promotion_type": "DEAL",
+          "promotion_family": "marketplace_deal",
+          "full_price_brl": "279.90",
+          "selected_final_price_brl": "270.54",
+          "official_discount_amount_brl": null,
+          "computed_discount_amount_brl": "9.36",
+          "selected_discount_amount_brl": "9.36",
+          "discount_percent_display": "3",
+          "discount_source": "calculated:original_minus_final",
+          "payout_brl": null,
+          "selected_rule": "registry:family_strategy",
+          "selected_source": "price",
+          "source_trace": [
+            "rule:registry:family_strategy",
+            "path:price",
+            "percent:calculated:original_minus_final",
+            "discount:calculated:original_minus_final"
+          ],
+          "candidates_count": 1,
+          "ignored_candidates": [],
+          "variation_range_audit": {
+            "listing_id": "MLB6086602390",
+            "parent_listing_id": "MLB6086602390",
+            "variation_id": null,
+            "promotion_id": "P-MLB17489058",
+            "promotion_name": "07.07 e Descontaco",
+            "selected_final_price": "270.54",
+            "price_range_min": "270.54",
+            "price_range_max": "270.54",
+            "discount_range_min": "9.36",
+            "discount_range_max": "9.36",
+            "selected_variation_id": null,
+            "variation_ids_detected": [],
+            "listing_variations_count": 0,
+            "has_listing_variations": false,
+            "has_price_range": false,
+            "silent_single_price_selected": false,
+            "source_trace": [
+              "resolver:price"
+            ],
+            "selected_source": "price"
+          },
+          "api_raw": {
+            "original_price": 279.9,
+            "price": 270.54,
+            "suggested_discounted_price": null,
+            "max_discounted_price": null,
+            "min_discounted_price": null,
+            "seller_percentage": null,
+            "meli_percentage": null,
+            "_suse7_list_min_discounted_price": null
+          }
+        }
+      ]
+    },
+    {
+      "listing_id": "MLB4578041035",
+      "api_rows_total": 6,
+      "api_named_count": 5,
+      "normalized_count": 5,
+      "listing_variations_count": 0,
+      "has_listing_variations": false,
+      "promotions": [
+        {
+          "promotion_id": "P-MLB17625056",
+          "promotion_name": "Aumente suas vendas",
+          "promotion_type": "SMART",
+          "promotion_family": "default",
+          "full_price_brl": "98.60",
+          "selected_final_price_brl": "78.00",
+          "official_discount_amount_brl": null,
+          "computed_discount_amount_brl": "20.60",
+          "selected_discount_amount_brl": "20.60",
+          "discount_percent_display": "20.9",
+          "discount_source": "ml_payload:seller_plus_meli_percentage",
+          "payout_brl": null,
+          "selected_rule": "registry:family_strategy",
+          "selected_source": "price",
+          "source_trace": [
+            "rule:registry:family_strategy",
+            "path:price",
+            "percent:ml_payload:seller_plus_meli_percentage",
+            "discount:calculated:original_minus_final"
+          ],
+          "candidates_count": 1,
+          "ignored_candidates": [],
+          "variation_range_audit": {
+            "listing_id": "MLB4578041035",
+            "parent_listing_id": "MLB4578041035",
+            "variation_id": null,
+            "promotion_id": "P-MLB17625056",
+            "promotion_name": "Aumente suas vendas",
+            "selected_final_price": "78.00",
+            "price_range_min": "78.00",
+            "price_range_max": "78.00",
+            "discount_range_min": "20.60",
+            "discount_range_max": "20.60",
+            "selected_variation_id": null,
+            "variation_ids_detected": [],
+            "listing_variations_count": 0,
+            "has_listing_variations": false,
+            "has_price_range": false,
+            "silent_single_price_selected": false,
+            "source_trace": [
+              "resolver:price",
+              "enrichment:promotion_items"
+            ],
+            "selected_source": "price"
+          },
+          "api_raw": {
+            "original_price": 98.6,
+            "price": 78,
+            "suggested_discounted_price": null,
+            "max_discounted_price": null,
+            "min_discounted_price": null,
+            "seller_percentage": 18.8,
+            "meli_percentage": 2.1,
+            "_suse7_list_min_discounted_price": null
+          }
+        },
+        {
+          "promotion_id": "P-MLB17695018",
+          "promotion_name": "Festival Casa Nova",
+          "promotion_type": "SMART",
+          "promotion_family": "default",
+          "full_price_brl": "98.60",
+          "selected_final_price_brl": "87.44",
+          "official_discount_amount_brl": null,
+          "computed_discount_amount_brl": "11.16",
+          "selected_discount_amount_brl": "11.16",
+          "discount_percent_display": "11.3",
+          "discount_source": "ml_payload:seller_plus_meli_percentage",
+          "payout_brl": null,
+          "selected_rule": "registry:family_strategy",
+          "selected_source": "price",
+          "source_trace": [
+            "rule:registry:family_strategy",
+            "path:price",
+            "percent:ml_payload:seller_plus_meli_percentage",
+            "discount:calculated:original_minus_final"
+          ],
+          "candidates_count": 1,
+          "ignored_candidates": [],
+          "variation_range_audit": {
+            "listing_id": "MLB4578041035",
+            "parent_listing_id": "MLB4578041035",
+            "variation_id": null,
+            "promotion_id": "P-MLB17695018",
+            "promotion_name": "Festival Casa Nova",
+            "selected_final_price": "87.44",
+            "price_range_min": "87.44",
+            "price_range_max": "87.44",
+            "discount_range_min": "11.16",
+            "discount_range_max": "11.16",
+            "selected_variation_id": null,
+            "variation_ids_detected": [],
+            "listing_variations_count": 0,
+            "has_listing_variations": false,
+            "has_price_range": false,
+            "silent_single_price_selected": false,
+            "source_trace": [
+              "resolver:price",
+              "enrichment:promotion_items"
+            ],
+            "selected_source": "price"
+          },
+          "api_raw": {
+            "original_price": 98.6,
+            "price": 87.44,
+            "suggested_discounted_price": null,
+            "max_discounted_price": null,
+            "min_discounted_price": null,
+            "seller_percentage": 9.7,
+            "meli_percentage": 1.6,
+            "_suse7_list_min_discounted_price": null
+          }
+        },
+        {
+          "promotion_id": "P-MLB17755360",
+          "promotion_name": "Venda Casa e Decor",
+          "promotion_type": "SMART",
+          "promotion_family": "default",
+          "full_price_brl": "98.60",
+          "selected_final_price_brl": "78.00",
+          "official_discount_amount_brl": null,
+          "computed_discount_amount_brl": "20.60",
+          "selected_discount_amount_brl": "20.60",
+          "discount_percent_display": "20.8",
+          "discount_source": "ml_payload:seller_plus_meli_percentage",
+          "payout_brl": null,
+          "selected_rule": "registry:family_strategy",
+          "selected_source": "price",
+          "source_trace": [
+            "rule:registry:family_strategy",
+            "path:price",
+            "percent:ml_payload:seller_plus_meli_percentage",
+            "discount:calculated:original_minus_final"
+          ],
+          "candidates_count": 1,
+          "ignored_candidates": [],
+          "variation_range_audit": {
+            "listing_id": "MLB4578041035",
+            "parent_listing_id": "MLB4578041035",
+            "variation_id": null,
+            "promotion_id": "P-MLB17755360",
+            "promotion_name": "Venda Casa e Decor",
+            "selected_final_price": "78.00",
+            "price_range_min": "78.00",
+            "price_range_max": "78.00",
+            "discount_range_min": "20.60",
+            "discount_range_max": "20.60",
+            "selected_variation_id": null,
+            "variation_ids_detected": [],
+            "listing_variations_count": 0,
+            "has_listing_variations": false,
+            "has_price_range": false,
+            "silent_single_price_selected": false,
+            "source_trace": [
+              "resolver:price",
+              "enrichment:promotion_items"
+            ],
+            "selected_source": "price"
+          },
+          "api_raw": {
+            "original_price": 98.6,
+            "price": 78,
+            "suggested_discounted_price": null,
+            "max_discounted_price": null,
+            "min_discounted_price": null,
+            "seller_percentage": 16.1,
+            "meli_percentage": 4.7,
+            "_suse7_list_min_discounted_price": null
+          }
+        },
+        {
+          "promotion_id": "P-MLB17765096",
+          "promotion_name": "7/7 SUPER Oferta CASA",
+          "promotion_type": "SMART",
+          "promotion_family": "default",
+          "full_price_brl": "98.60",
+          "selected_final_price_brl": "78.88",
+          "official_discount_amount_brl": null,
+          "computed_discount_amount_brl": "19.72",
+          "selected_discount_amount_brl": "19.72",
+          "discount_percent_display": "20",
+          "discount_source": "ml_payload:seller_plus_meli_percentage",
+          "payout_brl": null,
+          "selected_rule": "registry:family_strategy",
+          "selected_source": "price",
+          "source_trace": [
+            "rule:registry:family_strategy",
+            "path:price",
+            "percent:ml_payload:seller_plus_meli_percentage",
+            "discount:calculated:original_minus_final"
+          ],
+          "candidates_count": 1,
+          "ignored_candidates": [],
+          "variation_range_audit": {
+            "listing_id": "MLB4578041035",
+            "parent_listing_id": "MLB4578041035",
+            "variation_id": null,
+            "promotion_id": "P-MLB17765096",
+            "promotion_name": "7/7 SUPER Oferta CASA",
+            "selected_final_price": "78.88",
+            "price_range_min": "78.88",
+            "price_range_max": "78.88",
+            "discount_range_min": "19.72",
+            "discount_range_max": "19.72",
+            "selected_variation_id": null,
+            "variation_ids_detected": [],
+            "listing_variations_count": 0,
+            "has_listing_variations": false,
+            "has_price_range": false,
+            "silent_single_price_selected": false,
+            "source_trace": [
+              "resolver:price",
+              "enrichment:promotion_items"
+            ],
+            "selected_source": "price"
+          },
+          "api_raw": {
+            "original_price": 98.6,
+            "price": 78.88,
+            "suggested_discounted_price": null,
+            "max_discounted_price": null,
+            "min_discounted_price": null,
+            "seller_percentage": 12,
+            "meli_percentage": 8,
+            "_suse7_list_min_discounted_price": null
+          }
+        },
+        {
+          "promotion_id": "P-MLB17489058",
+          "promotion_name": "07.07 e Descontaco",
+          "promotion_type": "DEAL",
+          "promotion_family": "marketplace_deal",
+          "full_price_brl": "98.60",
+          "selected_final_price_brl": "87.44",
+          "official_discount_amount_brl": null,
+          "computed_discount_amount_brl": "11.16",
+          "selected_discount_amount_brl": "11.16",
+          "discount_percent_display": "11",
+          "discount_source": "calculated:original_minus_final",
+          "payout_brl": null,
+          "selected_rule": "panel:deal_intermediate_max_tier",
+          "selected_source": "max_discounted_price",
+          "source_trace": [
+            "rule:panel:deal_intermediate_max_tier",
+            "path:max_discounted_price",
+            "percent:calculated:original_minus_final",
+            "discount:calculated:original_minus_final"
+          ],
+          "candidates_count": 3,
+          "ignored_candidates": [
+            {
+              "candidate_path": "suggested_discounted_price",
+              "price": "77.58",
+              "reason": "not_selected_by_panel_parity"
+            },
+            {
+              "candidate_path": "min_discounted_price",
+              "price": "19.72",
+              "reason": "not_selected_by_panel_parity"
+            }
+          ],
+          "variation_range_audit": {
+            "listing_id": "MLB4578041035",
+            "parent_listing_id": "MLB4578041035",
+            "variation_id": null,
+            "promotion_id": "P-MLB17489058",
+            "promotion_name": "07.07 e Descontaco",
+            "selected_final_price": "87.44",
+            "price_range_min": "19.72",
+            "price_range_max": "87.44",
+            "discount_range_min": "11.16",
+            "discount_range_max": "78.88",
+            "selected_variation_id": null,
+            "variation_ids_detected": [],
+            "listing_variations_count": 0,
+            "has_listing_variations": false,
+            "has_price_range": true,
+            "silent_single_price_selected": true,
+            "source_trace": [
+              "resolver:max_discounted_price",
+              "enrichment:promotion_items",
+              "promotion:price_range_detected",
+              "warning:silent_single_price_without_variation"
+            ],
+            "selected_source": "max_discounted_price"
+          },
+          "api_raw": {
+            "original_price": 98.6,
+            "price": 0,
+            "suggested_discounted_price": 77.58,
+            "max_discounted_price": 87.44,
+            "min_discounted_price": 19.72,
+            "seller_percentage": null,
+            "meli_percentage": null,
+            "_suse7_list_min_discounted_price": null
+          }
+        }
+      ]
+    },
+    {
+      "listing_id": "MLB4684020397",
+      "api_rows_total": 6,
+      "api_named_count": 5,
+      "normalized_count": 5,
+      "listing_variations_count": 0,
+      "has_listing_variations": false,
+      "promotions": [
+        {
+          "promotion_id": "P-MLB17637260",
+          "promotion_name": "Top Oferta Construcao",
+          "promotion_type": "SMART",
+          "promotion_family": "top_oferta",
+          "full_price_brl": "74.90",
+          "selected_final_price_brl": "54.50",
+          "official_discount_amount_brl": null,
+          "computed_discount_amount_brl": "20.40",
+          "selected_discount_amount_brl": "20.40",
+          "discount_percent_display": "27.2",
+          "discount_source": "ml_payload:seller_plus_meli_percentage",
+          "payout_brl": null,
+          "selected_rule": "registry:family_strategy",
+          "selected_source": "price",
+          "source_trace": [
+            "rule:registry:family_strategy",
+            "path:price",
+            "percent:ml_payload:seller_plus_meli_percentage",
+            "discount:calculated:original_minus_final"
+          ],
+          "candidates_count": 1,
+          "ignored_candidates": [],
+          "variation_range_audit": {
+            "listing_id": "MLB4684020397",
+            "parent_listing_id": "MLB4684020397",
+            "variation_id": null,
+            "promotion_id": "P-MLB17637260",
+            "promotion_name": "Top Oferta Construcao",
+            "selected_final_price": "54.50",
+            "price_range_min": "54.50",
+            "price_range_max": "54.50",
+            "discount_range_min": "20.40",
+            "discount_range_max": "20.40",
+            "selected_variation_id": null,
+            "variation_ids_detected": [],
+            "listing_variations_count": 0,
+            "has_listing_variations": false,
+            "has_price_range": false,
+            "silent_single_price_selected": false,
+            "source_trace": [
+              "resolver:price",
+              "enrichment:promotion_items"
+            ],
+            "selected_source": "price"
+          },
+          "api_raw": {
+            "original_price": 74.9,
+            "price": 54.5,
+            "suggested_discounted_price": null,
+            "max_discounted_price": null,
+            "min_discounted_price": null,
+            "seller_percentage": 24.5,
+            "meli_percentage": 2.7,
+            "_suse7_list_min_discounted_price": null
+          }
+        },
+        {
+          "promotion_id": "P-MLB17625056",
+          "promotion_name": "Aumente suas vendas",
+          "promotion_type": "SMART",
+          "promotion_family": "default",
+          "full_price_brl": "74.90",
+          "selected_final_price_brl": "54.50",
+          "official_discount_amount_brl": null,
+          "computed_discount_amount_brl": "20.40",
+          "selected_discount_amount_brl": "20.40",
+          "discount_percent_display": "27.2",
+          "discount_source": "ml_payload:seller_plus_meli_percentage",
+          "payout_brl": null,
+          "selected_rule": "registry:family_strategy",
+          "selected_source": "price",
+          "source_trace": [
+            "rule:registry:family_strategy",
+            "path:price",
+            "percent:ml_payload:seller_plus_meli_percentage",
+            "discount:calculated:original_minus_final"
+          ],
+          "candidates_count": 1,
+          "ignored_candidates": [],
+          "variation_range_audit": {
+            "listing_id": "MLB4684020397",
+            "parent_listing_id": "MLB4684020397",
+            "variation_id": null,
+            "promotion_id": "P-MLB17625056",
+            "promotion_name": "Aumente suas vendas",
+            "selected_final_price": "54.50",
+            "price_range_min": "54.50",
+            "price_range_max": "54.50",
+            "discount_range_min": "20.40",
+            "discount_range_max": "20.40",
+            "selected_variation_id": null,
+            "variation_ids_detected": [],
+            "listing_variations_count": 0,
+            "has_listing_variations": false,
+            "has_price_range": false,
+            "silent_single_price_selected": false,
+            "source_trace": [
+              "resolver:price",
+              "enrichment:promotion_items"
+            ],
+            "selected_source": "price"
+          },
+          "api_raw": {
+            "original_price": 74.9,
+            "price": 54.5,
+            "suggested_discounted_price": null,
+            "max_discounted_price": null,
+            "min_discounted_price": null,
+            "seller_percentage": 24.5,
+            "meli_percentage": 2.7,
+            "_suse7_list_min_discounted_price": null
+          }
+        },
+        {
+          "promotion_id": "LGH-MLB1000",
+          "promotion_name": null,
+          "promotion_type": "LIGHTNING",
+          "promotion_family": "lightning",
+          "full_price_brl": "74.90",
+          "selected_final_price_brl": "53.17",
+          "official_discount_amount_brl": null,
+          "computed_discount_amount_brl": "21.73",
+          "selected_discount_amount_brl": "21.73",
+          "discount_percent_display": "30",
+          "discount_source": "calculated:original_minus_final",
+          "payout_brl": null,
+          "selected_rule": "panel:lightning_min_spread_high_price_tier",
+          "selected_source": "min_discounted_price",
+          "source_trace": [
+            "rule:panel:lightning_min_spread_high_price_tier",
+            "path:min_discounted_price",
+            "percent:calculated:original_minus_final",
+            "discount:calculated:original_minus_final"
+          ],
+          "candidates_count": 4,
+          "ignored_candidates": [
+            {
+              "candidate_path": "price",
+              "price": "53.71",
+              "reason": "not_selected_by_panel_parity"
+            },
+            {
+              "candidate_path": "suggested_discounted_price",
+              "price": "63.67",
+              "reason": "not_selected_by_panel_parity"
+            },
+            {
+              "candidate_path": "max_discounted_price",
+              "price": "67.41",
+              "reason": "not_selected_by_panel_parity"
+            }
+          ],
+          "variation_range_audit": {
+            "listing_id": "MLB4684020397",
+            "parent_listing_id": "MLB4684020397",
+            "variation_id": null,
+            "promotion_id": "LGH-MLB1000",
+            "promotion_name": null,
+            "selected_final_price": "53.17",
+            "price_range_min": "22.47",
+            "price_range_max": "67.41",
+            "discount_range_min": "7.49",
+            "discount_range_max": "52.43",
+            "selected_variation_id": null,
+            "variation_ids_detected": [],
+            "listing_variations_count": 0,
+            "has_listing_variations": false,
+            "has_price_range": true,
+            "silent_single_price_selected": true,
+            "source_trace": [
+              "resolver:min_discounted_price",
+              "enrichment:promotion_items",
+              "promotion:price_range_detected",
+              "warning:silent_single_price_without_variation"
+            ],
+            "selected_source": "min_discounted_price"
+          },
+          "api_raw": {
+            "original_price": 74.9,
+            "price": 53.71,
+            "suggested_discounted_price": 63.67,
+            "max_discounted_price": 67.41,
+            "min_discounted_price": 22.47,
+            "seller_percentage": null,
+            "meli_percentage": null,
+            "_suse7_list_min_discounted_price": 14.98
+          }
+        },
+        {
+          "promotion_id": "P-MLB17771038",
+          "promotion_name": "Top Oferta Construcao",
+          "promotion_type": "SMART",
+          "promotion_family": "top_oferta",
+          "full_price_brl": "74.90",
+          "selected_final_price_brl": "54.50",
+          "official_discount_amount_brl": null,
+          "computed_discount_amount_brl": "20.40",
+          "selected_discount_amount_brl": "20.40",
+          "discount_percent_display": "27.2",
+          "discount_source": "ml_payload:seller_plus_meli_percentage",
+          "payout_brl": null,
+          "selected_rule": "registry:family_strategy",
+          "selected_source": "price",
+          "source_trace": [
+            "rule:registry:family_strategy",
+            "path:price",
+            "percent:ml_payload:seller_plus_meli_percentage",
+            "discount:calculated:original_minus_final"
+          ],
+          "candidates_count": 1,
+          "ignored_candidates": [],
+          "variation_range_audit": {
+            "listing_id": "MLB4684020397",
+            "parent_listing_id": "MLB4684020397",
+            "variation_id": null,
+            "promotion_id": "P-MLB17771038",
+            "promotion_name": "Top Oferta Construcao",
+            "selected_final_price": "54.50",
+            "price_range_min": "54.50",
+            "price_range_max": "54.50",
+            "discount_range_min": "20.40",
+            "discount_range_max": "20.40",
+            "selected_variation_id": null,
+            "variation_ids_detected": [],
+            "listing_variations_count": 0,
+            "has_listing_variations": false,
+            "has_price_range": false,
+            "silent_single_price_selected": false,
+            "source_trace": [
+              "resolver:price",
+              "enrichment:promotion_items"
+            ],
+            "selected_source": "price"
+          },
+          "api_raw": {
+            "original_price": 74.9,
+            "price": 54.5,
+            "suggested_discounted_price": null,
+            "max_discounted_price": null,
+            "min_discounted_price": null,
+            "seller_percentage": 24.5,
+            "meli_percentage": 2.7,
+            "_suse7_list_min_discounted_price": null
+          }
+        },
+        {
+          "promotion_id": "P-MLB17489058",
+          "promotion_name": "07.07 e Descontaco",
+          "promotion_type": "DEAL",
+          "promotion_family": "marketplace_deal",
+          "full_price_brl": "74.90",
+          "selected_final_price_brl": "54.84",
+          "official_discount_amount_brl": null,
+          "computed_discount_amount_brl": "20.06",
+          "selected_discount_amount_brl": "20.06",
+          "discount_percent_display": "27",
+          "discount_source": "calculated:original_minus_final",
+          "payout_brl": null,
+          "selected_rule": "panel:deal_intermediate_max_tier",
+          "selected_source": "max_discounted_price",
+          "source_trace": [
+            "rule:panel:deal_intermediate_max_tier",
+            "path:max_discounted_price",
+            "percent:calculated:original_minus_final",
+            "discount:calculated:original_minus_final"
+          ],
+          "candidates_count": 3,
+          "ignored_candidates": [
+            {
+              "candidate_path": "suggested_discounted_price",
+              "price": "47.35",
+              "reason": "not_selected_by_panel_parity"
+            },
+            {
+              "candidate_path": "min_discounted_price",
+              "price": "14.98",
+              "reason": "not_selected_by_panel_parity"
+            }
+          ],
+          "variation_range_audit": {
+            "listing_id": "MLB4684020397",
+            "parent_listing_id": "MLB4684020397",
+            "variation_id": null,
+            "promotion_id": "P-MLB17489058",
+            "promotion_name": "07.07 e Descontaco",
+            "selected_final_price": "54.84",
+            "price_range_min": "14.98",
+            "price_range_max": "54.84",
+            "discount_range_min": "20.06",
+            "discount_range_max": "59.92",
+            "selected_variation_id": null,
+            "variation_ids_detected": [],
+            "listing_variations_count": 0,
+            "has_listing_variations": false,
+            "has_price_range": true,
+            "silent_single_price_selected": true,
+            "source_trace": [
+              "resolver:max_discounted_price",
+              "enrichment:promotion_items",
+              "promotion:price_range_detected",
+              "warning:silent_single_price_without_variation"
+            ],
+            "selected_source": "max_discounted_price"
+          },
+          "api_raw": {
+            "original_price": 74.9,
+            "price": 0,
+            "suggested_discounted_price": 47.35,
+            "max_discounted_price": 54.84,
+            "min_discounted_price": 14.98,
+            "seller_percentage": null,
+            "meli_percentage": null,
+            "_suse7_list_min_discounted_price": null
+          }
+        }
+      ]
+    },
+    {
+      "listing_id": "MLB6248404078",
+      "api_rows_total": 5,
+      "api_named_count": 4,
+      "normalized_count": 4,
+      "listing_variations_count": 0,
+      "has_listing_variations": false,
+      "promotions": [
+        {
+          "promotion_id": "P-MLB17647006",
+          "promotion_name": "Camping e Pesca Junho",
+          "promotion_type": "SMART",
+          "promotion_family": "default",
+          "full_price_brl": "199.90",
+          "selected_final_price_brl": "164.80",
+          "official_discount_amount_brl": null,
+          "computed_discount_amount_brl": "35.10",
+          "selected_discount_amount_brl": "35.10",
+          "discount_percent_display": "17.6",
+          "discount_source": "ml_payload:seller_plus_meli_percentage",
+          "payout_brl": null,
+          "selected_rule": "registry:family_strategy",
+          "selected_source": "price",
+          "source_trace": [
+            "rule:registry:family_strategy",
+            "path:price",
+            "percent:ml_payload:seller_plus_meli_percentage",
+            "discount:calculated:original_minus_final"
+          ],
+          "candidates_count": 1,
+          "ignored_candidates": [],
+          "variation_range_audit": {
+            "listing_id": "MLB6248404078",
+            "parent_listing_id": "MLB6248404078",
+            "variation_id": null,
+            "promotion_id": "P-MLB17647006",
+            "promotion_name": "Camping e Pesca Junho",
+            "selected_final_price": "164.80",
+            "price_range_min": "164.80",
+            "price_range_max": "164.80",
+            "discount_range_min": "35.10",
+            "discount_range_max": "35.10",
+            "selected_variation_id": null,
+            "variation_ids_detected": [],
+            "listing_variations_count": 0,
+            "has_listing_variations": false,
+            "has_price_range": false,
+            "silent_single_price_selected": false,
+            "source_trace": [
+              "resolver:price",
+              "enrichment:promotion_items"
+            ],
+            "selected_source": "price"
+          },
+          "api_raw": {
+            "original_price": 199.9,
+            "price": 164.8,
+            "suggested_discounted_price": null,
+            "max_discounted_price": null,
+            "min_discounted_price": null,
+            "seller_percentage": 14.8,
+            "meli_percentage": 2.8,
+            "_suse7_list_min_discounted_price": null
+          }
+        },
+        {
+          "promotion_id": "P-MLB17699004",
+          "promotion_name": "Camping e Pesca JUL",
+          "promotion_type": "SMART",
+          "promotion_family": "default",
+          "full_price_brl": "199.90",
+          "selected_final_price_brl": "164.80",
+          "official_discount_amount_brl": null,
+          "computed_discount_amount_brl": "35.10",
+          "selected_discount_amount_brl": "35.10",
+          "discount_percent_display": "17.6",
+          "discount_source": "ml_payload:seller_plus_meli_percentage",
+          "payout_brl": null,
+          "selected_rule": "registry:family_strategy",
+          "selected_source": "price",
+          "source_trace": [
+            "rule:registry:family_strategy",
+            "path:price",
+            "percent:ml_payload:seller_plus_meli_percentage",
+            "discount:calculated:original_minus_final"
+          ],
+          "candidates_count": 1,
+          "ignored_candidates": [],
+          "variation_range_audit": {
+            "listing_id": "MLB6248404078",
+            "parent_listing_id": "MLB6248404078",
+            "variation_id": null,
+            "promotion_id": "P-MLB17699004",
+            "promotion_name": "Camping e Pesca JUL",
+            "selected_final_price": "164.80",
+            "price_range_min": "164.80",
+            "price_range_max": "164.80",
+            "discount_range_min": "35.10",
+            "discount_range_max": "35.10",
+            "selected_variation_id": null,
+            "variation_ids_detected": [],
+            "listing_variations_count": 0,
+            "has_listing_variations": false,
+            "has_price_range": false,
+            "silent_single_price_selected": false,
+            "source_trace": [
+              "resolver:price",
+              "enrichment:promotion_items"
+            ],
+            "selected_source": "price"
+          },
+          "api_raw": {
+            "original_price": 199.9,
+            "price": 164.8,
+            "suggested_discounted_price": null,
+            "max_discounted_price": null,
+            "min_discounted_price": null,
+            "seller_percentage": 14.8,
+            "meli_percentage": 2.8,
+            "_suse7_list_min_discounted_price": null
+          }
+        },
+        {
+          "promotion_id": "P-MLB17625058",
+          "promotion_name": "Impulsione suas vendas",
+          "promotion_type": "SMART",
+          "promotion_family": "default",
+          "full_price_brl": "199.90",
+          "selected_final_price_brl": "164.80",
+          "official_discount_amount_brl": null,
+          "computed_discount_amount_brl": "35.10",
+          "selected_discount_amount_brl": "35.10",
+          "discount_percent_display": "17.6",
+          "discount_source": "ml_payload:seller_plus_meli_percentage",
+          "payout_brl": null,
+          "selected_rule": "registry:family_strategy",
+          "selected_source": "price",
+          "source_trace": [
+            "rule:registry:family_strategy",
+            "path:price",
+            "percent:ml_payload:seller_plus_meli_percentage",
+            "discount:calculated:original_minus_final"
+          ],
+          "candidates_count": 1,
+          "ignored_candidates": [],
+          "variation_range_audit": {
+            "listing_id": "MLB6248404078",
+            "parent_listing_id": "MLB6248404078",
+            "variation_id": null,
+            "promotion_id": "P-MLB17625058",
+            "promotion_name": "Impulsione suas vendas",
+            "selected_final_price": "164.80",
+            "price_range_min": "164.80",
+            "price_range_max": "164.80",
+            "discount_range_min": "35.10",
+            "discount_range_max": "35.10",
+            "selected_variation_id": null,
+            "variation_ids_detected": [],
+            "listing_variations_count": 0,
+            "has_listing_variations": false,
+            "has_price_range": false,
+            "silent_single_price_selected": false,
+            "source_trace": [
+              "resolver:price",
+              "enrichment:promotion_items"
+            ],
+            "selected_source": "price"
+          },
+          "api_raw": {
+            "original_price": 199.9,
+            "price": 164.8,
+            "suggested_discounted_price": null,
+            "max_discounted_price": null,
+            "min_discounted_price": null,
+            "seller_percentage": 14.8,
+            "meli_percentage": 2.8,
+            "_suse7_list_min_discounted_price": null
+          }
+        },
+        {
+          "promotion_id": "P-MLB17489058",
+          "promotion_name": "07.07 e Descontaco",
+          "promotion_type": "DEAL",
+          "promotion_family": "marketplace_deal",
+          "full_price_brl": "199.90",
+          "selected_final_price_brl": "165.20",
+          "official_discount_amount_brl": null,
+          "computed_discount_amount_brl": "34.70",
+          "selected_discount_amount_brl": "34.70",
+          "discount_percent_display": "17",
+          "discount_source": "calculated:original_minus_final",
+          "payout_brl": null,
+          "selected_rule": "panel:deal_intermediate_max_tier",
+          "selected_source": "max_discounted_price",
+          "source_trace": [
+            "rule:panel:deal_intermediate_max_tier",
+            "path:max_discounted_price",
+            "percent:calculated:original_minus_final",
+            "discount:calculated:original_minus_final"
+          ],
+          "candidates_count": 3,
+          "ignored_candidates": [
+            {
+              "candidate_path": "suggested_discounted_price",
+              "price": "145.20",
+              "reason": "not_selected_by_panel_parity"
+            },
+            {
+              "candidate_path": "min_discounted_price",
+              "price": "39.98",
+              "reason": "not_selected_by_panel_parity"
+            }
+          ],
+          "variation_range_audit": {
+            "listing_id": "MLB6248404078",
+            "parent_listing_id": "MLB6248404078",
+            "variation_id": null,
+            "promotion_id": "P-MLB17489058",
+            "promotion_name": "07.07 e Descontaco",
+            "selected_final_price": "165.20",
+            "price_range_min": "39.98",
+            "price_range_max": "165.20",
+            "discount_range_min": "34.70",
+            "discount_range_max": "159.92",
+            "selected_variation_id": null,
+            "variation_ids_detected": [],
+            "listing_variations_count": 0,
+            "has_listing_variations": false,
+            "has_price_range": true,
+            "silent_single_price_selected": true,
+            "source_trace": [
+              "resolver:max_discounted_price",
+              "enrichment:promotion_items",
+              "promotion:price_range_detected",
+              "warning:silent_single_price_without_variation"
+            ],
+            "selected_source": "max_discounted_price"
+          },
+          "api_raw": {
+            "original_price": 199.9,
+            "price": 0,
+            "suggested_discounted_price": 145.2,
+            "max_discounted_price": 165.2,
+            "min_discounted_price": 39.98,
+            "seller_percentage": null,
+            "meli_percentage": null,
+            "_suse7_list_min_discounted_price": null
+          }
+        }
+      ]
+    },
+    {
+      "listing_id": "MLB6784329822",
+      "api_rows_total": 6,
+      "api_named_count": 5,
+      "normalized_count": 5,
+      "listing_variations_count": 0,
+      "has_listing_variations": false,
+      "promotions": [
+        {
+          "promotion_id": "P-MLB17637260",
+          "promotion_name": "Top Oferta Construcao",
+          "promotion_type": "SMART",
+          "promotion_family": "top_oferta",
+          "full_price_brl": "74.99",
+          "selected_final_price_brl": "53.29",
+          "official_discount_amount_brl": null,
+          "computed_discount_amount_brl": "21.70",
+          "selected_discount_amount_brl": "21.70",
+          "discount_percent_display": "29",
+          "discount_source": "ml_payload:seller_plus_meli_percentage",
+          "payout_brl": null,
+          "selected_rule": "registry:family_strategy",
+          "selected_source": "price",
+          "source_trace": [
+            "rule:registry:family_strategy",
+            "path:price",
+            "percent:ml_payload:seller_plus_meli_percentage",
+            "discount:calculated:original_minus_final"
+          ],
+          "candidates_count": 1,
+          "ignored_candidates": [],
+          "variation_range_audit": {
+            "listing_id": "MLB6784329822",
+            "parent_listing_id": "MLB6784329822",
+            "variation_id": null,
+            "promotion_id": "P-MLB17637260",
+            "promotion_name": "Top Oferta Construcao",
+            "selected_final_price": "53.29",
+            "price_range_min": "53.29",
+            "price_range_max": "53.29",
+            "discount_range_min": "21.70",
+            "discount_range_max": "21.70",
+            "selected_variation_id": null,
+            "variation_ids_detected": [],
+            "listing_variations_count": 0,
+            "has_listing_variations": false,
+            "has_price_range": false,
+            "silent_single_price_selected": false,
+            "source_trace": [
+              "resolver:price",
+              "enrichment:promotion_items"
+            ],
+            "selected_source": "price"
+          },
+          "api_raw": {
+            "original_price": 74.99,
+            "price": 53.29,
+            "suggested_discounted_price": null,
+            "max_discounted_price": null,
+            "min_discounted_price": null,
+            "seller_percentage": 26,
+            "meli_percentage": 2.9,
+            "_suse7_list_min_discounted_price": null
+          }
+        },
+        {
+          "promotion_id": "P-MLB17625056",
+          "promotion_name": "Aumente suas vendas",
+          "promotion_type": "SMART",
+          "promotion_family": "default",
+          "full_price_brl": "74.99",
+          "selected_final_price_brl": "56.00",
+          "official_discount_amount_brl": null,
+          "computed_discount_amount_brl": "18.99",
+          "selected_discount_amount_brl": "18.99",
+          "discount_percent_display": "25.3",
+          "discount_source": "ml_payload:seller_plus_meli_percentage",
+          "payout_brl": null,
+          "selected_rule": "registry:family_strategy",
+          "selected_source": "price",
+          "source_trace": [
+            "rule:registry:family_strategy",
+            "path:price",
+            "percent:ml_payload:seller_plus_meli_percentage",
+            "discount:calculated:original_minus_final"
+          ],
+          "candidates_count": 1,
+          "ignored_candidates": [],
+          "variation_range_audit": {
+            "listing_id": "MLB6784329822",
+            "parent_listing_id": "MLB6784329822",
+            "variation_id": null,
+            "promotion_id": "P-MLB17625056",
+            "promotion_name": "Aumente suas vendas",
+            "selected_final_price": "56.00",
+            "price_range_min": "56.00",
+            "price_range_max": "56.00",
+            "discount_range_min": "18.99",
+            "discount_range_max": "18.99",
+            "selected_variation_id": null,
+            "variation_ids_detected": [],
+            "listing_variations_count": 0,
+            "has_listing_variations": false,
+            "has_price_range": false,
+            "silent_single_price_selected": false,
+            "source_trace": [
+              "resolver:price",
+              "enrichment:promotion_items"
+            ],
+            "selected_source": "price"
+          },
+          "api_raw": {
+            "original_price": 74.99,
+            "price": 56,
+            "suggested_discounted_price": null,
+            "max_discounted_price": null,
+            "min_discounted_price": null,
+            "seller_percentage": 22.8,
+            "meli_percentage": 2.5,
+            "_suse7_list_min_discounted_price": null
+          }
+        },
+        {
+          "promotion_id": "LGH-MLB1000",
+          "promotion_name": null,
+          "promotion_type": "LIGHTNING",
+          "promotion_family": "lightning",
+          "full_price_brl": "74.99",
+          "selected_final_price_brl": "52.75",
+          "official_discount_amount_brl": null,
+          "computed_discount_amount_brl": "22.24",
+          "selected_discount_amount_brl": "22.24",
+          "discount_percent_display": "30",
+          "discount_source": "calculated:original_minus_final",
+          "payout_brl": null,
+          "selected_rule": "panel:lightning_max_minus_list_min_tier",
+          "selected_source": "max_discounted_price",
+          "source_trace": [
+            "rule:panel:lightning_max_minus_list_min_tier",
+            "path:max_discounted_price",
+            "percent:calculated:original_minus_final",
+            "discount:calculated:original_minus_final"
+          ],
+          "candidates_count": 4,
+          "ignored_candidates": [
+            {
+              "candidate_path": "price",
+              "price": "62.69",
+              "reason": "not_selected_by_panel_parity"
+            },
+            {
+              "candidate_path": "suggested_discounted_price",
+              "price": "63.75",
+              "reason": "not_selected_by_panel_parity"
+            },
+            {
+              "candidate_path": "min_discounted_price",
+              "price": "22.49",
+              "reason": "not_selected_by_panel_parity"
+            }
+          ],
+          "variation_range_audit": {
+            "listing_id": "MLB6784329822",
+            "parent_listing_id": "MLB6784329822",
+            "variation_id": null,
+            "promotion_id": "LGH-MLB1000",
+            "promotion_name": null,
+            "selected_final_price": "52.75",
+            "price_range_min": "22.49",
+            "price_range_max": "67.50",
+            "discount_range_min": "7.49",
+            "discount_range_max": "52.50",
+            "selected_variation_id": null,
+            "variation_ids_detected": [],
+            "listing_variations_count": 0,
+            "has_listing_variations": false,
+            "has_price_range": true,
+            "silent_single_price_selected": true,
+            "source_trace": [
+              "resolver:max_discounted_price",
+              "enrichment:promotion_items",
+              "promotion:price_range_detected",
+              "warning:silent_single_price_without_variation"
+            ],
+            "selected_source": "max_discounted_price"
+          },
+          "api_raw": {
+            "original_price": 74.99,
+            "price": 62.69,
+            "suggested_discounted_price": 63.75,
+            "max_discounted_price": 67.5,
+            "min_discounted_price": 22.49,
+            "seller_percentage": null,
+            "meli_percentage": null,
+            "_suse7_list_min_discounted_price": 15
+          }
+        },
+        {
+          "promotion_id": "P-MLB17771038",
+          "promotion_name": "Top Oferta Construcao",
+          "promotion_type": "SMART",
+          "promotion_family": "top_oferta",
+          "full_price_brl": "74.99",
+          "selected_final_price_brl": "53.29",
+          "official_discount_amount_brl": null,
+          "computed_discount_amount_brl": "21.70",
+          "selected_discount_amount_brl": "21.70",
+          "discount_percent_display": "29",
+          "discount_source": "ml_payload:seller_plus_meli_percentage",
+          "payout_brl": null,
+          "selected_rule": "registry:family_strategy",
+          "selected_source": "price",
+          "source_trace": [
+            "rule:registry:family_strategy",
+            "path:price",
+            "percent:ml_payload:seller_plus_meli_percentage",
+            "discount:calculated:original_minus_final"
+          ],
+          "candidates_count": 1,
+          "ignored_candidates": [],
+          "variation_range_audit": {
+            "listing_id": "MLB6784329822",
+            "parent_listing_id": "MLB6784329822",
+            "variation_id": null,
+            "promotion_id": "P-MLB17771038",
+            "promotion_name": "Top Oferta Construcao",
+            "selected_final_price": "53.29",
+            "price_range_min": "53.29",
+            "price_range_max": "53.29",
+            "discount_range_min": "21.70",
+            "discount_range_max": "21.70",
+            "selected_variation_id": null,
+            "variation_ids_detected": [],
+            "listing_variations_count": 0,
+            "has_listing_variations": false,
+            "has_price_range": false,
+            "silent_single_price_selected": false,
+            "source_trace": [
+              "resolver:price",
+              "enrichment:promotion_items"
+            ],
+            "selected_source": "price"
+          },
+          "api_raw": {
+            "original_price": 74.99,
+            "price": 53.29,
+            "suggested_discounted_price": null,
+            "max_discounted_price": null,
+            "min_discounted_price": null,
+            "seller_percentage": 26,
+            "meli_percentage": 2.9,
+            "_suse7_list_min_discounted_price": null
+          }
+        },
+        {
+          "promotion_id": "P-MLB17489058",
+          "promotion_name": "07.07 e Descontaco",
+          "promotion_type": "DEAL",
+          "promotion_family": "marketplace_deal",
+          "full_price_brl": "74.99",
+          "selected_final_price_brl": "64.01",
+          "official_discount_amount_brl": null,
+          "computed_discount_amount_brl": "10.98",
+          "selected_discount_amount_brl": "10.98",
+          "discount_percent_display": "15",
+          "discount_source": "calculated:original_minus_final",
+          "payout_brl": null,
+          "selected_rule": "panel:deal_intermediate_max_tier",
+          "selected_source": "max_discounted_price",
+          "source_trace": [
+            "rule:panel:deal_intermediate_max_tier",
+            "path:max_discounted_price",
+            "percent:calculated:original_minus_final",
+            "discount:calculated:original_minus_final"
+          ],
+          "candidates_count": 3,
+          "ignored_candidates": [
+            {
+              "candidate_path": "suggested_discounted_price",
+              "price": "56.51",
+              "reason": "not_selected_by_panel_parity"
+            },
+            {
+              "candidate_path": "min_discounted_price",
+              "price": "15.00",
+              "reason": "not_selected_by_panel_parity"
+            }
+          ],
+          "variation_range_audit": {
+            "listing_id": "MLB6784329822",
+            "parent_listing_id": "MLB6784329822",
+            "variation_id": null,
+            "promotion_id": "P-MLB17489058",
+            "promotion_name": "07.07 e Descontaco",
+            "selected_final_price": "64.01",
+            "price_range_min": "15.00",
+            "price_range_max": "64.01",
+            "discount_range_min": "10.98",
+            "discount_range_max": "59.99",
+            "selected_variation_id": null,
+            "variation_ids_detected": [],
+            "listing_variations_count": 0,
+            "has_listing_variations": false,
+            "has_price_range": true,
+            "silent_single_price_selected": true,
+            "source_trace": [
+              "resolver:max_discounted_price",
+              "enrichment:promotion_items",
+              "promotion:price_range_detected",
+              "warning:silent_single_price_without_variation"
+            ],
+            "selected_source": "max_discounted_price"
+          },
+          "api_raw": {
+            "original_price": 74.99,
+            "price": 0,
+            "suggested_discounted_price": 56.51,
+            "max_discounted_price": 64.01,
+            "min_discounted_price": 15,
+            "seller_percentage": null,
+            "meli_percentage": null,
+            "_suse7_list_min_discounted_price": null
+          }
+        }
+      ]
+    },
+    {
+      "listing_id": "MLB3303235755",
+      "api_rows_total": 4,
+      "api_named_count": 3,
+      "normalized_count": 3,
+      "listing_variations_count": 0,
+      "has_listing_variations": false,
+      "promotions": [
+        {
+          "promotion_id": "P-MLB17625058",
+          "promotion_name": "Impulsione suas vendas",
+          "promotion_type": "SMART",
+          "promotion_family": "default",
+          "full_price_brl": "186.14",
+          "selected_final_price_brl": "162.16",
+          "official_discount_amount_brl": null,
+          "computed_discount_amount_brl": "23.98",
+          "selected_discount_amount_brl": "23.98",
+          "discount_percent_display": "12.9",
+          "discount_source": "ml_payload:seller_plus_meli_percentage",
+          "payout_brl": null,
+          "selected_rule": "registry:family_strategy",
+          "selected_source": "price",
+          "source_trace": [
+            "rule:registry:family_strategy",
+            "path:price",
+            "percent:ml_payload:seller_plus_meli_percentage",
+            "discount:calculated:original_minus_final"
+          ],
+          "candidates_count": 1,
+          "ignored_candidates": [],
+          "variation_range_audit": {
+            "listing_id": "MLB3303235755",
+            "parent_listing_id": "MLB3303235755",
+            "variation_id": null,
+            "promotion_id": "P-MLB17625058",
+            "promotion_name": "Impulsione suas vendas",
+            "selected_final_price": "162.16",
+            "price_range_min": "162.16",
+            "price_range_max": "162.16",
+            "discount_range_min": "23.98",
+            "discount_range_max": "23.98",
+            "selected_variation_id": null,
+            "variation_ids_detected": [],
+            "listing_variations_count": 0,
+            "has_listing_variations": false,
+            "has_price_range": false,
+            "silent_single_price_selected": false,
+            "source_trace": [
+              "resolver:price",
+              "enrichment:promotion_items"
+            ],
+            "selected_source": "price"
+          },
+          "api_raw": {
+            "original_price": 186.14,
+            "price": 162.16,
+            "suggested_discounted_price": null,
+            "max_discounted_price": null,
+            "min_discounted_price": null,
+            "seller_percentage": 11.6,
+            "meli_percentage": 1.3,
+            "_suse7_list_min_discounted_price": null
+          }
+        },
+        {
+          "promotion_id": "P-MLB17699006",
+          "promotion_name": "Desconto no Pix",
+          "promotion_type": "BANK",
+          "promotion_family": "default",
+          "full_price_brl": "186.14",
+          "selected_final_price_brl": null,
+          "official_discount_amount_brl": null,
+          "computed_discount_amount_brl": null,
+          "selected_discount_amount_brl": null,
+          "discount_percent_display": null,
+          "discount_source": "calculated:original_minus_final",
+          "payout_brl": null,
+          "selected_rule": "panel:unresolved",
+          "selected_source": "resolution_unknown",
+          "source_trace": [
+            "rule:panel:unresolved",
+            "path:none",
+            "percent:calculated:original_minus_final",
+            "discount:none"
+          ],
+          "candidates_count": 0,
+          "ignored_candidates": [],
+          "variation_range_audit": {
+            "listing_id": "MLB3303235755",
+            "parent_listing_id": "MLB3303235755",
+            "variation_id": null,
+            "promotion_id": "P-MLB17699006",
+            "promotion_name": "Desconto no Pix",
+            "selected_final_price": null,
+            "price_range_min": null,
+            "price_range_max": null,
+            "discount_range_min": null,
+            "discount_range_max": null,
+            "selected_variation_id": null,
+            "variation_ids_detected": [],
+            "listing_variations_count": 0,
+            "has_listing_variations": false,
+            "has_price_range": false,
+            "silent_single_price_selected": false,
+            "source_trace": [
+              "enrichment:promotion_items"
+            ],
+            "selected_source": null
+          },
+          "api_raw": {
+            "original_price": 186.14,
+            "price": null,
+            "suggested_discounted_price": null,
+            "max_discounted_price": null,
+            "min_discounted_price": null,
+            "seller_percentage": 5.406,
+            "meli_percentage": 0.594,
+            "_suse7_list_min_discounted_price": null
+          }
+        },
+        {
+          "promotion_id": "P-MLB17489058",
+          "promotion_name": "07.07 e Descontaco",
+          "promotion_type": "DEAL",
+          "promotion_family": "marketplace_deal",
+          "full_price_brl": "186.14",
+          "selected_final_price_brl": "162.16",
+          "official_discount_amount_brl": null,
+          "computed_discount_amount_brl": "23.98",
+          "selected_discount_amount_brl": "23.98",
+          "discount_percent_display": "13",
+          "discount_source": "calculated:original_minus_final",
+          "payout_brl": null,
+          "selected_rule": "panel:deal_intermediate_max_tier",
+          "selected_source": "max_discounted_price",
+          "source_trace": [
+            "rule:panel:deal_intermediate_max_tier",
+            "path:max_discounted_price",
+            "percent:calculated:original_minus_final",
+            "discount:calculated:original_minus_final"
+          ],
+          "candidates_count": 3,
+          "ignored_candidates": [
+            {
+              "candidate_path": "suggested_discounted_price",
+              "price": "143.54",
+              "reason": "not_selected_by_panel_parity"
+            },
+            {
+              "candidate_path": "min_discounted_price",
+              "price": "37.23",
+              "reason": "not_selected_by_panel_parity"
+            }
+          ],
+          "variation_range_audit": {
+            "listing_id": "MLB3303235755",
+            "parent_listing_id": "MLB3303235755",
+            "variation_id": null,
+            "promotion_id": "P-MLB17489058",
+            "promotion_name": "07.07 e Descontaco",
+            "selected_final_price": "162.16",
+            "price_range_min": "37.23",
+            "price_range_max": "162.16",
+            "discount_range_min": "23.98",
+            "discount_range_max": "148.91",
+            "selected_variation_id": null,
+            "variation_ids_detected": [],
+            "listing_variations_count": 0,
+            "has_listing_variations": false,
+            "has_price_range": true,
+            "silent_single_price_selected": true,
+            "source_trace": [
+              "resolver:max_discounted_price",
+              "enrichment:promotion_items",
+              "promotion:price_range_detected",
+              "warning:silent_single_price_without_variation"
+            ],
+            "selected_source": "max_discounted_price"
+          },
+          "api_raw": {
+            "original_price": 186.14,
+            "price": 0,
+            "suggested_discounted_price": 143.54,
+            "max_discounted_price": 162.16,
+            "min_discounted_price": 37.23,
+            "seller_percentage": null,
+            "meli_percentage": null,
+            "_suse7_list_min_discounted_price": null
+          }
+        }
+      ]
+    },
+    {
+      "listing_id": "MLB6086986228",
+      "api_rows_total": 7,
+      "api_named_count": 6,
+      "normalized_count": 6,
+      "listing_variations_count": 0,
+      "has_listing_variations": false,
+      "promotions": [
+        {
+          "promotion_id": "P-MLB17625056",
+          "promotion_name": "Aumente suas vendas",
+          "promotion_type": "SMART",
+          "promotion_family": "default",
+          "full_price_brl": "269.90",
+          "selected_final_price_brl": "231.00",
+          "official_discount_amount_brl": null,
+          "computed_discount_amount_brl": "38.90",
+          "selected_discount_amount_brl": "38.90",
+          "discount_percent_display": "14",
+          "discount_source": "ml_payload:seller_plus_meli_percentage",
+          "payout_brl": null,
+          "selected_rule": "registry:family_strategy",
+          "selected_source": "price",
+          "source_trace": [
+            "rule:registry:family_strategy",
+            "path:price",
+            "percent:ml_payload:seller_plus_meli_percentage",
+            "discount:calculated:original_minus_final"
+          ],
+          "candidates_count": 1,
+          "ignored_candidates": [],
+          "variation_range_audit": {
+            "listing_id": "MLB6086986228",
+            "parent_listing_id": "MLB6086986228",
+            "variation_id": null,
+            "promotion_id": "P-MLB17625056",
+            "promotion_name": "Aumente suas vendas",
+            "selected_final_price": "231.00",
+            "price_range_min": "231.00",
+            "price_range_max": "231.00",
+            "discount_range_min": "38.90",
+            "discount_range_max": "38.90",
+            "selected_variation_id": null,
+            "variation_ids_detected": [],
+            "listing_variations_count": 0,
+            "has_listing_variations": false,
+            "has_price_range": false,
+            "silent_single_price_selected": false,
+            "source_trace": [
+              "resolver:price",
+              "enrichment:promotion_items"
+            ],
+            "selected_source": "price"
+          },
+          "api_raw": {
+            "original_price": 269.9,
+            "price": 231,
+            "suggested_discounted_price": null,
+            "max_discounted_price": null,
+            "min_discounted_price": null,
+            "seller_percentage": 13,
+            "meli_percentage": 1.4,
+            "_suse7_list_min_discounted_price": null
+          }
+        },
+        {
+          "promotion_id": "P-MLB17695018",
+          "promotion_name": "Festival Casa Nova",
+          "promotion_type": "SMART",
+          "promotion_family": "default",
+          "full_price_brl": "269.90",
+          "selected_final_price_brl": "261.80",
+          "official_discount_amount_brl": null,
+          "computed_discount_amount_brl": "8.10",
+          "selected_discount_amount_brl": "8.10",
+          "discount_percent_display": "3",
+          "discount_source": "ml_payload:seller_plus_meli_percentage",
+          "payout_brl": null,
+          "selected_rule": "registry:family_strategy",
+          "selected_source": "price",
+          "source_trace": [
+            "rule:registry:family_strategy",
+            "path:price",
+            "percent:ml_payload:seller_plus_meli_percentage",
+            "discount:calculated:original_minus_final"
+          ],
+          "candidates_count": 1,
+          "ignored_candidates": [],
+          "variation_range_audit": {
+            "listing_id": "MLB6086986228",
+            "parent_listing_id": "MLB6086986228",
+            "variation_id": null,
+            "promotion_id": "P-MLB17695018",
+            "promotion_name": "Festival Casa Nova",
+            "selected_final_price": "261.80",
+            "price_range_min": "261.80",
+            "price_range_max": "261.80",
+            "discount_range_min": "8.10",
+            "discount_range_max": "8.10",
+            "selected_variation_id": null,
+            "variation_ids_detected": [],
+            "listing_variations_count": 0,
+            "has_listing_variations": false,
+            "has_price_range": false,
+            "silent_single_price_selected": false,
+            "source_trace": [
+              "resolver:price",
+              "enrichment:promotion_items"
+            ],
+            "selected_source": "price"
+          },
+          "api_raw": {
+            "original_price": 269.9,
+            "price": 261.8,
+            "suggested_discounted_price": null,
+            "max_discounted_price": null,
+            "min_discounted_price": null,
+            "seller_percentage": 2.7,
+            "meli_percentage": 0.3,
+            "_suse7_list_min_discounted_price": null
+          }
+        },
+        {
+          "promotion_id": "P-MLB17755360",
+          "promotion_name": "Venda Casa e Decor",
+          "promotion_type": "SMART",
+          "promotion_family": "default",
+          "full_price_brl": "269.90",
+          "selected_final_price_brl": "231.00",
+          "official_discount_amount_brl": null,
+          "computed_discount_amount_brl": "38.90",
+          "selected_discount_amount_brl": "38.90",
+          "discount_percent_display": "14",
+          "discount_source": "ml_payload:seller_plus_meli_percentage",
+          "payout_brl": null,
+          "selected_rule": "registry:family_strategy",
+          "selected_source": "price",
+          "source_trace": [
+            "rule:registry:family_strategy",
+            "path:price",
+            "percent:ml_payload:seller_plus_meli_percentage",
+            "discount:calculated:original_minus_final"
+          ],
+          "candidates_count": 1,
+          "ignored_candidates": [],
+          "variation_range_audit": {
+            "listing_id": "MLB6086986228",
+            "parent_listing_id": "MLB6086986228",
+            "variation_id": null,
+            "promotion_id": "P-MLB17755360",
+            "promotion_name": "Venda Casa e Decor",
+            "selected_final_price": "231.00",
+            "price_range_min": "231.00",
+            "price_range_max": "231.00",
+            "discount_range_min": "38.90",
+            "discount_range_max": "38.90",
+            "selected_variation_id": null,
+            "variation_ids_detected": [],
+            "listing_variations_count": 0,
+            "has_listing_variations": false,
+            "has_price_range": false,
+            "silent_single_price_selected": false,
+            "source_trace": [
+              "resolver:price",
+              "enrichment:promotion_items"
+            ],
+            "selected_source": "price"
+          },
+          "api_raw": {
+            "original_price": 269.9,
+            "price": 231,
+            "suggested_discounted_price": null,
+            "max_discounted_price": null,
+            "min_discounted_price": null,
+            "seller_percentage": 13,
+            "meli_percentage": 1.4,
+            "_suse7_list_min_discounted_price": null
+          }
+        },
+        {
+          "promotion_id": "P-MLB17765096",
+          "promotion_name": "7/7 SUPER Oferta CASA",
+          "promotion_type": "SMART",
+          "promotion_family": "default",
+          "full_price_brl": "269.90",
+          "selected_final_price_brl": "215.92",
+          "official_discount_amount_brl": null,
+          "computed_discount_amount_brl": "53.98",
+          "selected_discount_amount_brl": "53.98",
+          "discount_percent_display": "20",
+          "discount_source": "ml_payload:seller_plus_meli_percentage",
+          "payout_brl": null,
+          "selected_rule": "registry:family_strategy",
+          "selected_source": "price",
+          "source_trace": [
+            "rule:registry:family_strategy",
+            "path:price",
+            "percent:ml_payload:seller_plus_meli_percentage",
+            "discount:calculated:original_minus_final"
+          ],
+          "candidates_count": 1,
+          "ignored_candidates": [],
+          "variation_range_audit": {
+            "listing_id": "MLB6086986228",
+            "parent_listing_id": "MLB6086986228",
+            "variation_id": null,
+            "promotion_id": "P-MLB17765096",
+            "promotion_name": "7/7 SUPER Oferta CASA",
+            "selected_final_price": "215.92",
+            "price_range_min": "215.92",
+            "price_range_max": "215.92",
+            "discount_range_min": "53.98",
+            "discount_range_max": "53.98",
+            "selected_variation_id": null,
+            "variation_ids_detected": [],
+            "listing_variations_count": 0,
+            "has_listing_variations": false,
+            "has_price_range": false,
+            "silent_single_price_selected": false,
+            "source_trace": [
+              "resolver:price",
+              "enrichment:promotion_items"
+            ],
+            "selected_source": "price"
+          },
+          "api_raw": {
+            "original_price": 269.9,
+            "price": 215.92,
+            "suggested_discounted_price": null,
+            "max_discounted_price": null,
+            "min_discounted_price": null,
+            "seller_percentage": 16,
+            "meli_percentage": 4,
+            "_suse7_list_min_discounted_price": null
+          }
+        },
+        {
+          "promotion_id": "LGH-MLB1000",
+          "promotion_name": null,
+          "promotion_type": "LIGHTNING",
+          "promotion_family": "lightning",
+          "full_price_brl": "269.90",
+          "selected_final_price_brl": "243.40",
+          "official_discount_amount_brl": null,
+          "computed_discount_amount_brl": "26.50",
+          "selected_discount_amount_brl": "26.50",
+          "discount_percent_display": "10",
+          "discount_source": "calculated:original_minus_final",
+          "payout_brl": null,
+          "selected_rule": "panel:lightning_modest_official_tier",
+          "selected_source": "max_discounted_price",
+          "source_trace": [
+            "rule:panel:lightning_modest_official_tier",
+            "path:max_discounted_price",
+            "percent:calculated:original_minus_final",
+            "discount:calculated:original_minus_final"
+          ],
+          "candidates_count": 4,
+          "ignored_candidates": [
+            {
+              "candidate_path": "price",
+              "price": "256.40",
+              "reason": "not_selected_by_panel_parity"
+            },
+            {
+              "candidate_path": "suggested_discounted_price",
+              "price": "229.42",
+              "reason": "not_selected_by_panel_parity"
+            },
+            {
+              "candidate_path": "min_discounted_price",
+              "price": "80.97",
+              "reason": "not_selected_by_panel_parity"
+            }
+          ],
+          "variation_range_audit": {
+            "listing_id": "MLB6086986228",
+            "parent_listing_id": "MLB6086986228",
+            "variation_id": null,
+            "promotion_id": "LGH-MLB1000",
+            "promotion_name": null,
+            "selected_final_price": "243.40",
+            "price_range_min": "80.97",
+            "price_range_max": "256.40",
+            "discount_range_min": "13.50",
+            "discount_range_max": "188.93",
+            "selected_variation_id": null,
+            "variation_ids_detected": [],
+            "listing_variations_count": 0,
+            "has_listing_variations": false,
+            "has_price_range": true,
+            "silent_single_price_selected": true,
+            "source_trace": [
+              "resolver:max_discounted_price",
+              "enrichment:promotion_items",
+              "promotion:price_range_detected",
+              "warning:silent_single_price_without_variation"
+            ],
+            "selected_source": "max_discounted_price"
+          },
+          "api_raw": {
+            "original_price": 269.9,
+            "price": 256.4,
+            "suggested_discounted_price": 229.42,
+            "max_discounted_price": 242.92,
+            "min_discounted_price": 80.97,
+            "seller_percentage": null,
+            "meli_percentage": null,
+            "_suse7_list_min_discounted_price": 53.98
+          }
+        },
+        {
+          "promotion_id": "P-MLB17489058",
+          "promotion_name": "07.07 e Descontaco",
+          "promotion_type": "DEAL",
+          "promotion_family": "marketplace_deal",
+          "full_price_brl": "269.90",
+          "selected_final_price_brl": "261.80",
+          "official_discount_amount_brl": null,
+          "computed_discount_amount_brl": "8.11",
+          "selected_discount_amount_brl": "8.10",
+          "discount_percent_display": "4",
+          "discount_source": "calculated:original_minus_final",
+          "payout_brl": null,
+          "selected_rule": "ml_panel_currency_rounding",
+          "selected_source": "max_discounted_price",
+          "source_trace": [
+            "rule:ml_panel_currency_rounding",
+            "path:max_discounted_price",
+            "percent:calculated:original_minus_final",
+            "discount:calculated:original_minus_final",
+            "currency_rounding:raw_final=261.79"
+          ],
+          "candidates_count": 3,
+          "ignored_candidates": [
+            {
+              "candidate_path": "suggested_discounted_price",
+              "price": "234.80",
+              "reason": "not_selected_by_panel_parity"
+            },
+            {
+              "candidate_path": "min_discounted_price",
+              "price": "53.98",
+              "reason": "not_selected_by_panel_parity"
+            }
+          ],
+          "variation_range_audit": {
+            "listing_id": "MLB6086986228",
+            "parent_listing_id": "MLB6086986228",
+            "variation_id": null,
+            "promotion_id": "P-MLB17489058",
+            "promotion_name": "07.07 e Descontaco",
+            "selected_final_price": "261.80",
+            "price_range_min": "53.98",
+            "price_range_max": "261.79",
+            "discount_range_min": "8.11",
+            "discount_range_max": "215.92",
+            "selected_variation_id": null,
+            "variation_ids_detected": [],
+            "listing_variations_count": 0,
+            "has_listing_variations": false,
+            "has_price_range": true,
+            "silent_single_price_selected": true,
+            "source_trace": [
+              "resolver:max_discounted_price",
+              "enrichment:promotion_items",
+              "promotion:price_range_detected",
+              "warning:silent_single_price_without_variation"
+            ],
+            "selected_source": "max_discounted_price"
+          },
+          "api_raw": {
+            "original_price": 269.9,
+            "price": 0,
+            "suggested_discounted_price": 234.8,
+            "max_discounted_price": 261.79,
+            "min_discounted_price": 53.98,
+            "seller_percentage": null,
+            "meli_percentage": null,
+            "_suse7_list_min_discounted_price": null
+          }
+        }
+      ]
+    }
+  ]
+}

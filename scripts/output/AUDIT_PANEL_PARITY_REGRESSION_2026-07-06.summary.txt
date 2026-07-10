@@ -1,0 +1,17 @@
+﻿node : <anonymous_script>:2
+No C:\Users\Desktop\AppData\Local\Temp\ps-script-187a2646-3460-4e08-8e94-788064197f25.ps1:86 caractere:34
++ ... etosDev/suse7-backend; node scripts/parse_audit_json.mjs 2>&1 | Out-F ...
++                            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (<anonymous_script>:2:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+
+
+SyntaxError: Unexpected end of JSON input
+    at JSON.parse (<anonymous>)
+    at file:///C:/ProjetosDev/suse7-backend/scripts/parse_audit_json.mjs:11:19
+    at ModuleJob.run (node:internal/modules/esm/module_job:430:25)
+    at async onImport.tracePromise.__proto__ (node:internal/modules/esm/loader:661:26)
+    at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:101:5)
+
+Node.js v24.14.0

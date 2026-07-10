@@ -9,6 +9,7 @@ import {
 } from "../billingConstants.js";
 import { logBilling, logBillingError } from "../billingLog.js";
 import { activateSubscriptionFromPaidPayment } from "./billingSubscriptionActivationService.js";
+import { invalidateBillingAccessCachesForUser } from "./billingAccessCacheInvalidation.js";
 import { recordBillingEvent } from "../billingEventService.js";
 import { derivePeriodEndFromNextBilling, startOfUtcDay } from "./billingCycleService.js";
 
@@ -239,6 +240,8 @@ export async function applyPaymentOverdueDelinquency(supabase, ctx) {
     user_id: subscription.user_id,
     grace_period_ends_at: metadata.grace_period_ends_at,
   });
+
+  invalidateBillingAccessCachesForUser(subscription.user_id, { reason: "payment_overdue" });
 
   return { subscription_id: subscription.id, grace_period_ends_at: metadata.grace_period_ends_at };
 }

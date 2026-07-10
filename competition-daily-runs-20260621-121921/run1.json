@@ -1,0 +1,43 @@
+{
+    "ok":  true,
+    "job":  "competition-daily-snapshot",
+    "processed":  2,
+    "updated":  2,
+    "unchanged_touched":  0,
+    "unchanged":  0,
+    "failed":  0,
+    "skipped_today":  45,
+    "remaining_estimate":  103,
+    "sample_results":  [
+                           {
+                               "competitor_id":  "b253b1c6-3df1-4e78-bc41-c7297c03d9ef",
+                               "item_id":  "MLB5243822264",
+                               "product_id":  "446cc837-f6a6-4162-859c-fd40b8cdf0ff",
+                               "old_price":  "93.99",
+                               "new_price":  "86.61",
+                               "changed":  true,
+                               "status":  "updated",
+                               "captured_at":  "2026-06-21T15:19:27.458Z",
+                               "error_code":  null,
+                               "error_message":  null
+                           },
+                           {
+                               "competitor_id":  "76666c77-cd0d-4df8-a0d4-1872a8f63fee",
+                               "item_id":  "MLB5960098646",
+                               "product_id":  "446cc837-f6a6-4162-859c-fd40b8cdf0ff",
+                               "old_price":  "63.19",
+                               "new_price":  "63.19",
+                               "changed":  true,
+                               "status":  "updated",
+                               "captured_at":  "2026-06-21T15:19:27.458Z",
+                               "error_code":  null,
+                               "error_message":  null
+                           }
+                       ],
+    "day_start_brt":  "2026-06-21T00:00:00.000-03:00",
+    "timezone":  "America/Sao_Paulo",
+    "batch_size":  20,
+    "duration_ms":  31774,
+    "timed_out":  true,
+    "traceId":  "03902063-7232-4944-bf47-8718b9ba338f"
+}

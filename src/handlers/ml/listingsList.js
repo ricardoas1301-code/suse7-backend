@@ -3,6 +3,7 @@
 // Grid de anúncios: consolidação no backend (listingGridAssembler).
 // ======================================================
 
+import Decimal from "decimal.js";
 import { requireAuthUser } from "./_helpers/requireAuthUser.js";
 import { gatePremiumHandler } from "../../billing/middleware/requirePlanAccess.js";
 import {
@@ -27,6 +28,14 @@ import { mercadoLivreMoneyShapeDiagnostics } from "./_helpers/mercadoLivreListin
 import { mlPriceValidateLogsEnabled } from "./_helpers/mercadoLibreItemsApi.js";
 import { fetchAllListingHealthRowsCompat } from "./_helpers/mlHealthSchemaCompat.js";
 import { enrichListingGridRowsWithProductCardMetrics } from "./_helpers/listingProductCardMetrics.js";
+import { enrichListingGridRowsWithCompetitionMetrics, applyCompetitionMetricsFallbackToAllGridRows } from "./_helpers/listingGridCompetitionEnrich.js";
+import { applyListsCurrentPriceStalenessHotfix } from "./_helpers/listingGridCurrentPriceHotfix.js";
+import { buildPricingCurrentStateReadModelMissGridFallbackContract } from "../../domain/pricing/listingPricingCurrentStateReadModel.js";
+import { logPricingListLoadFatal } from "../../domain/pricing/buildPricingCurrentStateEngineResilience.js";
+import { enrichListingGridRowsPricingCurrentStateProjectedUnit } from "./_helpers/listingGridPricingCurrentStateEnrich.js";
+import {
+  externalListingIdKeyVariants,
+} from "./_helpers/listingGridJoinKeys.js";
 import {
   finalizeListingGridAccountFields,
   loadMarketplaceAccountMetaMap,
@@ -37,6 +46,185 @@ import {
   buildHistoricalCardOrderItemsAggregates,
   logHistoricalCardMetricsProbe,
 } from "../../domain/sales/historicalCardOrderItemsAggregates.js";
+import { computeExecutiveLineRealProfit } from "../../domain/sales/saleExecutiveLineRealResult.js";
+import {
+  saleDetailMoneyToDecimal,
+  saleDetailToQty,
+} from "../../domain/sales/saleDetailInternalCosts.js";
+import { isExecutiveSummaryEligibleOrderRow } from "../../domain/sales/saleExecutiveOrderValidity.js";
+import { orderMatchesExecutivePeriod } from "../../domain/sales/saleExecutivePeriod.js";
+import { iterateExecutiveSummaryBatches } from "../../domain/sales/saleExecutiveSourceItems.js";
+
+function parseMoneyDecimal(raw) {
+  if (raw == null || String(raw).trim() === "") return null;
+  try {
+    const dec = new Decimal(String(raw).replace(",", "."));
+    return dec.isFinite() ? dec : null;
+  } catch {
+    return null;
+  }
+}
+
+function toMoneyString(raw) {
+  const dec = parseMoneyDecimal(raw);
+  return dec != null ? dec.toDecimalPlaces(2, Decimal.ROUND_HALF_UP).toFixed(2) : null;
+}
+
+function toPercentString(raw) {
+  const dec = parseMoneyDecimal(raw);
+  return dec != null ? dec.toDecimalPlaces(2, Decimal.ROUND_HALF_UP).toFixed(2) : null;
+}
+
+function parsePositiveInt(raw) {
+  if (raw == null || String(raw).trim() === "") return null;
+  const n = Number.parseInt(String(raw), 10);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+export function exposeOfficialListingFinancialMetrics(row, executiveMetric) {
+  if (!executiveMetric || typeof executiveMetric !== "object") return;
+
+  const grossBrl = toMoneyString(executiveMetric.gross_sales_brl);
+  const profitBrl = toMoneyString(executiveMetric.contribution_profit_brl ?? executiveMetric.profit_brl);
+  const profitPct = toPercentString(
+    executiveMetric.contribution_margin_percent ?? executiveMetric.margin_percent
+  );
+  const salesCount = parsePositiveInt(executiveMetric.quantity_sold);
+  const netReceivedBrl = toMoneyString(executiveMetric.net_received_brl);
+
+  if (salesCount != null) {
+    row.sold_quantity = salesCount;
+    row.qty_sold_total = salesCount;
+  }
+  if (grossBrl != null) {
+    row.gross_sales_brl = grossBrl;
+    row.gross_revenue_brl = grossBrl;
+    row.gross_revenue_missing = false;
+  }
+  if (profitBrl != null) {
+    row.contribution_profit_brl = profitBrl;
+    row.net_profit_brl = profitBrl;
+  }
+  if (profitPct != null) {
+    row.contribution_margin_percent = profitPct;
+  }
+  if (salesCount != null && grossBrl != null) {
+    const grossDec = parseMoneyDecimal(grossBrl);
+    if (grossDec != null) {
+      row.average_ticket_brl = grossDec.div(salesCount).toDecimalPlaces(2, Decimal.ROUND_HALF_UP).toFixed(2);
+    }
+  }
+  if (netReceivedBrl != null) {
+    row.you_receive_brl = netReceivedBrl;
+    row.net_received_brl = netReceivedBrl;
+  }
+}
+
+function putExecutiveListingMetric(map, metric) {
+  if (!metric || typeof metric !== "object") return;
+  const candidates = [metric.external_listing_id, metric.listing_id]
+    .map((value) => (value != null ? String(value).trim() : ""))
+    .filter(Boolean);
+  for (const candidate of candidates) {
+    map.set(candidate, metric);
+    const normalized = normalizeMercadoLibreExternalListingId(candidate);
+    if (normalized) map.set(normalized, metric);
+  }
+}
+
+function putListingTargetAliases(map, externalListingId) {
+  const canonical = externalListingId != null ? String(externalListingId).trim() : "";
+  if (!canonical) return;
+  for (const candidate of externalListingIdKeyVariants(canonical)) {
+    map.set(candidate, canonical);
+  }
+}
+
+export async function buildOfficialListingMetricsMap(supabase, userId, listings, options = {}) {
+  const lifetimePeriod = options.period ?? {
+    preset: "lifetime",
+    start_ms: null,
+    end_ms_exclusive: null,
+    start_date: null,
+    end_date: null,
+  };
+  const targetByAlias = new Map();
+  for (const listing of listings || []) {
+    putListingTargetAliases(targetByAlias, listing.external_listing_id);
+  }
+  const byListingId = new Map();
+  if (targetByAlias.size === 0) return byListingId;
+
+  for await (const batch of iterateExecutiveSummaryBatches(supabase, userId, {
+    period: lifetimePeriod,
+    filter: "all",
+  })) {
+    for (const item of batch.items || []) {
+      const orderId = item?.sales_order_id != null ? String(item.sales_order_id) : "";
+      const order = orderId ? batch.ordersById.get(orderId) ?? null : null;
+      if (order && !isExecutiveSummaryEligibleOrderRow(order)) continue;
+      if (!orderMatchesExecutivePeriod(order, lifetimePeriod, item)) continue;
+
+      let canonicalListingId = null;
+      for (const candidate of externalListingIdKeyVariants(item?.external_listing_id)) {
+        const hit = targetByAlias.get(candidate);
+        if (hit) {
+          canonicalListingId = hit;
+          break;
+        }
+      }
+      if (!canonicalListingId) continue;
+
+      const qty = saleDetailToQty(item.quantity);
+      const grossDec = saleDetailMoneyToDecimal(item.gross_amount);
+      const netDec = saleDetailMoneyToDecimal(item.net_amount) ?? grossDec;
+      if (grossDec == null && netDec == null) continue;
+      const grossLine = grossDec ?? new Decimal(0);
+      const netLine = netDec ?? grossLine;
+      const { profitDec } = computeExecutiveLineRealProfit({
+        item,
+        qty,
+        grossDec: grossLine,
+        netDec: netLine,
+      });
+
+      const prev = byListingId.get(canonicalListingId) ?? {
+        quantity_sold: 0,
+        gross_sales_brl: new Decimal(0),
+        net_received_brl: new Decimal(0),
+        contribution_profit_brl: new Decimal(0),
+        profitLines: 0,
+      };
+      prev.quantity_sold += qty;
+      prev.gross_sales_brl = prev.gross_sales_brl.plus(grossLine);
+      prev.net_received_brl = prev.net_received_brl.plus(netLine);
+      if (profitDec != null) {
+        prev.contribution_profit_brl = prev.contribution_profit_brl.plus(profitDec);
+        prev.profitLines += 1;
+      }
+      byListingId.set(canonicalListingId, prev);
+    }
+  }
+
+  for (const [listingId, metric] of byListingId) {
+    const gross = metric.gross_sales_brl;
+    const profit = metric.contribution_profit_brl;
+    byListingId.set(listingId, {
+      listing_id: listingId,
+      external_listing_id: listingId,
+      quantity_sold: metric.quantity_sold,
+      gross_sales_brl: gross.toDecimalPlaces(2, Decimal.ROUND_HALF_UP).toFixed(2),
+      net_received_brl: metric.net_received_brl.toDecimalPlaces(2, Decimal.ROUND_HALF_UP).toFixed(2),
+      contribution_profit_brl: profit.toDecimalPlaces(2, Decimal.ROUND_HALF_UP).toFixed(2),
+      contribution_margin_percent:
+        metric.profitLines > 0 && !gross.isZero()
+          ? profit.div(gross).mul(100).toDecimalPlaces(2, Decimal.ROUND_HALF_UP).toFixed(2)
+          : "0.00",
+    });
+  }
+
+  return byListingId;
+}
 
 export default async function handleMlListingsList(req, res) {
   if (req.method !== "GET") {
@@ -316,6 +504,11 @@ export default async function handleMlListingsList(req, res) {
         .trim()
         .toLowerCase() === "true";
 
+    const recalcExternalListingIds =
+      req.query?.pricing_recalc_external_id ??
+      req.query?.pricing_recalc_external_ids ??
+      null;
+
     if (!localOnly) {
       await maybeEnrichGridRowsWithLiveListingPrices({
         userId: user.id,
@@ -341,6 +534,113 @@ export default async function handleMlListingsList(req, res) {
     }
 
     try {
+      await applyListsCurrentPriceStalenessHotfix({
+        userId: user.id,
+        gridRows: /** @type {Record<string, unknown>[]} */ (gridRows),
+        listings: /** @type {Record<string, unknown>[]} */ (listings),
+        healthByKey,
+        getHealth: (marketplace, externalListingId) =>
+          getListingGridRow(healthByKey, marketplace, externalListingId),
+      });
+    } catch (priceHotfixErr) {
+      const err = priceHotfixErr instanceof Error ? priceHotfixErr : new Error(String(priceHotfixErr));
+      console.warn("[S7_LISTS_CURRENT_PRICE_R68_AUDIT]", {
+        route: "/api/ml/listings",
+        error_name: err.name,
+        error_message: err.message,
+        fallback_used: false,
+        selection_reason: "price_hotfix_outer_failed_list_continues",
+      });
+    }
+
+    try {
+      await enrichListingGridRowsWithCompetitionMetrics(
+        supabase,
+        user.id,
+        /** @type {Record<string, unknown>[]} */ (gridRows),
+      );
+    } catch (competitionEnrichErr) {
+      const err =
+        competitionEnrichErr instanceof Error
+          ? competitionEnrichErr
+          : new Error(String(competitionEnrichErr));
+      console.warn("[S7_COMPETITION_METRICS_ENRICH_GUARD]", {
+        route: "/api/ml/listings",
+        error_name: err.name,
+        error_message: err.message,
+        duration_ms: null,
+        fallback_applied: true,
+        stage: "listingsList_outer_catch",
+      });
+      applyCompetitionMetricsFallbackToAllGridRows(
+        /** @type {Record<string, unknown>[]} */ (gridRows),
+        "unavailable",
+      );
+    }
+
+    /** Estado atual/projetado unitário — engine PI (paridade Modal) antes do overlay histórico executive. */
+    try {
+      await enrichListingGridRowsPricingCurrentStateProjectedUnit(
+        supabase,
+        user.id,
+        /** @type {Record<string, unknown>[]} */ (gridRows),
+        /** @type {Record<string, unknown>[]} */ (listings),
+        healthByKey,
+        { localOnly, recalcExternalListingIds },
+      );
+    } catch (pricingEngineEnrichErr) {
+      logPricingListLoadFatal({
+        route: "/api/ml/listings",
+        localOnly,
+        userId: user.id,
+        err: pricingEngineEnrichErr,
+        stage: "pricing_engine_enrich_outer",
+      });
+      console.warn("[Suse7][API][ml-listings] pricing_current_state_engine_enrich_failed", {
+        message: pricingEngineEnrichErr?.message ?? String(pricingEngineEnrichErr),
+      });
+      for (let pcsIdx = 0; pcsIdx < gridRows.length; pcsIdx++) {
+        const pcsRow = /** @type {Record<string, unknown>} */ (gridRows[pcsIdx]);
+        try {
+          pcsRow.pricing_current_state = buildPricingCurrentStateReadModelMissGridFallbackContract(pcsRow);
+        } catch {
+          pcsRow.pricing_current_state = {
+            contract_kind: "pricing_current_state_projected_unit",
+            missing_data_flags: ["pricing_engine_error"],
+            pricing_engine_error: "pricing_engine_outer_fallback",
+          };
+        }
+      }
+    }
+
+    const executiveListingMetricsById = new Map();
+    try {
+      const officialMetrics = await buildOfficialListingMetricsMap(
+        supabase,
+        user.id,
+        /** @type {Record<string, unknown>[]} */ (listings)
+      );
+      for (const metric of officialMetrics.values()) {
+        putExecutiveListingMetric(executiveListingMetricsById, metric);
+      }
+    } catch (executiveMetricsErr) {
+      console.warn("[Suse7][API][ml-listings] executive_listing_metrics_enrich_failed", {
+        message: executiveMetricsErr?.message ?? String(executiveMetricsErr),
+      });
+    }
+
+    for (const row of gridRows) {
+      const externalListingId =
+        row.external_listing_id != null && String(row.external_listing_id).trim() !== ""
+          ? String(row.external_listing_id).trim()
+          : "";
+      const metric =
+        executiveListingMetricsById.get(externalListingId) ??
+        executiveListingMetricsById.get(normalizeMercadoLibreExternalListingId(externalListingId));
+      exposeOfficialListingFinancialMetrics(row, metric);
+    }
+
+    try {
       logHistoricalCardMetricsProbe(
         /** @type {Record<string, unknown>[]} */ (gridRows),
         /** @type {Record<string, unknown>[]} */ (listings),
@@ -356,6 +656,13 @@ export default async function handleMlListingsList(req, res) {
 
     for (let i = 0; i < gridRows.length; i++) {
       gridRows[i] = ensureListingGridMoneyContract(/** @type {Record<string, unknown>} */ (gridRows[i]));
+      const pcs = /** @type {Record<string, unknown>} */ (gridRows[i]).pricing_current_state;
+      if (pcs == null || typeof pcs !== "object") {
+        /** @type {Record<string, unknown>} */ (gridRows[i]).pricing_current_state =
+          buildPricingCurrentStateReadModelMissGridFallbackContract(
+            /** @type {Record<string, unknown>} */ (gridRows[i]),
+          );
+      }
     }
 
     await finalizeListingGridAccountFields(

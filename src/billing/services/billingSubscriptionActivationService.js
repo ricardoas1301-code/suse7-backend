@@ -4,6 +4,7 @@
 
 import { logBilling, logBillingError } from "../billingLog.js";
 import { SUBSCRIPTION_STATUS, SUBSCRIPTION_STATUS_SUPERSEDED } from "../billingConstants.js";
+import { invalidateBillingAccessCachesForUser } from "./billingAccessCacheInvalidation.js";
 import {
   derivePeriodEndFromNextBilling,
   loadInheritedBillingCycleForActivation,
@@ -379,6 +380,10 @@ export async function activateSubscriptionFromPaidPayment(supabase, ctx) {
     plan_key: subscription.plan_key ?? null,
     was_already_active: alreadyActive,
     source,
+  });
+
+  invalidateBillingAccessCachesForUser(subscriptionUserId, {
+    reason: "subscription_activated",
   });
 
   return {

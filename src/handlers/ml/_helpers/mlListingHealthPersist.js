@@ -2085,7 +2085,8 @@ export async function upsertMarketplaceListingHealthFromMlItem(supabase, userId,
 
   if (accessToken && !skipPerf) {
     try {
-      performance = await fetchItemListingPerformance(accessToken, itemId);
+      const performanceResult = await fetchItemListingPerformance(accessToken, itemId);
+      performance = performanceResult?.payload ?? null;
       if (verbose) {
         console.log("[ml/health] performance_result", {
           external_listing_id: itemId,
