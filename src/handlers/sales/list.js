@@ -427,16 +427,8 @@ export async function buildVendasUiRowsFromOrderItems(supabase, userId, itemRows
  * @param {string} userId
  * @param {Record<string, unknown>[]} itemRows
  * @param {Map<string, Record<string, unknown>>} ordersById
- * @param {{ listingsMap?: Map<string, Record<string, unknown>>; productsById?: Map<string, Record<string, unknown>>; productsByNorm?: Map<string, Record<string, unknown>> }} [cache]
  */
-export async function hydrateExecutiveSummaryRankingRows(supabase, userId, itemRows, ordersById, cache = null) {
-  /** @type {Map<string, Record<string, unknown>>} */
-  const listingsMap = cache?.listingsMap ?? new Map();
-  /** @type {Map<string, Record<string, unknown>>} */
-  const productsById = cache?.productsById ?? new Map();
-  /** @type {Map<string, Record<string, unknown>>} */
-  const productsByNorm = cache?.productsByNorm ?? new Map();
-
+export async function hydrateExecutiveSummaryRankingRows(supabase, userId, itemRows, ordersById) {
   /** @type {Map<string, { marketplace: string; accountId: string | null; ids: Set<string> }>} */
   const listingBuckets = new Map();
 
@@ -452,7 +444,6 @@ export async function hydrateExecutiveSummaryRankingRows(supabase, userId, itemR
           ? String(ord.marketplace_account_id).trim()
           : "";
     if (mkt && ext) {
-      if (pickListingForVendasLine(listingsMap, mkt, ext, accGuess)) continue;
       const bk = `${mkt}::${accGuess || "__none__"}`;
       if (!listingBuckets.has(bk)) {
         listingBuckets.set(bk, { marketplace: mkt, accountId: accGuess || null, ids: new Set() });
@@ -467,12 +458,7 @@ export async function hydrateExecutiveSummaryRankingRows(supabase, userId, itemR
     externalListingIds: [...v.ids],
   }));
 
-  if (listingBucketList.length > 0) {
-    const fetchedListings = await fetchListingsForVendasBuckets(supabase, userId, listingBucketList);
-    for (const [key, row] of fetchedListings.entries()) {
-      listingsMap.set(key, row);
-    }
-  }
+  const listingsMap = await fetchListingsForVendasBuckets(supabase, userId, listingBucketList);
 
   /** @type {string[]} */
   const productIds = [];
@@ -480,28 +466,14 @@ export async function hydrateExecutiveSummaryRankingRows(supabase, userId, itemR
     if (l?.product_id) productIds.push(String(l.product_id));
   }
 
-  const missingProductIds = productIds.filter((pid) => !productsById.has(pid));
-  if (missingProductIds.length > 0) {
-    const fetchedProducts = await fetchProductsById(supabase, userId, missingProductIds);
-    for (const [pid, row] of fetchedProducts.entries()) {
-      productsById.set(pid, row);
-    }
-  }
+  let productsById = await fetchProductsById(supabase, userId, productIds);
 
   /** @type {string[]} */
   const normCandidates = [];
   for (const it of itemRows) {
     const mkt = it.marketplace != null ? String(it.marketplace) : "";
     const ext = it.external_listing_id != null ? String(it.external_listing_id).trim() : "";
-    const oid = it.sales_order_id != null ? String(it.sales_order_id) : "";
-    const ord = oid ? ordersById.get(oid) : null;
-    const accGuess =
-      it.marketplace_account_id != null && String(it.marketplace_account_id).trim() !== ""
-        ? String(it.marketplace_account_id).trim()
-        : ord?.marketplace_account_id != null && String(ord.marketplace_account_id).trim() !== ""
-          ? String(ord.marketplace_account_id).trim()
-          : "";
-    const listing = mkt && ext ? pickListingForVendasLine(listingsMap, mkt, ext, accGuess) : null;
+    const listing = mkt && ext ? listingsMap.get(`${mkt}::${ext}`) : null;
     const linkedPid = listing?.product_id != null ? String(listing.product_id) : null;
     if (linkedPid && productsById.has(linkedPid)) continue;
     const skuTry =
@@ -511,22 +483,12 @@ export async function hydrateExecutiveSummaryRankingRows(supabase, userId, itemR
           ? String(listing.seller_sku).trim()
           : "";
     const nk = skuTry ? normalizeSkuForDbLookup(skuTry) : "";
-    if (nk && !productsByNorm.has(nk)) normCandidates.push(nk);
+    if (nk) normCandidates.push(nk);
   }
 
-  const missingNorms = [...new Set(normCandidates)];
-  if (missingNorms.length > 0) {
-    const fetchedByNorm = await fetchProductsByNormalizedSku(supabase, userId, missingNorms);
-    for (const [nk, row] of fetchedByNorm.entries()) {
-      productsByNorm.set(nk, row);
-      if (row?.id) productsById.set(String(row.id), row);
-    }
-  }
-
-  if (cache) {
-    cache.listingsMap = listingsMap;
-    cache.productsById = productsById;
-    cache.productsByNorm = productsByNorm;
+  const productsByNorm = await fetchProductsByNormalizedSku(supabase, userId, normCandidates);
+  for (const p of productsByNorm.values()) {
+    if (p?.id) productsById.set(String(p.id), p);
   }
 
   return itemRows.map((it) => {

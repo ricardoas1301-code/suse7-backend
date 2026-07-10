@@ -15,12 +15,10 @@ import {
   logExecutiveSummaryResponseSent,
   logExecutiveSummaryStart,
 } from "../../domain/sales/saleExecutiveSummaryTelemetry.js";
-import { createExecutiveSummaryPerf } from "../../domain/sales/saleExecutiveSummaryPerf.js";
 import {
-  buildExecutiveSummaryDedupeKey,
-  createSalesExecutiveSummaryPerfTracker,
-  dedupeExecutiveSummaryRequest,
-} from "../../domain/sales/salesExecutiveSummaryPerformance.js";
+  createExecutiveSummaryPerf,
+  logExecutiveSummaryPerf,
+} from "../../domain/sales/saleExecutiveSummaryPerf.js";
 
 /**
  * @param {import("http").IncomingMessage} req
@@ -133,31 +131,30 @@ export default async function handleSalesExecutiveSummary(req, res) {
   }
 
   const startedAt = Date.now();
-  const httpPerf = createSalesExecutiveSummaryPerfTracker("ses");
   const perf = createExecutiveSummaryPerf(startedAt);
+  logExecutiveSummaryPerf("request_start", { seller_id: null });
 
-  const authStartedAt = Date.now();
   const auth = await requireAuthUser(req);
-  httpPerf.mark("auth_ms", authStartedAt);
-
   if (auth.error) {
     if (auth.error.code === "CONFIG_ERROR") {
       perf.logResponseReady({ fallback: true, reason: "config_error" });
-      httpPerf.finish({ http_status: 200, fallback: true });
       return res.status(200).json(buildEmptyExecutiveSummaryPayload());
     }
     perf.logResponseReady({ status: auth.error.status, reason: "auth_error" });
-    httpPerf.finish({ http_status: auth.error.status, reason: "auth_error" });
     return res.status(auth.error.status).json({ ok: false, error: auth.error.message });
   }
 
   const { user, supabase } = auth;
   perf.log("auth_resolved", { seller_id: user.id });
 
+  if (await gatePremiumHandler(res, supabase, user.id, { module: "vendas" })) {
+    perf.logResponseReady({ gated: true });
+    return;
+  }
+
   const parsed = parseExecutiveSummaryFilters(req);
   if (!parsed.ok) {
     perf.logResponseReady({ status: 400, reason: "invalid_period" });
-    httpPerf.finish({ user_id: user.id, http_status: 400, reason: "invalid_period" });
     return res.status(400).json({ ok: false, error: parsed.error });
   }
 
@@ -174,95 +171,50 @@ export default async function handleSalesExecutiveSummary(req, res) {
     startedAt,
   });
 
-  const dedupeKey = buildExecutiveSummaryDedupeKey(user.id, parsed.filters);
-
-  return dedupeExecutiveSummaryRequest(dedupeKey, async () => {
-    const gateStartedAt = Date.now();
-    if (await gatePremiumHandler(res, supabase, user.id, { module: "vendas", usageScope: "gate" })) {
-      perf.logResponseReady({ gated: true });
-      httpPerf.mark("account_resolution_ms", gateStartedAt);
-      httpPerf.finish({
-        user_id: user.id,
-        http_status: 403,
-        marketplace_account_scope: parsed.filters.marketplace_account_id ?? null,
-        period_preset: parsed.filters.period?.preset ?? null,
-        start_date: parsed.filters.period?.start_date ?? null,
-        end_date: parsed.filters.period?.end_date ?? null,
-        gated: true,
-      });
-      return;
-    }
-    httpPerf.mark("account_resolution_ms", gateStartedAt);
-
-    try {
-      const payload = await buildSaleExecutiveSummary(supabase, user.id, parsed.filters, {
-        startedAt,
-        perf,
-        httpPerf,
-      });
-      logExecutiveSummaryResponseSent({
-        status: 200,
-        ordersCount: payload?.summary?.orders_count ?? 0,
-        listingsCount: Array.isArray(payload?.rankings?.listings) ? payload.rankings.listings.length : 0,
-        truncatedScan: Boolean(payload?.truncated_scan),
-        elapsedMs: executiveSummaryElapsedMs(startedAt),
-      });
-      perf.logResponseReady({
-        status: 200,
-        orders_count: payload?.summary?.orders_count ?? 0,
-        listings_by_quantity: payload?.rankings?.listings_by_quantity?.length ?? 0,
-      });
-      const serializationStartedAt = Date.now();
-      httpPerf.mark("serialization_ms", serializationStartedAt);
-      httpPerf.finish({
-        user_id: user.id,
-        marketplace_account_scope: parsed.filters.marketplace_account_id ?? null,
-        period_preset: parsed.filters.period?.preset ?? null,
-        start_date: parsed.filters.period?.start_date ?? null,
-        end_date: parsed.filters.period?.end_date ?? null,
-        http_status: 200,
-        response_rows: payload?.summary?.orders_count ?? 0,
-        payload_bytes: null,
-        request_id: httpPerf.requestId,
-      });
-      return res.status(200).json(payload);
-    } catch (error) {
-      logExecutiveSummaryError({
-        message: error?.message ?? String(error),
-        stack: error?.stack ?? null,
-        elapsedMs: executiveSummaryElapsedMs(startedAt),
-      });
-      console.error("[Suse7][API][sales-executive-summary] failed", {
-        message: error?.message,
-        code: error?.code,
-        details: error?.details,
-      });
-      const fallback = buildEmptyExecutiveSummaryPayload(parsed.filters);
-      fallback.data_quality = {
-        status: "partial",
-        warnings: [
-          error?.message != null && String(error.message).trim() !== ""
-            ? String(error.message)
-            : "Falha ao calcular resumo executivo.",
-        ],
-      };
-      logExecutiveSummaryResponseSent({
-        status: 200,
-        fallback: true,
-        elapsedMs: executiveSummaryElapsedMs(startedAt),
-      });
-      perf.logResponseReady({ status: 200, fallback: true, error: error?.message ?? null });
-      httpPerf.finish({
-        user_id: user.id,
-        marketplace_account_scope: parsed.filters.marketplace_account_id ?? null,
-        period_preset: parsed.filters.period?.preset ?? null,
-        start_date: parsed.filters.period?.start_date ?? null,
-        end_date: parsed.filters.period?.end_date ?? null,
-        http_status: 200,
-        fallback: true,
-        error: error?.message ?? null,
-      });
-      return res.status(200).json(fallback);
-    }
-  });
+  try {
+    const payload = await buildSaleExecutiveSummary(supabase, user.id, parsed.filters, {
+      startedAt,
+      perf,
+    });
+    logExecutiveSummaryResponseSent({
+      status: 200,
+      ordersCount: payload?.summary?.orders_count ?? 0,
+      listingsCount: Array.isArray(payload?.rankings?.listings) ? payload.rankings.listings.length : 0,
+      truncatedScan: Boolean(payload?.truncated_scan),
+      elapsedMs: executiveSummaryElapsedMs(startedAt),
+    });
+    perf.logResponseReady({
+      status: 200,
+      orders_count: payload?.summary?.orders_count ?? 0,
+      listings_by_quantity: payload?.rankings?.listings_by_quantity?.length ?? 0,
+    });
+    return res.status(200).json(payload);
+  } catch (error) {
+    logExecutiveSummaryError({
+      message: error?.message ?? String(error),
+      stack: error?.stack ?? null,
+      elapsedMs: executiveSummaryElapsedMs(startedAt),
+    });
+    console.error("[Suse7][API][sales-executive-summary] failed", {
+      message: error?.message,
+      code: error?.code,
+      details: error?.details,
+    });
+    const fallback = buildEmptyExecutiveSummaryPayload(parsed.filters);
+    fallback.data_quality = {
+      status: "partial",
+      warnings: [
+        error?.message != null && String(error.message).trim() !== ""
+          ? String(error.message)
+          : "Falha ao calcular resumo executivo.",
+      ],
+    };
+    logExecutiveSummaryResponseSent({
+      status: 200,
+      fallback: true,
+      elapsedMs: executiveSummaryElapsedMs(startedAt),
+    });
+    perf.logResponseReady({ status: 200, fallback: true, error: error?.message ?? null });
+    return res.status(200).json(fallback);
+  }
 }

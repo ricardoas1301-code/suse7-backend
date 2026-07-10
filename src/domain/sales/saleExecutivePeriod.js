@@ -122,17 +122,6 @@ export function resolveExecutiveSummaryPeriod(query) {
     end = endDatetimeIn;
     startMs = startDatetimeIn.getTime();
     endMsExclusive = endDatetimeIn.getTime() + 1;
-  } else if (startDatetimeIn && presetRaw === "operational_cycle") {
-    /** Ciclo operacional parcial — fim implícito = agora (estável para dedupe/single-flight). */
-    const endNow = new Date();
-    if (startDatetimeIn.getTime() > endNow.getTime()) {
-      return { ok: false, error: "start_datetime não pode ser posterior ao momento atual." };
-    }
-    preset = "operational_cycle";
-    start = startDatetimeIn;
-    end = endNow;
-    startMs = startDatetimeIn.getTime();
-    endMsExclusive = endNow.getTime() + 1;
   }
 
   if (!hasDatetimeRange && preset === "custom") {
