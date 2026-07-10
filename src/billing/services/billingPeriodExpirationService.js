@@ -12,7 +12,6 @@ import {
   resolveScheduledDowngradeTargetPlan,
 } from "./billingScheduledDowngradeApplicationService.js";
 import { activateOrCreateInternalBabySubscription } from "./internalBabyPlanService.js";
-import { invalidateBillingAccessCachesForUser } from "./billingAccessCacheInvalidation.js";
 
 const ELIGIBLE_STATUSES = new Set([SUBSCRIPTION_STATUS.ACTIVE, SUBSCRIPTION_STATUS.PAST_DUE, SUBSCRIPTION_STATUS.PENDING]);
 
@@ -217,8 +216,6 @@ async function processCancelToBabyExpiration(supabase, paidSubscription, now) {
     kind: "cancel_to_baby",
   });
 
-  invalidateBillingAccessCachesForUser(userId, { reason: "period_expiration_cancel_to_baby" });
-
   return {
     kind: "cancel_to_baby",
     user_id: userId,
@@ -266,8 +263,6 @@ async function processScheduledPlanDowngradeExpiration(supabase, paidSubscriptio
     idempotent: Boolean(target.idempotent),
     kind: "scheduled_plan_downgrade",
   });
-
-  invalidateBillingAccessCachesForUser(userId, { reason: "period_expiration_plan_downgrade" });
 
   return {
     kind: "scheduled_plan_downgrade",

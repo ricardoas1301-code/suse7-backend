@@ -12,7 +12,6 @@ export const BILLING_USAGE_AGGREGATION_SCOPE = "seller_ecosystem";
 
 const BREAKDOWN_PAGE_SIZE = 1000;
 const BREAKDOWN_MAX_PAGES = 20;
-const GATE_USAGE_CACHE_MAX_AGE_MS = 5 * 60 * 1000;
 /**
  * @param {import("@supabase/supabase-js").SupabaseClient} supabase
  * @param {string} planId
@@ -297,43 +296,10 @@ export function buildSellerUsagePayload(evaluation, monthlySalesLimit, totalSale
 /**
  * @param {import("@supabase/supabase-js").SupabaseClient} supabase
  * @param {string} userId
- * @param {{ period_start: string; period_end: string; window_kind: string }} window
- */
-async function readCachedMonthlyUsageRow(supabase, userId, window) {
-  const { data, error } = await supabase
-    .from("billing_monthly_usage")
-    .select("sales_count, metadata, updated_at")
-    .eq("user_id", userId)
-    .eq("period_start", window.period_start)
-    .eq("period_end", window.period_end)
-    .eq("window_kind", window.window_kind)
-    .maybeSingle();
-
-  if (error) {
-    if (isMissingRelationError(error)) return null;
-    throw error;
-  }
-  return data ?? null;
-}
-
-/**
- * @param {string | null | undefined} updatedAt
- */
-function isUsageCacheFresh(updatedAt) {
-  if (!updatedAt) return false;
-  const ageMs = Date.now() - new Date(updatedAt).getTime();
-  return Number.isFinite(ageMs) && ageMs >= 0 && ageMs <= GATE_USAGE_CACHE_MAX_AGE_MS;
-}
-
-/**
- * @param {import("@supabase/supabase-js").SupabaseClient} supabase
- * @param {string} userId
  * @param {string | null | undefined} planId
  * @param {ReturnType<import("./billingCycleService.js").resolveSubscriptionBillingCycle> | null | undefined} [cycle]
- * @param {{ scope?: "full" | "gate"; usageScope?: "full" | "gate" }} [options]
  */
-export async function resolveMonthlySalesUsage(supabase, userId, planId, cycle = null, options = {}) {
-  const gateScope = options.scope === "gate" || options.usageScope === "gate";
+export async function resolveMonthlySalesUsage(supabase, userId, planId, cycle = null) {
   try {
     const resolvedCycle = cycle ?? (await resolveSellerBillingCycle(supabase, userId)).cycle;
     const window = {
@@ -342,57 +308,14 @@ export async function resolveMonthlySalesUsage(supabase, userId, planId, cycle =
       period_end: resolvedCycle.period_end,
     };
     const limitConfig = planId ? await loadPlanLimitConfig(supabase, planId) : null;
+    const totalSalesMonth = await countSellerEcosystemSales(supabase, userId, window);
+    const breakdowns = await buildSellerSalesBreakdowns(supabase, userId, window);
 
-    /** @type {number} */
-    let totalSalesMonth;
-    /** @type {{ marketplaces: Record<string, number>; companies: Record<string, number>; accounts: Record<string, number>; truncated: boolean }} */
-    let breakdowns;
-    /** @type {"hit" | "miss_recount" | "stale_recount" | "full"} */
-    let cacheStatus = gateScope ? "miss_recount" : "full";
-
-    if (gateScope) {
-      const cached = await readCachedMonthlyUsageRow(supabase, userId, window);
-      if (cached) {
-        const meta =
-          cached.metadata && typeof cached.metadata === "object"
-            ? /** @type {Record<string, unknown>} */ (cached.metadata)
-            : {};
-        const cachedBreakdowns =
-          meta.breakdowns && typeof meta.breakdowns === "object"
-            ? /** @type {Record<string, unknown>} */ (meta.breakdowns)
-            : {};
-        totalSalesMonth = Math.max(0, Number(cached.sales_count ?? 0));
-        breakdowns = {
-          marketplaces:
-            cachedBreakdowns.marketplaces && typeof cachedBreakdowns.marketplaces === "object"
-              ? /** @type {Record<string, number>} */ (cachedBreakdowns.marketplaces)
-              : {},
-          companies:
-            cachedBreakdowns.companies && typeof cachedBreakdowns.companies === "object"
-              ? /** @type {Record<string, number>} */ (cachedBreakdowns.companies)
-              : {},
-          accounts:
-            cachedBreakdowns.accounts && typeof cachedBreakdowns.accounts === "object"
-              ? /** @type {Record<string, number>} */ (cachedBreakdowns.accounts)
-              : {},
-          truncated: Boolean(cachedBreakdowns.truncated),
-        };
-        cacheStatus = isUsageCacheFresh(cached.updated_at) ? "hit" : "stale_hit";
-      } else {
-        totalSalesMonth = await countSellerEcosystemSales(supabase, userId, window);
-        breakdowns = { marketplaces: {}, companies: {}, accounts: {}, truncated: false };
-        cacheStatus = "miss_recount";
-      }
-    } else {
-      totalSalesMonth = await countSellerEcosystemSales(supabase, userId, window);
-      breakdowns = await buildSellerSalesBreakdowns(supabase, userId, window);
-
-      await upsertMonthlyUsageRow(supabase, userId, {
-        ...window,
-        sales_count: totalSalesMonth,
-        breakdowns,
-      });
-    }
+    await upsertMonthlyUsageRow(supabase, userId, {
+      ...window,
+      sales_count: totalSalesMonth,
+      breakdowns,
+    });
 
     const evaluation = evaluateSalesLimitState({
       monthly_sales_limit: limitConfig?.monthly_sales_limit ?? null,
@@ -428,7 +351,6 @@ export async function resolveMonthlySalesUsage(supabase, userId, planId, cycle =
         accounts: breakdowns.accounts,
         truncated: breakdowns.truncated,
       },
-      usage_cache_status: cacheStatus,
       ...evaluation,
       plan: limitConfig
         ? {
