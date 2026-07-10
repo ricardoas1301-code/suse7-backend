@@ -185,20 +185,10 @@ const server = http.createServer(async (req, res) => {
 
   req.url = url.pathname + (url.search || "");
 
-  const { beginBackendConcurrencySnapshot, finishBackendConcurrencySnapshot } = await import(
-    "./infra/backendConcurrencySnapshot.js"
-  );
-  const concurrencyCtx = beginBackendConcurrencySnapshot({
-    endpoint: pathname,
-    requestId: `dev_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-  });
-
   const resCompat = createRes(res);
   try {
     await apiHandler(req, resCompat);
-    finishBackendConcurrencySnapshot(concurrencyCtx, { status: res.statusCode || 200 });
   } catch (err) {
-    finishBackendConcurrencySnapshot(concurrencyCtx, { status: 500 });
     console.error("[dev-server] handler error:", err);
     if (!res.headersSent) {
       res.writeHead(500, { "Content-Type": "application/json" });
