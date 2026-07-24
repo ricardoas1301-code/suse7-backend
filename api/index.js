@@ -319,11 +319,11 @@ export default async function handler(req, res) {
       const isReadOnlyBilling =
         method === "GET" || method === "HEAD" || method === "OPTIONS";
       if (!isReadOnlyBilling) {
-        const { isBillingPreviewMutationsBlocked, billingPreviewBlockedPayload } = await import(
+        const { isBillingFinancialMutationBlocked, billingPreviewBlockedPayload } = await import(
           "../src/billing/services/billingPreviewRuntimeGuard.js"
         );
-        if (isBillingPreviewMutationsBlocked()) {
-          console.warn("[S7_BILLING] BILLING_PREVIEW_MUTATIONS_BLOCKED", { path: billingPath, method });
+        if (isBillingFinancialMutationBlocked()) {
+          console.warn("[S7_BILLING] BILLING_RUNTIME_ENVIRONMENT_UNCONFIRMED", { path: billingPath, method });
           return res.status(403).json(billingPreviewBlockedPayload(billingPath));
         }
       }
@@ -751,11 +751,11 @@ export default async function handler(req, res) {
       path === "/api/jobs/billing-trial-lifecycle-reconciler" ||
       path === "/jobs/billing-trial-lifecycle-reconciler"
     ) {
-      const { isBillingPreviewMutationsBlocked, billingPreviewBlockedPayload } = await import(
+      const { isBillingFinancialMutationBlocked, billingPreviewBlockedPayload } = await import(
         "../src/billing/services/billingPreviewRuntimeGuard.js"
       );
-      if (isBillingPreviewMutationsBlocked()) {
-        console.warn("[S7_BILLING] BILLING_PREVIEW_MUTATIONS_BLOCKED", { path });
+      if (isBillingFinancialMutationBlocked()) {
+        console.warn("[S7_BILLING] BILLING_RUNTIME_ENVIRONMENT_UNCONFIRMED", { path });
         return res.status(403).json(billingPreviewBlockedPayload(path));
       }
     }

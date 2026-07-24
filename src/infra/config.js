@@ -52,15 +52,23 @@ export const config = {
 
   /** @see src/billing — gateway neutro (default: asaas). */
   billingProviderDefault: getEnv("BILLING_PROVIDER_DEFAULT", { defaultValue: "asaas" }).trim().toLowerCase() || "asaas",
-  asaasEnv: getEnv("ASAAS_ENV", { defaultValue: "sandbox" }).trim(),
+  /**
+   * S1.HF.6.9A.13B — ASAAS_ENV obrigatório (sandbox|production|prod).
+   * Sem default silencioso; mutações financeiras falham fechadas via billingRuntimeEnvironmentService.
+   */
+  asaasEnv: getEnv("ASAAS_ENV", { defaultValue: "" }).trim(),
   asaasApiBaseUrl: (() => {
-    const env = getEnv("ASAAS_ENV", { defaultValue: "sandbox" }).trim();
+    const env = getEnv("ASAAS_ENV", { defaultValue: "" }).trim().toLowerCase();
     const raw = getEnv("ASAAS_API_BASE_URL", { defaultValue: "" }).trim();
     if (raw) return raw.replace(/\/+$/, "");
-    if (env.toLowerCase() === "production" || env.toLowerCase() === "prod") {
+    if (env === "production" || env === "prod") {
       return "https://api.asaas.com/v3";
     }
-    return "https://api-sandbox.asaas.com/v3";
+    if (env === "sandbox") {
+      return "https://api-sandbox.asaas.com/v3";
+    }
+    // Ambiente ausente/inválido: não escolher sandbox nem production.
+    return "";
   })(),
   asaasApiKey: getEnv("ASAAS_API_KEY", { defaultValue: "" }).trim(),
   asaasWebhookToken: getEnv("ASAAS_WEBHOOK_TOKEN", { defaultValue: "" }).trim(),

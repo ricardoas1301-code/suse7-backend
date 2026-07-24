@@ -24,6 +24,7 @@ import { patchSubscriptionEntitlementMetadata } from "./billingSellerEntitlement
 import { classifyFinancialPaymentEvent } from "./billingFinancialEventClassificationService.js";
 import { reevaluateBabyQuotaAfterEntitlementChange } from "./billingBabyQuotaReevaluationService.js";
 import { convergePaidLifecycleAfterMutation } from "./billingPaidLifecycleConvergenceService.js";
+import { assertBillingFinancialMutationsAllowed } from "./billingRuntimeEnvironmentService.js";
 
 /**
  * @param {unknown} value
@@ -55,6 +56,15 @@ function asTrimmedString(value) {
  * }} input
  */
 export async function confirmCanonicalSubscriptionPayment(supabase, input) {
+  const envGate = assertBillingFinancialMutationsAllowed();
+  if (!envGate.ok) {
+    logBilling("billing", "PAID_CONFIRM_BLOCKED_RUNTIME_ENV", {
+      reasons: envGate.runtime.reasons,
+      source: input.source ?? null,
+    });
+    return { ok: false, error: envGate.error.code, runtime: envGate.error };
+  }
+
   const userId = String(input.userId ?? "").trim();
   if (!userId) return { ok: false, error: "MISSING_USER" };
 
