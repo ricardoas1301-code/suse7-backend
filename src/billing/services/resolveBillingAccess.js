@@ -3,15 +3,17 @@
 // ======================================================================
 
 import { logBillingError } from "../billingLog.js";
+import { BILLING_ACCESS_PROFILE, BILLING_EFFECTIVE_ENTITLEMENT, BILLING_FINANCIAL_STATE } from "../billingConstants.js";
 import { canUserAccessPlanFeatures } from "./billingAccessService.js";
 import { resolveSellerBillingCycle } from "./billingCycleService.js";
 import { ensureInternalBabySubscription } from "./internalBabyPlanService.js";
 import { buildDefaultMonthlySalesUsageResolution } from "./billingUsageFallback.js";
 import { resolveMonthlySalesUsage } from "./billingUsageService.js";
 import { applyUsageGrowthGraceToAccess, readUsageGrowthGrace } from "./billingUsageGrowthGraceService.js";
-/**
- * @param {Record<string, unknown>} usageResolution
- */
+import {
+  normalizeBillingSubscriptionEntitlementDto,
+  resolveBillingAccessEntitlementSnapshot,
+} from "./billingSubscriptionEntitlementService.js";
 function buildLimitsFromUsage(usageResolution) {
   return {
     monthly_sales_limit: usageResolution.monthly_sales_limit,
@@ -95,22 +97,64 @@ export async function resolveBillingAccess(supabase, userId, options = {}) {
   }
 
   const subscriptionAccess = Boolean(access.can_access);
-  const hardBlockedByUsage = Boolean(usageResolution.hard_blocked);
+  let entitlementDto = null;
+
+  try {
+    entitlementDto = normalizeBillingSubscriptionEntitlementDto(
+      await resolveBillingAccessEntitlementSnapshot(supabase, userId, { now: new Date() })
+    );
+  } catch (entitlementErr) {
+    logBillingError("billing", "resolve_access_entitlement_failed", entitlementErr, { user_id: userId });
+  }
+
+  const accessProfile = entitlementDto?.access_profile ?? null;
+
+  const hardBlockedByUsage = Boolean(
+    usageResolution.hard_blocked ||
+      (entitlementDto?.usage_state === "HARD_LIMIT_REACHED" &&
+        accessProfile !== BILLING_ACCESS_PROFILE.ARCHIVE_READ_ONLY)
+  );
+  const paidDetailedRestricted =
+    accessProfile === BILLING_ACCESS_PROFILE.EXECUTIVE_ONLY ||
+    entitlementDto?.access_state === "DETAILED_ACCESS_RESTRICTED" ||
+    (entitlementDto?.usage_state === "LIMIT_RESTRICTED" &&
+      entitlementDto?.effective_entitlement !== BILLING_EFFECTIVE_ENTITLEMENT.BABY_INTERNAL_FREE);
+  const entitlementGrantsAccess =
+    (entitlementDto?.suspension_fallback_active &&
+      entitlementDto?.access_state === "LIBERATED" &&
+      entitlementDto?.usage_state !== "LIMIT_RESTRICTED" &&
+      entitlementDto?.usage_state !== "HARD_LIMIT_REACHED") ||
+    entitlementDto?.effective_entitlement === "TRIAL_FULL_ACCESS" ||
+    accessProfile === BILLING_ACCESS_PROFILE.ARCHIVE_READ_ONLY ||
+    accessProfile === BILLING_ACCESS_PROFILE.EXECUTIVE_ONLY;
   const growthPolicy = applyUsageGrowthGraceToAccess(
     hardBlockedByUsage,
     Boolean(usageResolution.exceeded),
     growthGrace
   );
-  const premiumAccess = subscriptionAccess && !growthPolicy.hard_blocked;
+  const premiumAccessResolved =
+    (subscriptionAccess || entitlementGrantsAccess) &&
+    !growthPolicy.hard_blocked &&
+    accessProfile !== BILLING_ACCESS_PROFILE.FINANCIAL_RECOVERY_ONLY &&
+    (entitlementDto?.operational_blocked !== true ||
+      accessProfile === BILLING_ACCESS_PROFILE.ARCHIVE_READ_ONLY ||
+      accessProfile === BILLING_ACCESS_PROFILE.EXECUTIVE_ONLY);
 
   let accessDeniedCode = null;
   let accessDeniedMessage = null;
-  if (!subscriptionAccess) {
+  if (!subscriptionAccess && !entitlementGrantsAccess) {
     accessDeniedCode = "BILLING_SUBSCRIPTION_BLOCKED";
     accessDeniedMessage = "Assinatura inativa ou pendente para este seller.";
+  } else if (accessProfile === BILLING_ACCESS_PROFILE.FINANCIAL_RECOVERY_ONLY) {
+    accessDeniedCode = "FINANCIAL_ACCESS_BLOCKED";
+    accessDeniedMessage = "Regularize sua assinatura para retomar o acesso operacional.";
   } else if (growthPolicy.hard_blocked) {
     accessDeniedCode = "BILLING_SALES_LIMIT_EXCEEDED";
     accessDeniedMessage = "O volume consolidado do ecossistema ultrapassou o limite mensal do plano.";
+  } else if (paidDetailedRestricted) {
+    accessDeniedCode = "PLAN_USAGE_LIMIT_DETAILED_ACCESS_RESTRICTED";
+    accessDeniedMessage =
+      "Listas e operações detalhadas estão restritas neste ciclo. Cards executivos permanecem disponíveis.";
   }
 
   const periodStartIso = usageResolution.period_start
@@ -131,7 +175,11 @@ export async function resolveBillingAccess(supabase, userId, options = {}) {
     current_period_end: periodEndIso,
     next_billing_at: cycle?.next_billing_at ?? null,
     module: options.module ?? null,
-    premium_access: premiumAccess,    can_access: premiumAccess,
+    premium_access: premiumAccessResolved,
+    can_access: premiumAccessResolved,
+    subscription_entitlement: entitlementDto,
+    entitlement_capabilities: entitlementDto?.capabilities ?? null,
+    access_profile: accessProfile,
     access_denied_code: accessDeniedCode,
     access_denied_message: accessDeniedMessage,
     usage_fallback: Boolean(usageResolution.fallback),

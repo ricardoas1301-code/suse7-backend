@@ -2,15 +2,23 @@
 // Histórico de cobranças — seller-centric (backend only)
 // ======================================================================
 
-import { isBillingPaymentPayable, normalizeBillingPaymentStatusKey } from "../utils/billingPaymentPayability.js";
-import { mapPublicBoletoFieldsFromStoredPayload } from "./billingBoletoPaymentPresentation.js";
+import { logBilling } from "../billingLog.js";
+import { resolveOfficialPaymentMethod } from "./billingSubscriptionRenewalCompletionService.js";
 import { resolvePaymentHistoryAction } from "./billingPaymentHistoryActions.js";
+import {
+  loadCanonicalBillableSubscriptionContext,
+  shouldIncludePaymentInSellerHistory,
+} from "./billingCanonicalSubscriptionService.js";
+import { mapPublicBoletoFieldsFromStoredPayload } from "./billingBoletoPaymentPresentation.js";
+import { isBillingPaymentPayable, normalizeBillingPaymentStatusKey } from "../utils/billingPaymentPayability.js";
+import { toDecimal, decimalToScale2String } from "../utils/moneyDecimal.js";
+import Decimal from "decimal.js";
 
 /**
  * @typedef {{
  *   id: string;
  *   provider: string;
- *   provider_payment_id: string;
+ *   provider_payment_id: string | null;
  *   subscription_id: string | null;
  *   plan_name: string | null;
  *   amount_cents: number | null;
@@ -25,6 +33,8 @@ import { resolvePaymentHistoryAction } from "./billingPaymentHistoryActions.js";
  *   action_type: string;
  *   action_label: string | null;
  *   renewal_cycle_id: string | null;
+ *   billing_state?: string | null;
+ *   is_projected?: boolean;
  * }} BillingPaymentHistoryRow
  */
 
@@ -50,9 +60,14 @@ function asTrimmedString(value) {
  */
 function amountToCents(amount) {
   if (amount == null || amount === "") return null;
-  const value = Number(amount);
-  if (!Number.isFinite(value)) return null;
-  return Math.round(value * 100);
+  try {
+    const dec = toDecimal(amount);
+    return Math.round(dec.mul(100).toNumber());
+  } catch {
+    const value = Number(amount);
+    if (!Number.isFinite(value)) return null;
+    return Math.round(new Decimal(value).mul(100).toNumber());
+  }
 }
 
 /**
@@ -73,9 +88,6 @@ function normalizePaymentStatus(status) {
 /**
  * @param {unknown} rawPayload
  */
-/**
- * @param {unknown} rawPayload
- */
 function readPayloadForHistory(rawPayload) {
   return rawPayload && typeof rawPayload === "object" ? /** @type {Record<string, unknown>} */ (rawPayload) : {};
 }
@@ -87,7 +99,10 @@ function extractPaymentPayloadFields(rawPayload) {
     asTrimmedString(payload.invoiceUrl) ??
     asTrimmedString(payload.bankSlipUrl) ??
     asTrimmedString(payload.transactionReceiptUrl);
-  const paymentMethodType = asTrimmedString(payload.billingType) ?? asTrimmedString(payload.paymentMethod);
+  const paymentMethodType =
+    resolveOfficialPaymentMethod(rawPayload) ??
+    asTrimmedString(payload.billingType) ??
+    asTrimmedString(payload.paymentMethod);
   const billingReason = asTrimmedString(payload.description) ?? asTrimmedString(payload.event_type_snapshot);
   return {
     due_date: dueDate,
@@ -100,6 +115,7 @@ function extractPaymentPayloadFields(rawPayload) {
 /**
  * @param {Record<string, unknown>} row
  * @param {Map<string, string>} planNameBySubscriptionId
+ * @param {Map<string, { renewal_cycle_id: string; renewal_status: string | null }>} renewalByPaymentId
  * @returns {BillingPaymentHistoryRow}
  */
 function mapPaymentHistoryRow(row, planNameBySubscriptionId, renewalByPaymentId) {
@@ -122,12 +138,13 @@ function mapPaymentHistoryRow(row, planNameBySubscriptionId, renewalByPaymentId)
   const action = resolvePaymentHistoryAction(status, payloadFields.payment_method_type, payload, {
     renewal_cycle_id: renewal?.renewal_cycle_id ?? null,
     renewal_status: renewal?.renewal_status ?? null,
+    provider_payment_id: asTrimmedString(row.provider_payment_id),
   });
 
   return {
     id: String(row.id),
     provider: asTrimmedString(row.provider) ?? "unknown",
-    provider_payment_id: asTrimmedString(row.provider_payment_id) ?? String(row.id),
+    provider_payment_id: asTrimmedString(row.provider_payment_id),
     subscription_id: subscriptionId,
     plan_name: planName,
     amount_cents: amountToCents(row.amount),
@@ -143,6 +160,8 @@ function mapPaymentHistoryRow(row, planNameBySubscriptionId, renewalByPaymentId)
     action_type: action.action_type,
     action_label: action.action_label,
     renewal_cycle_id: renewal?.renewal_cycle_id ?? null,
+    billing_state: null,
+    is_projected: false,
   };
 }
 
@@ -152,6 +171,11 @@ function mapPaymentHistoryRow(row, planNameBySubscriptionId, renewalByPaymentId)
  * @returns {Promise<BillingPaymentHistoryRow[]>}
  */
 export async function listSellerPaymentHistory(supabase, userId) {
+  const { canonicalSubscription, canonicalSubscriptionId } = await loadCanonicalBillableSubscriptionContext(
+    supabase,
+    userId
+  );
+
   const { data, error } = await supabase
     .from("billing_payments")
     .select("id, provider, provider_payment_id, subscription_id, status, amount, currency, paid_at, created_at, event_type_snapshot, raw_payload")
@@ -164,8 +188,18 @@ export async function listSellerPaymentHistory(supabase, userId) {
     throw error;
   }
 
-  const rows = Array.isArray(data) ? data : [];
-  const subscriptionIds = [...new Set(rows.map((row) => row.subscription_id).filter(Boolean))];
+  const rows = (Array.isArray(data) ? data : []).filter((row) =>
+    shouldIncludePaymentInSellerHistory(/** @type {Record<string, unknown>} */ (row), canonicalSubscriptionId)
+  );
+
+  const subscriptionIds = [
+    ...new Set(
+      rows
+        .map((row) => row.subscription_id)
+        .filter(Boolean)
+        .concat(canonicalSubscriptionId ? [canonicalSubscriptionId] : [])
+    ),
+  ];
   const planNameBySubscriptionId = new Map();
 
   if (subscriptionIds.length > 0) {
@@ -236,5 +270,14 @@ export async function listSellerPaymentHistory(supabase, userId) {
       });
     }
   }
+
+  logBilling("billing", "BILLING_PAYMENT_HISTORY_RESOLVED", {
+    user_id: userId,
+    canonical_subscription_id: canonicalSubscriptionId,
+    total_rows: mapped.length,
+    persisted_payments: mapped.filter((row) => !row.is_projected).length,
+    projected_rows: mapped.filter((row) => row.is_projected).length,
+  });
+
   return mapped;
 }

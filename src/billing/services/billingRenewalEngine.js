@@ -394,7 +394,31 @@ async function applyGraceAndSuspension(supabase, subscription, cycle, now) {
     renewal_subscription_status: RENEWAL_SUBSCRIPTION_STATUS.SUSPENDED,
     delinquency_status: DELINQUENCY_STATUS.SUSPENDED,
     access_suspended_at: now.toISOString(),
+    // S1.HF.6.9A.12 — owner do ciclo financeiro (não trial/consumo/Baby quota).
+    paid_subscription_status: "SUSPENDED",
+    access_restriction_reason: "PAYMENT_DELINQUENCY",
+    access_owner: "PAYMENT_DELINQUENCY_ENGINE",
+    sync_state: "FULL",
   });
+
+  try {
+    const { transitionActivateSuspensionFallback } = await import("./billingEntitlementStateTransitionService.js");
+    const { resolveBillingFinancialStateFromDueDate } = await import("./billingSubscriptionFinancialStateService.js");
+    const { formatBillingCivilDateInSaoPaulo } = await import("./billingCycleService.js");
+    const civilNow = formatBillingCivilDateInSaoPaulo(now);
+    const dueCivil = String(cycle.renewal_due_date ?? subscription.next_due_date ?? "").slice(0, 10);
+    const timeline = resolveBillingFinancialStateFromDueDate(dueCivil, civilNow);
+    await transitionActivateSuspensionFallback(supabase, subscription, {
+      suspension_start: timeline.suspension_start,
+      now,
+      financial_state: "SUSPENDED",
+      source: "renewal_engine_suspend",
+    });
+  } catch (fallbackErr) {
+    logBillingError("billing", "suspension_fallback_activation_failed", fallbackErr, {
+      subscription_id: subscription.id,
+    });
+  }
 
   if (isBillingRenewalTestAccelerated()) {
     logBillingTestTransition({
@@ -600,3 +624,9 @@ export async function processBillingRenewalEngine(supabase, options) {
 }
 
 export { isAsaasPaymentConfirmedStatus };
+
+/** Convergência canônica Pix/boleto/cartão → um único confirmador (S1.HF.6.9A.12). */
+export { confirmCanonicalSubscriptionPayment } from "./billingConfirmCanonicalSubscriptionPaymentService.js";
+export { resolvePaidLifecycleState } from "./billingPaidLifecycleService.js";
+export { resolvePaidCivilCycleClock } from "./billingPaidCivilCycleService.js";
+

@@ -8,13 +8,9 @@
 
 import { logBilling, logBillingError } from "../billingLog.js";
 
-import {
+import { isAsaasPaymentConfirmedStatus } from "./billingSubscriptionActivationService.js";
 
-  activateSubscriptionFromPaidPayment,
-
-  isAsaasPaymentConfirmedStatus,
-
-} from "./billingSubscriptionActivationService.js";
+import { confirmCanonicalSubscriptionPayment } from "./billingConfirmCanonicalSubscriptionPaymentService.js";
 
 import { emitBillingCommunicationPlaceholder } from "./billingPixCheckoutService.js";
 
@@ -162,23 +158,39 @@ export async function refreshBillingPaymentFromProvider(supabase, userId, provid
 
     try {
 
-      activation = await activateSubscriptionFromPaidPayment(supabase, {
+      const facade = await confirmCanonicalSubscriptionPayment(supabase, {
 
         paymentId: String(localPayRow.id),
 
         userId,
 
-        subscriptionId: localPayRow.subscription_id != null ? String(localPayRow.subscription_id) : null,
+        linkedSubscriptionId: localPayRow.subscription_id != null ? String(localPayRow.subscription_id) : null,
 
         providerPaymentId: payId,
+
+        eventType: "PAYMENT_CONFIRMED",
+
+        paymentStatus: "CONFIRMED",
 
         nextDueDate,
 
         paidAt: new Date().toISOString(),
 
+        paymentRow: localPayRow,
+
         source: "payment_refresh",
 
       });
+
+      activation = {
+
+        activated: Boolean(facade.activation?.activated),
+
+        idempotent: Boolean(facade.idempotent),
+
+        subscription_id: facade.canonical_subscription_id ?? null,
+
+      };
 
       if (activation.subscription_id) {
 

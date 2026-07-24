@@ -18,7 +18,7 @@
  */
 
 const PLAN_SELECT =
-  "id, plan_key, name, display_name, marketing_name, slug, price_monthly, sales_limit_monthly, billing_required, is_active, sort_order";
+  "id, plan_key, name, display_name, marketing_name, slug, price_monthly, price_cents, sales_limit_monthly, sales_range_min, sales_range_max, billing_required, pricing_mode, is_active, sort_order";
 
 const PLAN_SELECT_LEGACY =
   "id, plan_key, name, price_monthly, sales_limit_monthly, billing_required, is_active, sort_order";

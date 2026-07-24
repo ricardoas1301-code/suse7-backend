@@ -16,13 +16,12 @@ import {
   logAsaasPaymentReuseAudit,
 } from "./billingCheckoutIdempotencyService.js";
 import { resolveSellerCreditCardToken } from "./billingCardPaymentMethodService.js";
-import {
-  activateSubscriptionFromPaidPayment,
-  isAsaasPaymentConfirmedStatus,
-} from "./billingSubscriptionActivationService.js";
+import { isAsaasPaymentConfirmedStatus } from "./billingSubscriptionActivationService.js";
+import { confirmCanonicalSubscriptionPayment } from "./billingConfirmCanonicalSubscriptionPaymentService.js";
 import { sanitizeBillingCardPayload } from "../utils/billingCardSanitize.js";
 import { assertCreditCardCheckoutOnly } from "../utils/billingCheckoutGuards.js";
 import { cancelOrphanAsaasSubscriptionsForUser } from "./billingOrphanAsaasSubscriptionService.js";
+import { isQuotePlanRow } from "../suse7PlanCatalog.js";
 
 function addDaysUtcIso(days) {
   const d = new Date();
@@ -131,6 +130,12 @@ export async function checkoutPlan(ctx) {
   if (!plan) {
     const err = new Error("PLAN_NOT_FOUND");
     /** @type {any} */ (err).code = "PLAN_NOT_FOUND";
+    throw err;
+  }
+
+  if (isQuotePlanRow(plan)) {
+    const err = new Error("QUOTE_PLAN_REQUIRES_SALES");
+    /** @type {any} */ (err).code = "QUOTE_PLAN_REQUIRES_SALES";
     throw err;
   }
 
@@ -394,11 +399,13 @@ export async function checkoutPlan(ctx) {
 
       if (firstPaymentConfirmed && pe.data?.id) {
         try {
-          await activateSubscriptionFromPaidPayment(supabase, {
+          await confirmCanonicalSubscriptionPayment(supabase, {
             paymentId: String(pe.data.id),
             userId: user.id,
-            subscriptionId: String(data.id),
+            linkedSubscriptionId: String(data.id),
             providerPaymentId: firstPayId,
+            eventType: "PAYMENT_CONFIRMED",
+            paymentStatus: "CONFIRMED",
             nextDueDate,
             paidAt: new Date().toISOString(),
             source: "card_checkout",

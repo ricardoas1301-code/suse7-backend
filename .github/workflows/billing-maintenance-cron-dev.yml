@@ -1,11 +1,13 @@
 name: Billing Maintenance Cron (DEV)
 
-# Contrato DEV:
+# Contrato DEV (S1.HF.6.9A.13):
 #   POST secrets.DEV_BILLING_PROCESS_PERIOD_EXPIRATIONS_JOB_URL
-#   POST secrets.DEV_BILLING_PROCESS_OVERDUES_JOB_URL
-#   POST secrets.DEV_BILLING_PROCESS_RENEWALS_JOB_URL (ou /api/jobs/billing-renewal-engine)
+#   POST secrets.DEV_BILLING_PROCESS_RENEWALS_JOB_URL (billing-renewal-engine — carência 10d / D11)
 #   Header X-Job-Secret: secrets.DEV_JOB_SECRET
 #   Body opcional: {"limit":50}
+#
+# REMOVIDO do scheduler: billing-process-overdues (dunning legado 3d).
+# Endpoint permanece no-op no código para rollback; não deve ser reagendado.
 
 on:
   schedule:
@@ -17,23 +19,22 @@ jobs:
     runs-on: ubuntu-latest
     env:
       PERIOD_JOB_URL: ${{ secrets.DEV_BILLING_PROCESS_PERIOD_EXPIRATIONS_JOB_URL }}
-      OVERDUES_JOB_URL: ${{ secrets.DEV_BILLING_PROCESS_OVERDUES_JOB_URL }}
       RENEWALS_JOB_URL: ${{ secrets.DEV_BILLING_PROCESS_RENEWALS_JOB_URL }}
       JOB_SECRET: ${{ secrets.DEV_JOB_SECRET }}
     steps:
-      - name: Trigger DEV billing maintenance jobs
+      - name: Trigger DEV billing maintenance jobs (no legacy overdues)
         run: |
           set -euo pipefail
-          if [ -z "${PERIOD_JOB_URL}" ] || [ -z "${OVERDUES_JOB_URL}" ] || [ -z "${RENEWALS_JOB_URL}" ] || [ -z "${JOB_SECRET}" ]; then
+          if [ -z "${PERIOD_JOB_URL}" ] || [ -z "${RENEWALS_JOB_URL}" ] || [ -z "${JOB_SECRET}" ]; then
             echo "::error::Missing DEV billing cron secrets (URLs and/or DEV_JOB_SECRET)"
             exit 1
           fi
 
-          for job_name in period-expirations overdues renewals; do
+          echo "[billing-cron-dev] legacy overdues scheduler DISABLED (S1.HF.6.9A.13)"
+
+          for job_name in period-expirations renewals; do
             if [ "${job_name}" = "period-expirations" ]; then
               url="${PERIOD_JOB_URL}"
-            elif [ "${job_name}" = "overdues" ]; then
-              url="${OVERDUES_JOB_URL}"
             else
               url="${RENEWALS_JOB_URL}"
             fi

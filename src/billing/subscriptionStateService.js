@@ -5,10 +5,12 @@
 import { decimalToScale2String, toDecimal } from "./utils/moneyDecimal.js";
 import { logBilling, logBillingError } from "./billingLog.js";
 import { SUBSCRIPTION_STATUS } from "./billingConstants.js";
-import { derivePeriodEndFromNextBilling, startOfUtcDay } from "./services/billingCycleService.js";
 import { applyPaymentOverdueDelinquency } from "./services/billingDunningService.js";
-import { activateSubscriptionFromPaidPayment } from "./services/billingSubscriptionActivationService.js";
+import { confirmCanonicalSubscriptionPayment } from "./services/billingConfirmCanonicalSubscriptionPaymentService.js";
+import { classifyFinancialPaymentEvent } from "./services/billingFinancialEventClassificationService.js";
+import { loadCanonicalBillableSubscriptionContext } from "./services/billingCanonicalSubscriptionService.js";
 import { emitAsaasWebhookPhase30Signals } from "./services/billingAsaasWebhookTimelineService.js";
+
 /**
  * @param {unknown} value
  * @returns {string | null}
@@ -22,7 +24,9 @@ function asTrimmedString(value) {
  * @returns {Record<string, unknown> | null}
  */
 function asObject(value) {
-  return value && typeof value === "object" && !Array.isArray(value) ? /** @type {Record<string, unknown>} */ (value) : null;
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? /** @type {Record<string, unknown>} */ (value)
+    : null;
 }
 
 /**
@@ -62,21 +66,6 @@ function parseAsaasDate(value) {
 function parseAsaasDateOnly(value) {
   const iso = parseAsaasDate(value);
   return iso ? iso.slice(0, 10) : null;
-}
-
-/**
- * @param {string | null} nextDueDate
- * @param {unknown} periodStartSource
- */
-function buildConfirmedSubscriptionPeriodPatch(nextDueDate, periodStartSource) {
-  const nextDue = parseAsaasDateOnly(nextDueDate);
-  const periodStart = periodStartSource ? startOfUtcDay(periodStartSource) : null;
-  const periodEnd = nextDue ? derivePeriodEndFromNextBilling(nextDue) : null;
-  return {
-    ...(nextDue ? { next_due_date: nextDue } : {}),
-    ...(periodStart ? { current_period_start: periodStart.toISOString() } : {}),
-    ...(periodEnd ? { current_period_end: periodEnd.toISOString() } : {}),
-  };
 }
 
 /**
@@ -295,25 +284,53 @@ export async function applyAsaasWebhookEvent(supabase, norm, webhookCtx = {}) {
       parseAsaasDate(norm.payment.confirmedDate) ||
       parseAsaasDate(norm.payment.clientPaymentDate) ||
       parseAsaasDate(norm.payment.paymentDate);
+    const remotePayStatus = asTrimmedString(norm.payment.status);
+    const classification = classifyFinancialPaymentEvent(norm.eventType, remotePayStatus);
+
     switch (norm.eventType) {
       case "PAYMENT_RECEIVED":
       case "PAYMENT_CONFIRMED": {
-        await activateSubscriptionFromPaidPayment(supabase, {
+        if (!userId) {
+          logBilling("webhook", "payment_confirm_missing_user", {
+            payment_id: norm.paymentId,
+            event_type: norm.eventType,
+          });
+          break;
+        }
+        // Preferir assinatura canônica do seller — não a mais recente do provider.
+        const canonicalCtx = await loadCanonicalBillableSubscriptionContext(supabase, userId);
+        const confirmResult = await confirmCanonicalSubscriptionPayment(supabase, {
           userId,
-          subscriptionId,
-          providerSubscriptionId: subAsaas,
+          linkedSubscriptionId: subscriptionId,
+          canonicalSubscriptionId: canonicalCtx.canonicalSubscriptionId,
+          provider: "asaas",
           providerPaymentId: norm.paymentId,
+          providerEventId: webhookCtx.providerEventId ?? norm.providerEventId ?? null,
+          eventType: norm.eventType,
+          paymentStatus: remotePayStatus ?? "CONFIRMED",
           nextDueDate,
           paidAt: paidAt || new Date().toISOString(),
+          rawPayload: norm.payment,
           source: `webhook:${norm.eventType}`,
         });
+        if (confirmResult.reconcile_only || confirmResult.error === "SUBSCRIPTION_NOT_CANONICAL") {
+          logBilling("webhook", "PAID_NON_CANONICAL_PAYMENT_RECONCILED", {
+            payment_id: norm.paymentId,
+            user_id: userId,
+            linked_subscription_id: subscriptionId,
+            canonical_subscription_id: canonicalCtx.canonicalSubscriptionId,
+          });
+        }
         break;
       }
       case "PAYMENT_OVERDUE": {
+        // S1.HF.6.9A.12A — não inicia carência de 3 dias; só sinaliza (10d no renewal engine).
         await applyPaymentOverdueDelinquency(supabase, {
           providerSubscriptionId: subAsaas,
           paymentId: norm.paymentId,
           nextDueDate,
+          userId,
+          subscriptionId,
         });
         break;
       }
@@ -326,7 +343,8 @@ export async function applyAsaasWebhookEvent(supabase, norm, webhookCtx = {}) {
       case "PAYMENT_CREATED":
       case "PAYMENT_UPDATED":
       default:
-        if (nextDueDate) {
+        // Pendente: projeção visual apenas — nunca quita / reativa / avança período.
+        if (!classification.may_quit_competence && nextDueDate) {
           await updateSubscriptionByProviderId(supabase, subAsaas, { next_due_date: nextDueDate });
         }
         break;

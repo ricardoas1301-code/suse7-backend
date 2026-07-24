@@ -2,6 +2,7 @@
 // POST /api/billing/renewals/:renewal_cycle_id/pay
 // ======================================================================
 
+import { logBilling } from "../billingLog.js";
 import { RENEWAL_STATUS } from "../billingConstants.js";
 import { getRenewalCycleForUser } from "./billingRenewalCycleRepository.js";
 import { getActivePlanById } from "./billingPlanRepository.js";
@@ -10,7 +11,18 @@ import { fetchPixCheckoutPayload } from "./billingPixCheckoutService.js";
 import { fetchBoletoCheckoutPayload } from "./billingBoletoCheckoutService.js";
 import { mapCheckoutStartResponse } from "./billingCheckoutResponse.js";
 import { normalizeCheckoutPaymentMethod } from "./billingSubscriptionService.js";
+import { loadCanonicalBillableSubscriptionContext } from "./billingCanonicalSubscriptionService.js";
+import { resolveRenewalChargeDueDatePolicy } from "./billingPaymentDueDatePolicy.js";
+import { findExistingRenewalCyclePayment } from "./billingRenewalIdempotencyService.js";
+import {
+  applyRecurringCardPreferenceAfterConfirmedPayment,
+  recordRenewalRecurringConsent,
+  RECURRING_CONSENT_RULE_VERSION,
+} from "./billingRenewalRecurringConsentService.js";
+import { updateRenewalCycle } from "./billingRenewalCycleRepository.js";
+
 const PAYABLE_CYCLE_STATUSES = new Set([
+  RENEWAL_STATUS.SCHEDULED,
   RENEWAL_STATUS.PRE_RENEWAL,
   RENEWAL_STATUS.PENDING_PAYMENT,
   RENEWAL_STATUS.PAYMENT_FAILED,
@@ -93,6 +105,8 @@ async function buildCheckoutFromExistingRenewalPayment(
  *   remoteIp?: string | null;
  *   paymentMethodId?: string | null;
  *   card?: Record<string, unknown> | null;
+ *   recurringConsent?: boolean;
+ *   correlationId?: string | null;
  * }} ctx
  */
 export async function payRenewalCycle(ctx) {
@@ -122,6 +136,13 @@ export async function payRenewalCycle(ctx) {
     throw err;
   }
 
+  const { canonicalSubscriptionId } = await loadCanonicalBillableSubscriptionContext(ctx.supabase, ctx.user.id);
+  if (canonicalSubscriptionId && String(subscription.id) !== canonicalSubscriptionId) {
+    const err = new Error("RENEWAL_CYCLE_NOT_PAYABLE");
+    /** @type {any} */ (err).code = "RENEWAL_CYCLE_NOT_PAYABLE";
+    throw err;
+  }
+
   const plan = await getActivePlanById(ctx.supabase, String(subscription.plan_id));
   if (!plan?.id) {
     const err = new Error("PLAN_NOT_FOUND");
@@ -137,7 +158,27 @@ export async function payRenewalCycle(ctx) {
 
   const paymentMethod = normalizeCheckoutPaymentMethod(ctx.paymentMethod);
 
+  if (paymentMethod === "CREDIT_CARD" && ctx.recurringConsent !== true) {
+    const err = new Error("RECURRING_CONSENT_REQUIRED");
+    /** @type {any} */ (err).code = "RECURRING_CONSENT_REQUIRED";
+    throw err;
+  }
+
+  logBilling("billing", "BILLING_RENEWAL_PAYMENT_REQUESTED", {
+    user_id: ctx.user.id,
+    renewal_cycle_id: String(cycle.id),
+    subscription_id: String(subscription.id),
+    payment_method: paymentMethod,
+    renewal_status: String(cycle.renewal_status),
+  });
+
   if (cycle.generated_payment_id) {
+    logBilling("billing", "BILLING_RENEWAL_PAYMENT_REUSED", {
+      user_id: ctx.user.id,
+      renewal_cycle_id: String(cycle.id),
+      generated_payment_id: String(cycle.generated_payment_id),
+      payment_method: paymentMethod,
+    });
     return buildCheckoutFromExistingRenewalPayment(
       ctx.supabase,
       /** @type {Record<string, unknown>} */ (cycle),
@@ -148,7 +189,47 @@ export async function payRenewalCycle(ctx) {
     );
   }
 
-  const dueDateIso = new Date().toISOString().slice(0, 10);
+  const duePolicy = resolveRenewalChargeDueDatePolicy({
+    cycleDueDate: cycle.renewal_due_date ?? subscription.next_due_date,
+    paymentMethod,
+  });
+  const dueDateIso = duePolicy.due_date ?? new Date().toISOString().slice(0, 10);
+  const cycleStart = String(cycle.cycle_start).slice(0, 10);
+
+  const existingPayment = await findExistingRenewalCyclePayment(ctx.supabase, {
+    userId: ctx.user.id,
+    subscriptionId: String(subscription.id),
+    planId: String(plan.id),
+    billingCycleStart: cycleStart,
+    paymentMethod,
+  });
+
+  if (existingPayment?.payment?.id) {
+    if (!cycle.generated_payment_id) {
+      await updateRenewalCycle(ctx.supabase, String(cycle.id), {
+        generated_payment_id: existingPayment.payment.id,
+        provider_payment_id: existingPayment.payment.provider_payment_id ?? null,
+      });
+    }
+    logBilling("billing", "BILLING_RENEWAL_PAYMENT_IDEMPOTENCY_HIT", {
+      user_id: ctx.user.id,
+      renewal_cycle_id: String(cycle.id),
+      payment_id: String(existingPayment.payment.id),
+      idempotency_key: existingPayment.idempotency_key,
+      payment_method: paymentMethod,
+    });
+    return buildCheckoutFromExistingRenewalPayment(
+      ctx.supabase,
+      {
+        ...cycle,
+        generated_payment_id: existingPayment.payment.id,
+      },
+      plan,
+      /** @type {Record<string, unknown>} */ (subscription),
+      paymentMethod,
+      ctx.providerApi
+    );
+  }
 
   const created = await createRenewalCyclePayment(
     ctx.supabase,
@@ -163,8 +244,29 @@ export async function payRenewalCycle(ctx) {
       paymentMethodId: ctx.paymentMethodId,
       card: ctx.card,
       source: "renewal_pay",
+      recurringConsent: ctx.recurringConsent === true,
+      correlationId: ctx.correlationId ?? null,
+      consentRuleVersion: RECURRING_CONSENT_RULE_VERSION,
     }
   );
+
+  if (paymentMethod === "CREDIT_CARD" && ctx.recurringConsent === true) {
+    await recordRenewalRecurringConsent(ctx.supabase, {
+      userId: ctx.user.id,
+      subscriptionId: String(subscription.id),
+      renewalCycleId: String(cycle.id),
+      paymentMethodId: ctx.paymentMethodId ?? null,
+      correlationId: ctx.correlationId ?? null,
+    });
+  }
+
+  if (paymentMethod === "CREDIT_CARD" && created.confirmed && ctx.recurringConsent === true) {
+    await applyRecurringCardPreferenceAfterConfirmedPayment(ctx.supabase, String(subscription.id), {
+      paymentMethod: "CREDIT_CARD",
+      paymentMethodId: ctx.paymentMethodId ?? null,
+      correlationId: ctx.correlationId ?? null,
+    });
+  }
 
   const mapped = mapCheckoutStartResponse(
     {
@@ -188,6 +290,15 @@ export async function payRenewalCycle(ctx) {
   if (paymentMethod === "CREDIT_CARD" && created.confirmed) {
     mapped.kind = "paid";
   }
+
+  logBilling("billing", "BILLING_RENEWAL_PAYMENT_CREATED", {
+    user_id: ctx.user.id,
+    renewal_cycle_id: String(cycle.id),
+    payment_id: created.payment?.id ?? null,
+    provider_payment_id: created.payment?.provider_payment_id ?? null,
+    payment_method: paymentMethod,
+    reused_existing_payment: false,
+  });
 
   return {
     renewal_cycle_id: String(cycle.id),

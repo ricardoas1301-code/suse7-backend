@@ -68,7 +68,7 @@ export async function resolvePendingRenewalPresentation(supabase, userId, active
 
 
 
-  const strategyInfo = await resolveRenewalStrategyForSubscription(supabase, activeSubscription);
+  const strategyInfo = await resolveRenewalStrategyForSubscription(supabase, activeSubscription, { userId });
 
   const notice = await computeRenewalNotice(
 

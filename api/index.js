@@ -302,6 +302,7 @@ export default async function handler(req, res) {
 
     // ------------------------------
     // Billing — cedo no router (path + pathNorm + rawUrl; evita 404 se divergir normalização)
+    // Preview (Opção B / 6.9A.13A): bloqueia mutações financeiras no escopo Preview do projeto DEV.
     // ------------------------------
     if (
       pathNorm.startsWith("/api/billing") ||
@@ -314,6 +315,18 @@ export default async function handler(req, res) {
         String(pathNorm && pathNorm !== "/" ? pathNorm : path || "")
           .replace(/\/+$/, "")
           .replace(/\/{2,}/g, "/") || "/";
+      const method = String(req.method || "GET").toUpperCase();
+      const isReadOnlyBilling =
+        method === "GET" || method === "HEAD" || method === "OPTIONS";
+      if (!isReadOnlyBilling) {
+        const { isBillingPreviewMutationsBlocked, billingPreviewBlockedPayload } = await import(
+          "../src/billing/services/billingPreviewRuntimeGuard.js"
+        );
+        if (isBillingPreviewMutationsBlocked()) {
+          console.warn("[S7_BILLING] BILLING_PREVIEW_MUTATIONS_BLOCKED", { path: billingPath, method });
+          return res.status(403).json(billingPreviewBlockedPayload(billingPath));
+        }
+      }
       const mod = await import("../src/billing/routes/billingRoutes.js");
       return mod.handleBillingRoutes(req, res, billingPath);
     }
@@ -486,6 +499,18 @@ export default async function handler(req, res) {
       const mod = await import("../src/handlers/ml/listingsHealthBackfill.js");
       return await mod.default(req, res);
     }
+    if (path === "/api/ml/backfill-listing-quality") {
+      const mod = await import("../src/handlers/ml/listingsListingQualityBackfill.js");
+      return await mod.default(req, res);
+    }
+    if (path === "/api/ml/listings/accumulated-performance" && req.method === "GET") {
+      const mod = await import("../src/handlers/ml/listingAccumulatedPerformance.js");
+      return await mod.default(req, res);
+    }
+    if (path === "/api/ml/listings/catalog-pricing-health-buckets" && req.method === "GET") {
+      const mod = await import("../src/handlers/ml/catalogPricingHealthBuckets.js");
+      return mod.handleMlListingsCatalogPricingHealthBuckets(req, res);
+    }
     if (path === "/api/ml/listings") {
       const mod = await import("../src/handlers/ml/listingsList.js");
       return await mod.default(req, res);
@@ -574,8 +599,16 @@ export default async function handler(req, res) {
       const mod = await import("../src/handlers/sales/executiveSummary.js");
       return mod.default(req, res);
     }
+    if (path === "/api/sales/top10" && req.method === "GET") {
+      const mod = await import("../src/handlers/sales/top10.js");
+      return mod.default(req, res);
+    }
     if (path === "/api/sales/summary" && req.method === "GET") {
       const mod = await import("../src/handlers/sales/summary.js");
+      return mod.default(req, res);
+    }
+    if (path === "/api/dev/billing/entitlement-unclassified-probe" && req.method === "GET") {
+      const mod = await import("../src/handlers/dev/billingEntitlementUnclassifiedProbe.js");
       return mod.default(req, res);
     }
     if (
@@ -615,6 +648,14 @@ export default async function handler(req, res) {
       const mod = await import("../src/handlers/products/health.js");
       return mod.handleProductsHealth(req, res);
     }
+    if (path === "/api/products/costs/pending") {
+      const mod = await import("../src/handlers/products/costsPendingList.js");
+      return mod.handleProductsCostsPendingList(req, res);
+    }
+    if (path === "/api/products/costs/batch") {
+      const mod = await import("../src/handlers/products/costsBatchSave.js");
+      return mod.handleProductsCostsBatchSave(req, res);
+    }
     if (path === "/api/products/upsert") {
       const mod = await import("../src/handlers/products/upsert.js");
       return mod.handleProductsUpsert(req, res);
@@ -643,6 +684,10 @@ export default async function handler(req, res) {
       const mod = await import("../src/handlers/products/catalogFinancial.js");
       return mod.handleProductsCatalogFinancial(req, res);
     }
+    if (path === "/api/products/catalog-health-buckets") {
+      const mod = await import("../src/handlers/products/catalogHealthBuckets.js");
+      return mod.handleProductsCatalogHealthBuckets(req, res);
+    }
     if (path === "/api/dashboard/products-health-summary" && req.method === "GET") {
       const mod = await import("../src/handlers/dashboard/productsHealthSummary.js");
       return mod.handleDashboardProductsHealthSummary(req, res);
@@ -658,6 +703,10 @@ export default async function handler(req, res) {
     if (path === "/api/dashboard/pricing-health-summary" && req.method === "GET") {
       const mod = await import("../src/handlers/dashboard/pricingHealthSummary.js");
       return mod.handleDashboardPricingHealthSummary(req, res);
+    }
+    if (path === "/api/dashboard/operational-tasks" && req.method === "GET") {
+      const mod = await import("../src/handlers/dashboard/operationalTasks.js");
+      return mod.handleDashboardOperationalTasks(req, res);
     }
     if (/^\/api\/products\/[^/]+\/images\/sync-listings\/?$/.test(path)) {
       const mod = await import("../src/handlers/products/productImageSync.js");
@@ -691,6 +740,25 @@ export default async function handler(req, res) {
       const mod = await import("../src/handlers/jobs/pricingCurrentStateBackfillJob.js");
       return mod.handleJobsPricingCurrentStateBackfill(req, res);
     }
+    if (
+      path === "/api/jobs/billing-process-period-expirations" ||
+      path === "/api/jobs/billing-process-overdues" ||
+      path === "/api/jobs/billing-process-renewals" ||
+      path === "/api/jobs/billing-renewal-engine" ||
+      path === "/api/jobs/billing-consistency-check" ||
+      path === "/api/jobs/billing-billable-sale-admission-reconciler" ||
+      path === "/jobs/billing-billable-sale-admission-reconciler" ||
+      path === "/api/jobs/billing-trial-lifecycle-reconciler" ||
+      path === "/jobs/billing-trial-lifecycle-reconciler"
+    ) {
+      const { isBillingPreviewMutationsBlocked, billingPreviewBlockedPayload } = await import(
+        "../src/billing/services/billingPreviewRuntimeGuard.js"
+      );
+      if (isBillingPreviewMutationsBlocked()) {
+        console.warn("[S7_BILLING] BILLING_PREVIEW_MUTATIONS_BLOCKED", { path });
+        return res.status(403).json(billingPreviewBlockedPayload(path));
+      }
+    }
     if (path === "/api/jobs/billing-process-period-expirations") {
       const mod = await import("../src/handlers/jobs/billingPeriodExpirationsJob.js");
       return mod.handleJobsBillingProcessPeriodExpirations(req, res);
@@ -710,6 +778,20 @@ export default async function handler(req, res) {
     if (path === "/api/jobs/billing-consistency-check") {
       const mod = await import("../src/handlers/jobs/billingConsistencyCheckJob.js");
       return mod.handleJobsBillingConsistencyCheck(req, res);
+    }
+    if (
+      path === "/api/jobs/billing-billable-sale-admission-reconciler" ||
+      path === "/jobs/billing-billable-sale-admission-reconciler"
+    ) {
+      const mod = await import("../src/handlers/jobs/billingBillableSaleAdmissionReconcilerJob.js");
+      return mod.default(req, res);
+    }
+    if (
+      path === "/api/jobs/billing-trial-lifecycle-reconciler" ||
+      path === "/jobs/billing-trial-lifecycle-reconciler"
+    ) {
+      const mod = await import("../src/handlers/jobs/billingTrialLifecycleReconcilerJob.js");
+      return mod.default(req, res);
     }
     if (path === "/api/images/seo-rename") {
       const mod = await import("../src/handlers/images/seoRename.js");

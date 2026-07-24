@@ -8,6 +8,10 @@ import {
   normalizePersistedCardType,
   supportsAutoRenewFromPaymentMethodRow,
 } from "../utils/billingCardType.js";
+import {
+  buildPaymentMethodAlreadyExistsError,
+  isPaymentMethodUniqueViolation,
+} from "./billingPaymentMethodIdentity.js";
 
 /**
  * @typedef {{
@@ -134,6 +138,38 @@ export async function getSellerPaymentMethodById(supabase, userId, methodId) {
 /**
  * @param {import("@supabase/supabase-js").SupabaseClient} supabase
  * @param {string} userId
+ * @param {string} gateway
+ * @param {string} gatewayPaymentMethodId
+ */
+export async function findActiveSellerPaymentMethodByGatewayToken(
+  supabase,
+  userId,
+  gateway,
+  gatewayPaymentMethodId
+) {
+  const token = String(gatewayPaymentMethodId || "").trim();
+  if (!token) return null;
+
+  const { data, error } = await supabase
+    .from("billing_payment_methods")
+    .select("id, gateway_payment_method_id, status")
+    .eq("user_id", userId)
+    .eq("gateway", gateway)
+    .eq("gateway_payment_method_id", token)
+    .neq("status", "INACTIVE")
+    .maybeSingle();
+
+  if (error) {
+    if (isMissingRelationError(error)) return null;
+    throw error;
+  }
+
+  return data;
+}
+
+/**
+ * @param {import("@supabase/supabase-js").SupabaseClient} supabase
+ * @param {string} userId
  */
 async function clearDefaultPaymentMethods(supabase, userId) {
   const { error } = await supabase
@@ -163,6 +199,20 @@ async function clearDefaultPaymentMethods(supabase, userId) {
 export async function insertSellerCardPaymentMethod(supabase, input) {
   const cardType = normalizePersistedCardType(input.cardType);
   const supportsAutoRenew = cardType === "CREDIT";
+  const gateway = "asaas";
+  const gatewayToken = String(input.gatewayPaymentMethodId || "").trim();
+
+  if (gatewayToken) {
+    const existing = await findActiveSellerPaymentMethodByGatewayToken(
+      supabase,
+      input.userId,
+      gateway,
+      gatewayToken
+    );
+    if (existing) {
+      throw buildPaymentMethodAlreadyExistsError();
+    }
+  }
 
   if (input.setDefault) {
     await clearDefaultPaymentMethods(supabase, input.userId);
@@ -191,7 +241,12 @@ export async function insertSellerCardPaymentMethod(supabase, input) {
   };
 
   const { data, error } = await supabase.from("billing_payment_methods").insert(row).select("*").single();
-  if (error) throw error;
+  if (error) {
+    if (isPaymentMethodUniqueViolation(error)) {
+      throw buildPaymentMethodAlreadyExistsError();
+    }
+    throw error;
+  }
   return mapPaymentMethodRow(/** @type {Record<string, unknown>} */ (data));
 }
 

@@ -12,6 +12,7 @@ import {
   resolveScheduledDowngradeTargetPlan,
 } from "./billingScheduledDowngradeApplicationService.js";
 import { activateOrCreateInternalBabySubscription } from "./internalBabyPlanService.js";
+import { processScheduledSubscriptionRenewalActivations } from "./billingScheduledRenewalActivationService.js";
 
 const ELIGIBLE_STATUSES = new Set([SUBSCRIPTION_STATUS.ACTIVE, SUBSCRIPTION_STATUS.PAST_DUE, SUBSCRIPTION_STATUS.PENDING]);
 
@@ -296,6 +297,13 @@ async function processSinglePeriodExpiration(supabase, paidSubscription, now) {
  */
 export async function processBillingPeriodExpirations(supabase, options = {}) {
   const now = options.now instanceof Date ? options.now : new Date();
+
+  const scheduledRenewalActivations = await processScheduledSubscriptionRenewalActivations(supabase, {
+    now,
+    limit: options.limit,
+    source: "period_expiration_job",
+  });
+
   const dueRows = await listDuePeriodExpirations(supabase, now);
   const limit = Number.isFinite(Number(options.limit)) ? Math.max(1, Number(options.limit)) : dueRows.length;
   const selected = dueRows.slice(0, limit);
@@ -320,6 +328,7 @@ export async function processBillingPeriodExpirations(supabase, options = {}) {
   }
 
   return {
+    scheduled_renewal_activations: scheduledRenewalActivations,
     scanned: dueRows.length,
     selected: selected.length,
     processed_count: processed.length,

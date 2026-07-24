@@ -13,6 +13,7 @@ import {
   inferShipmentIdFromMlWebhook,
 } from "../../../../handlers/ml/_helpers/mlWebhookPayload.js";
 import { syncMercadoLivreSingleOrderByAccountId } from "../sales/mlSalesSyncService.js";
+import { handleHardPausedWebhookAck } from "../../../../billing/services/billingEntitlementSyncGuard.js";
 
 /**
  * @param {import("@supabase/supabase-js").SupabaseClient} supabase
@@ -195,6 +196,19 @@ export async function processOneMlWebhookEvent(supabase, row) {
   if (!row.marketplace_account_id) {
     console.warn("[S7_ML_WEBHOOK] skip_no_account", { id });
     return { ok: false, reason: "no_marketplace_account" };
+  }
+
+  const acc = await loadAccountUserId(supabase, String(row.marketplace_account_id));
+  if (acc?.user_id) {
+    const paused = await handleHardPausedWebhookAck(supabase, {
+      userId: acc.user_id,
+      marketplace: "mercadolivre",
+      marketplaceAccountId: String(row.marketplace_account_id),
+    });
+    if (paused.hard_paused) {
+      log("hard_paused_ack", { user_id: acc.user_id });
+      return { ok: true, hard_paused: true, acknowledged: true };
+    }
   }
 
   if (t.includes("shipment")) {

@@ -18,6 +18,8 @@ import {
 
 import { daysUntilRenewalDueSimulated } from "./billingRenewalTestTime.js";
 
+import { resolveCanonicalBillableSubscription } from "./billingCanonicalSubscriptionService.js";
+
 
 
 /**
@@ -262,36 +264,37 @@ export async function listSubscriptionsApproachingRenewal(supabase, options = {}
 
   if (error) throw error;
 
-
+  /** @type {Map<string, Record<string, unknown>[]>} */
+  const rowsByUser = new Map();
+  for (const row of data ?? []) {
+    const userId = row.user_id != null ? String(row.user_id) : "";
+    if (!userId) continue;
+    const bucket = rowsByUser.get(userId) ?? [];
+    bucket.push(/** @type {Record<string, unknown>} */ (row));
+    rowsByUser.set(userId, bucket);
+  }
 
   /** @type {Record<string, unknown>[]} */
+  const canonicalCandidates = [];
+  for (const userRows of rowsByUser.values()) {
+    const canonical = resolveCanonicalBillableSubscription(userRows);
+    if (canonical) canonicalCandidates.push(canonical);
+  }
 
+  /** @type {Record<string, unknown>[]} */
   const rows = [];
-
-  for (const row of data ?? []) {
-
+  for (const row of canonicalCandidates) {
     const due =
-
       row.current_period_end != null
-
         ? new Date(String(row.current_period_end)).getTime()
-
         : row.next_due_date != null
-
           ? new Date(`${String(row.next_due_date)}T12:00:00.000Z`).getTime()
-
           : null;
-
     if (due == null || Number.isNaN(due)) continue;
-
     if (due <= horizonMs || due >= gracePastMs) {
-
-      rows.push(/** @type {Record<string, unknown>} */ (row));
-
+      rows.push(row);
     }
-
     if (rows.length >= limit) break;
-
   }
 
   return rows;

@@ -11,6 +11,8 @@ import {
   startOfUtcDay,
 } from "./billingCycleService.js";
 import { summarizeSubscriptionRow } from "./billingSubscriptionQueryService.js";
+import { supersedeOpenRenewalCyclesExcept } from "./billingCanonicalSubscriptionService.js";
+import { completeSubscriptionRenewalFromPaidPayment } from "./billingSubscriptionRenewalCompletionService.js";
 
 const SUBSCRIPTION_SELECT =
   "id, user_id, plan_id, plan_key, provider, provider_subscription_id, status, current_period_start, current_period_end, next_due_date, metadata, created_at";
@@ -64,6 +66,8 @@ export async function deactivateSupersededSubscriptionsExcept(supabase, userId, 
     .in("status", SUBSCRIPTION_STATUS_SUPERSEDED);
 
   if (error) throw error;
+
+  await supersedeOpenRenewalCyclesExcept(supabase, userId, keepSubscriptionId);
 
   logBilling("billing", "[S7_BILLING_DEACTIVATE_PREVIOUS_DONE]", {
     user_id: userId,
@@ -227,9 +231,25 @@ async function backfillPaymentSubscriptionLink(supabase, paymentRowId, subscript
  *   nextDueDate?: string | null;
  *   paidAt?: string | null;
  *   source?: string;
+ *   viaCanonicalFacade?: boolean;
  * }} ctx
  */
 export async function activateSubscriptionFromPaidPayment(supabase, ctx) {
+  // S1.HF.6.9A.12A — escrita de ciclo/entitlement só via fachada canônica.
+  if (ctx.viaCanonicalFacade !== true) {
+    logBilling("billing", "ACTIVATE_REQUIRES_CANONICAL_FACADE", {
+      source: ctx.source ?? "unknown",
+      payment_id: ctx.paymentId ?? null,
+      provider_payment_id: ctx.providerPaymentId ?? null,
+      subscription_id: ctx.subscriptionId ?? null,
+    });
+    return {
+      activated: false,
+      reason: "ACTIVATE_REQUIRES_CANONICAL_FACADE",
+      require_confirm_canonical_subscription_payment: true,
+    };
+  }
+
   const source = ctx.source ?? "unknown";
   logBilling("billing", "[S7_BILLING_ACTIVATE_SUBSCRIPTION_START]", {
     source,
@@ -298,6 +318,14 @@ export async function activateSubscriptionFromPaidPayment(supabase, ctx) {
       .eq("provider", "asaas")
       .eq("provider_payment_id", String(ctx.providerPaymentId));
   }
+
+  const paymentRowForRenewal =
+    paymentRow ??
+    (await loadBillingPaymentRow(supabase, {
+      paymentId: ctx.paymentId,
+      providerPaymentId: ctx.providerPaymentId,
+      userId,
+    }));
 
   logBilling("billing", "[S7_BILLING_PAYMENT_CONFIRMED]", {
     user_id: subscriptionUserId,
@@ -373,18 +401,49 @@ export async function activateSubscriptionFromPaidPayment(supabase, ctx) {
   await cancelStalePendingCheckoutsExcept(supabase, subscriptionUserId, subscriptionId);
   await deactivateSupersededSubscriptionsExcept(supabase, subscriptionUserId, subscriptionId);
 
+  let renewalResult = { renewed: false, reason: "skipped" };
+  try {
+    renewalResult = await completeSubscriptionRenewalFromPaidPayment(supabase, {
+      paymentRow:
+        paymentRowForRenewal ??
+        /** @type {Record<string, unknown>} */ ({
+          id: ctx.paymentId,
+          provider_payment_id: ctx.providerPaymentId,
+          subscription_id: subscriptionId,
+          amount: null,
+          status: "CONFIRMED",
+          raw_payload: {},
+          paid_at: paidAtIso,
+        }),
+      subscription,
+      paidAt: paidAtIso,
+      source,
+    });
+  } catch (renewalError) {
+    logBillingError("billing", "SUBSCRIPTION_RENEWAL_FAILED", renewalError, {
+      user_id: subscriptionUserId,
+      subscription_id: subscriptionId,
+      payment_id: paymentRow?.id ?? ctx.paymentId ?? null,
+      source,
+    });
+    throw renewalError;
+  }
+
   logBilling("billing", "[S7_BILLING_ACTIVATE_SUBSCRIPTION_DONE]", {
     user_id: subscriptionUserId,
     subscription_id: subscriptionId,
     plan_key: subscription.plan_key ?? null,
     was_already_active: alreadyActive,
     source,
+    subscription_renewed: Boolean(renewalResult.renewed),
+    renewal_mode: renewalResult.renewal_mode ?? null,
   });
 
   return {
     activated: !alreadyActive,
-    idempotent: alreadyActive,
+    idempotent: alreadyActive && !renewalResult.renewed,
     subscription_id: subscriptionId,
     user_id: subscriptionUserId,
+    renewal: renewalResult,
   };
 }

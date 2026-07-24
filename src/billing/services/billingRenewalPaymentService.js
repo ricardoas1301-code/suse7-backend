@@ -5,6 +5,11 @@
 import Decimal from "decimal.js";
 import { logBilling, logBillingError } from "../billingLog.js";
 import { RENEWAL_ENGINE_LOG, RENEWAL_STATUS } from "../billingConstants.js";
+import {
+  buildRenewalCycleAmountDuePatch,
+  resolveEffectiveRenewalPrice,
+  logEffectiveRenewalPriceResolved,
+} from "./billingEffectiveRenewalPriceService.js";
 import { decimalToScale2String, toDecimal } from "../utils/moneyDecimal.js";
 import { ensureBillingCustomerForUser } from "./billingCustomerService.js";
 import { getActivePlanById } from "./billingPlanRepository.js";
@@ -27,6 +32,10 @@ import { resolveSellerCreditCardToken } from "./billingCardPaymentMethodService.
  *   remoteIp?: string | null;
  *   paymentMethodId?: string | null;
  *   card?: Record<string, unknown> | null;
+ *   source?: string;
+ *   recurringConsent?: boolean;
+ *   correlationId?: string | null;
+ *   consentRuleVersion?: string | null;
  * }} options
  */
 export async function createRenewalCyclePayment(supabase, subscription, plan, cycle, providerApi, options) {
@@ -36,7 +45,18 @@ export async function createRenewalCyclePayment(supabase, subscription, plan, cy
   assertRenewalPlanMatchesActiveSubscription(subscription, planId);
 
   const paymentMethod = normalizeCheckoutPaymentMethod(options.paymentMethod);
-  const valueStr = decimalToScale2String(toDecimal(plan.price_monthly));
+  const priceResolution = await resolveEffectiveRenewalPrice(supabase, {
+    subscription,
+    openRenewalCycle: cycle,
+    plan,
+  });
+  logEffectiveRenewalPriceResolved(priceResolution, {
+    user_id: userId,
+    subscription_id: subscriptionId,
+    renewal_cycle_id: String(cycle.id),
+    context: "renewal_cycle_payment",
+  });
+  const valueStr = priceResolution.amount ?? decimalToScale2String(toDecimal(plan.price_monthly));
   if (new Decimal(valueStr).lte(0)) {
     const err = new Error("PLAN_PRICE_INVALID");
     /** @type {any} */ (err).code = "PLAN_PRICE_INVALID";
@@ -115,6 +135,14 @@ export async function createRenewalCyclePayment(supabase, subscription, plan, cy
       payment_method: paymentMethod,
       renewal_cycle_id: String(cycle.id),
       source: options.source ?? "renewal_engine",
+      ...(options.recurringConsent
+        ? {
+            recurring_consent: true,
+            recurring_consent_rule_version: options.consentRuleVersion ?? null,
+            recurring_consent_correlation_id: options.correlationId ?? null,
+            payment_method_id: options.paymentMethodId ?? null,
+          }
+        : {}),
     },
     paid_at: confirmed ? new Date().toISOString() : null,
     updated_at: new Date().toISOString(),
@@ -131,6 +159,11 @@ export async function createRenewalCyclePayment(supabase, subscription, plan, cy
     generated_payment_id: payment.id,
     provider_payment_id: providerPaymentId,
     renewal_status: confirmed ? RENEWAL_STATUS.PAID : RENEWAL_STATUS.PENDING_PAYMENT,
+    ...buildRenewalCycleAmountDuePatch(
+      cycle,
+      valueStr,
+      priceResolution.source ?? "plan_catalog"
+    ),
   });
 
   logBilling("billing", RENEWAL_ENGINE_LOG.PAYMENT_CREATED, {

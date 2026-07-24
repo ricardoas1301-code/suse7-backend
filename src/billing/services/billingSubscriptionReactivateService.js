@@ -8,6 +8,7 @@ import { resolveSubscriptionBillingCycle } from "./billingCycleService.js";
 import { resolveBillingAccess } from "./resolveBillingAccess.js";
 import {
   enrichSubscriptionCancellationFields,
+  findReactivatableSubscription,
   readSubscriptionCancellation,
 } from "./billingSubscriptionCancelService.js";
 
@@ -19,53 +20,88 @@ function asObject(value) {
 }
 
 /**
- * @param {unknown} value
+ * @param {string} code
+ * @param {string} message
  */
-function parseDate(value) {
-  if (value == null || value === "") return null;
-  const date = new Date(String(value));
-  return Number.isNaN(date.getTime()) ? null : date;
+function buildReactivateError(code, message) {
+  const err = new Error(message);
+  /** @type {any} */ (err).code = code;
+  return err;
 }
 
 /**
+ * Cancelamento ao fim do ciclo é registrado apenas no banco local (metadata).
+ * O provider Asaas permanece com assinatura ativa — não há chamada remota nesta reativação.
+ *
  * @param {import("@supabase/supabase-js").SupabaseClient} supabase
- * @param {string} userId
+ * @param {Record<string, unknown>} subscription
  */
-async function loadReactivatableSubscription(supabase, userId) {
-  const { data, error } = await supabase
-    .from("billing_subscriptions")
-    .select(
-      "id, user_id, plan_id, plan_key, provider, status, current_period_start, current_period_end, next_due_date, metadata, canceled_at"
-    )
-    .eq("user_id", userId)
-    .order("created_at", { ascending: false })
-    .limit(20);
-  if (error) throw error;
+async function assertProviderAllowsLocalReactivation(supabase, subscription) {
+  const provider = String(subscription.provider ?? "").toLowerCase();
+  if (provider !== "asaas") return;
 
-  const now = Date.now();
-  for (const row of data ?? []) {
-    const cancellation = readSubscriptionCancellation(row.metadata);
-    if (!cancellation.cancel_at_period_end) continue;
-    const periodEnd = parseDate(row.current_period_end);
-    if (periodEnd && periodEnd.getTime() <= now) continue;
-    return row;
-  }
-  return null;
+  const providerSubscriptionId = String(subscription.provider_subscription_id ?? "").trim();
+  if (!providerSubscriptionId) return;
+
+  // Cancelamento agendado no Suse7 não chama DELETE /subscriptions no Asaas.
+  // A assinatura remota segue ativa; basta limpar a programação local.
+  void supabase;
+  void providerSubscriptionId;
 }
 
 /**
  * @param {{
  *   supabase: import("@supabase/supabase-js").SupabaseClient;
  *   user: { id: string };
+ *   subscription: Record<string, unknown>;
+ *   kind?: string;
+ * }} ctx
+ */
+async function buildReactivationSnapshot(ctx, kind = "reactivated") {
+  const billing = await resolveBillingAccess(ctx.supabase, ctx.user.id, { ensureBaby: false });
+  const enriched = enrichSubscriptionCancellationFields(ctx.subscription);
+  return {
+    kind,
+    subscription: enriched,
+    access: billing.access,
+    can_access: billing.can_access,
+    current_period_start: billing.current_period_start ?? enriched.current_period_start ?? null,
+    current_period_end: billing.current_period_end ?? enriched.current_period_end ?? null,
+    next_billing_at: billing.next_billing_at ?? null,
+    cancel_at_period_end: false,
+  };
+}
+
+/**
+ * @param {{
+ *   supabase: import("@supabase/supabase-js").SupabaseClient;
+ *   user: { id: string };
+ *   subscriptionId?: string | null;
  * }} ctx
  */
 export async function reactivateSubscriptionCancellation(ctx) {
-  const subscription = await loadReactivatableSubscription(ctx.supabase, ctx.user.id);
-  if (!subscription) {
-    const err = new Error("REACTIVATION_NOT_AVAILABLE");
-    /** @type {any} */ (err).code = "REACTIVATION_NOT_AVAILABLE";
-    throw err;
+  const subscriptionId =
+    typeof ctx.subscriptionId === "string" && ctx.subscriptionId.trim() !== "" ? ctx.subscriptionId.trim() : null;
+
+  let found;
+  try {
+    found = await findReactivatableSubscription(ctx.supabase, ctx.user.id, subscriptionId);
+  } catch (error) {
+    throw error;
   }
+
+  if (!found) {
+    throw buildReactivateError("REACTIVATION_NOT_AVAILABLE", "Nenhuma assinatura elegível para reativação.");
+  }
+
+  const subscription = found.row;
+  const cancellation = readSubscriptionCancellation(subscription.metadata);
+
+  if (found.alreadyReactivated || cancellation.cancel_at_period_end !== true) {
+    return buildReactivationSnapshot({ supabase: ctx.supabase, user: ctx.user, subscription }, "already_reactivated");
+  }
+
+  await assertProviderAllowsLocalReactivation(ctx.supabase, subscription);
 
   const now = new Date();
   const cycle = resolveSubscriptionBillingCycle(subscription, now);
@@ -80,53 +116,52 @@ export async function reactivateSubscriptionCancellation(ctx) {
     .from("billing_subscriptions")
     .update({
       metadata,
-      current_period_start: subscription.current_period_start ?? cycle.current_period_start,
-      current_period_end: subscription.current_period_end ?? cycle.current_period_end,
+      current_period_start: cycle.current_period_start,
+      current_period_end: cycle.current_period_end,
+      next_due_date: cycle.next_billing_at.slice(0, 10),
       updated_at: now.toISOString(),
     })
     .eq("id", subscription.id)
     .eq("user_id", ctx.user.id)
     .select(
-      "id, plan_id, plan_key, provider, status, amount, currency, current_period_start, current_period_end, next_due_date, canceled_at, metadata, created_at, updated_at"
+      "id, plan_id, plan_key, provider, provider_subscription_id, status, amount, currency, current_period_start, current_period_end, next_due_date, canceled_at, metadata, created_at, updated_at"
     )
     .limit(1)
     .maybeSingle();
   if (error) throw error;
   if (!data) {
-    const err = new Error("SUBSCRIPTION_NOT_FOUND");
-    /** @type {any} */ (err).code = "SUBSCRIPTION_NOT_FOUND";
-    throw err;
+    throw buildReactivateError("SUBSCRIPTION_NOT_FOUND", "Não foi possível localizar esta assinatura.");
   }
 
-  try {
-    await recordBillingEvent(ctx.supabase, {
-      provider: "suse7",
-      providerEventId: `reactivated:${subscription.id}`,
-      eventType: "SUBSCRIPTION_REACTIVATED",
-      rawPayload: {
-        subscription_id: subscription.id,
-        user_id: ctx.user.id,
-        reactivated_at: metadata.reactivated_at,
-      },
-    });
-  } catch (eventError) {
+  const eventResult = await recordBillingEvent(ctx.supabase, {
+    provider: "suse7",
+    providerEventId: `reactivated:${subscription.id}`,
+    eventType: "SUBSCRIPTION_REACTIVATED",
+    rawPayload: {
+      subscription_id: subscription.id,
+      user_id: ctx.user.id,
+      reactivated_at: metadata.reactivated_at,
+    },
+  }).catch((eventError) => {
     logBillingError("billing", "subscription_reactivated_event_failed", eventError, {
       user_id: ctx.user.id,
       subscription_id: subscription.id,
     });
+    return { duplicate: false, eventId: null };
+  });
+
+  if (eventResult?.duplicate) {
+    logBilling("billing", "subscription_reactivate_idempotent", {
+      user_id: ctx.user.id,
+      subscription_id: subscription.id,
+    });
+    return buildReactivationSnapshot(
+      { supabase: ctx.supabase, user: ctx.user, subscription: data },
+      "already_reactivated",
+    );
   }
 
   logBilling("billing", "subscription_reactivated", { user_id: ctx.user.id, subscription_id: subscription.id });
 
-  const billing = await resolveBillingAccess(ctx.supabase, ctx.user.id, { ensureBaby: false });
-  return {
-    kind: "reactivated",
-    subscription: enrichSubscriptionCancellationFields(data),
-    access: billing.access,
-    can_access: billing.can_access,
-    current_period_start: billing.current_period_start ?? data.current_period_start ?? null,
-    current_period_end: billing.current_period_end ?? data.current_period_end ?? null,
-    next_billing_at: billing.next_billing_at ?? null,
-    cancel_at_period_end: false,
-  };
+  return buildReactivationSnapshot({ supabase: ctx.supabase, user: ctx.user, subscription: data }, "reactivated");
 }

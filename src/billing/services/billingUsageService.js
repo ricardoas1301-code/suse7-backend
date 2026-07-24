@@ -3,15 +3,24 @@
 // ======================================================================
 
 import { logBilling, logBillingError } from "../billingLog.js";
+import Decimal from "decimal.js";
 import { resolveSellerBillingCycle } from "./billingCycleService.js";
 import { getActivePlanById } from "./billingPlanRepository.js";
 import { buildDefaultMonthlySalesUsageResolution } from "./billingUsageFallback.js";
+import {
+  buildSellerSalesUsageBreakdowns,
+  countSellerEcosystemSalesUsage,
+  SUBSCRIPTION_USAGE_AGGREGATION_SCOPE,
+  SUBSCRIPTION_USAGE_UNIT,
+} from "./subscriptionUsageMeter.js";
+
+export {
+  SUBSCRIPTION_USAGE_AGGREGATION_SCOPE,
+  SUBSCRIPTION_USAGE_AGGREGATION_SCOPE as BILLING_USAGE_AGGREGATION_SCOPE,
+} from "./subscriptionUsageMeter.js";
+export const BILLING_USAGE_UNIT = SUBSCRIPTION_USAGE_UNIT;
 
 /** @typedef {"subscription_cycle"} BillingUsageWindowKind */
-export const BILLING_USAGE_AGGREGATION_SCOPE = "seller_ecosystem";
-
-const BREAKDOWN_PAGE_SIZE = 1000;
-const BREAKDOWN_MAX_PAGES = 20;
 /**
  * @param {import("@supabase/supabase-js").SupabaseClient} supabase
  * @param {string} planId
@@ -61,46 +70,6 @@ function isMissingRelationError(error) {
 }
 
 /**
- * @param {import("@supabase/supabase-js").SupabaseClient} supabase
- * @param {string} userId
- * @param {string} startIso
- * @param {string} endIso
- */
-async function listSalesOrderIdsInWindow(supabase, userId, startIso, endIso) {
-  const { data, error } = await supabase
-    .from("sales_orders")
-    .select("id")
-    .eq("user_id", userId)
-    .gte("date_created_marketplace", startIso)
-    .lte("date_created_marketplace", endIso)
-    .limit(5000);
-  if (error) {
-    if (isMissingRelationError(error)) return [];
-    throw error;
-  }
-  return (Array.isArray(data) ? data : []).map((row) => String(row.id)).filter(Boolean);
-}
-
-/**
- * @param {import("@supabase/supabase-js").SupabaseClient} supabase
- * @param {string} userId
- * @param {string[]} salesOrderIds
- */
-async function countSalesItemsForOrders(supabase, userId, salesOrderIds) {
-  if (salesOrderIds.length === 0) return 0;
-  const { count, error } = await supabase
-    .from("sales_order_items")
-    .select("id", { count: "exact", head: true })
-    .eq("user_id", userId)
-    .in("sales_order_id", salesOrderIds);
-  if (error) {
-    if (isMissingRelationError(error)) return 0;
-    throw error;
-  }
-  return Number(count ?? 0);
-}
-
-/**
  * Total mensal do ecossistema operacional do seller (todas as empresas, contas e marketplaces).
  *
  * @param {import("@supabase/supabase-js").SupabaseClient} supabase
@@ -108,10 +77,7 @@ async function countSalesItemsForOrders(supabase, userId, salesOrderIds) {
  * @param {{ period_start: string; period_end: string }} window
  */
 async function countSellerEcosystemSales(supabase, userId, window) {
-  const startIso = `${window.period_start}T00:00:00.000Z`;
-  const endIso = `${window.period_end}T23:59:59.999Z`;
-  const orderIds = await listSalesOrderIdsInWindow(supabase, userId, startIso, endIso);
-  return countSalesItemsForOrders(supabase, userId, orderIds);
+  return countSellerEcosystemSalesUsage(supabase, userId, window);
 }
 
 /**
@@ -122,51 +88,7 @@ async function countSellerEcosystemSales(supabase, userId, window) {
  * @param {{ period_start: string; period_end: string }} window
  */
 async function buildSellerSalesBreakdowns(supabase, userId, window) {
-  const startIso = `${window.period_start}T00:00:00.000Z`;
-  const endIso = `${window.period_end}T23:59:59.999Z`;
-  const marketplaces = /** @type {Record<string, number>} */ ({});
-  const companies = /** @type {Record<string, number>} */ ({});
-  const accounts = /** @type {Record<string, number>} */ ({});
-
-  const orderIds = await listSalesOrderIdsInWindow(supabase, userId, startIso, endIso);
-  if (orderIds.length === 0) {
-    return { marketplaces, companies, accounts, truncated: false };
-  }
-
-  for (let page = 0; page < BREAKDOWN_MAX_PAGES; page += 1) {
-    const from = page * BREAKDOWN_PAGE_SIZE;
-    const to = from + BREAKDOWN_PAGE_SIZE - 1;
-    const { data, error } = await supabase
-      .from("sales_order_items")
-      .select("marketplace, marketplace_account_id, seller_company_id")
-      .eq("user_id", userId)
-      .in("sales_order_id", orderIds)
-      .range(from, to);
-
-    if (error) {
-      if (isMissingRelationError(error)) {
-        return { marketplaces, companies, accounts, truncated: false };
-      }
-      throw error;
-    }
-
-    const rows = Array.isArray(data) ? data : [];
-    for (const row of rows) {
-      const marketplace = row?.marketplace != null ? String(row.marketplace).trim() : "";
-      const accountId = row?.marketplace_account_id != null ? String(row.marketplace_account_id).trim() : "";
-      const companyId = row?.seller_company_id != null ? String(row.seller_company_id).trim() : "";
-
-      if (marketplace) marketplaces[marketplace] = (marketplaces[marketplace] ?? 0) + 1;
-      if (accountId) accounts[accountId] = (accounts[accountId] ?? 0) + 1;
-      if (companyId) companies[companyId] = (companies[companyId] ?? 0) + 1;
-    }
-
-    if (rows.length < BREAKDOWN_PAGE_SIZE) {
-      return { marketplaces, companies, accounts, truncated: false };
-    }
-  }
-
-  return { marketplaces, companies, accounts, truncated: true };
+  return buildSellerSalesUsageBreakdowns(supabase, userId, window);
 }
 
 /**
@@ -189,7 +111,7 @@ async function upsertMonthlyUsageRow(supabase, userId, snapshot) {
     sales_count: snapshot.sales_count,
     metadata: {
       breakdowns: snapshot.breakdowns,
-      aggregation_scope: BILLING_USAGE_AGGREGATION_SCOPE,
+      aggregation_scope: SUBSCRIPTION_USAGE_AGGREGATION_SCOPE,
     },
     updated_at: new Date().toISOString(),
   };
@@ -231,7 +153,7 @@ export function evaluateSalesLimitState(input) {
     };
   }
 
-  const usagePercent = Math.round((used / limit) * 10000) / 100;
+  const usagePercent = new Decimal(used).div(limit).mul(100).toDecimalPlaces(2, Decimal.ROUND_HALF_UP).toNumber();
   const warningThreshold = Number.isFinite(input.warning_threshold_percent)
     ? Number(input.warning_threshold_percent)
     : 80;
@@ -274,11 +196,23 @@ export function evaluateSalesLimitState(input) {
  * @param {BillingUsageWindowKind} windowKind
  * @param {string} periodStart
  * @param {string} periodEnd
+ * @param {{ usage_status?: "available" | "unavailable" }} [meta]
  */
-export function buildSellerUsagePayload(evaluation, monthlySalesLimit, totalSalesMonth, windowKind, periodStart, periodEnd) {
+export function buildSellerUsagePayload(
+  evaluation,
+  monthlySalesLimit,
+  totalSalesMonth,
+  windowKind,
+  periodStart,
+  periodEnd,
+  meta = {},
+) {
+  const usageStatus = meta.usage_status ?? "available";
   return {
     total_sales_month: totalSalesMonth,
+    used_sales: totalSalesMonth,
     limit_sales_month: monthlySalesLimit,
+    sales_limit: monthlySalesLimit,
     usage_percent: evaluation.usage_percent,
     near_limit: Boolean(evaluation.near_limit),
     window_kind: windowKind,
@@ -289,7 +223,9 @@ export function buildSellerUsagePayload(evaluation, monthlySalesLimit, totalSale
     hard_blocked: evaluation.hard_blocked,
     soft_block: evaluation.soft_block,
     freeze_level: evaluation.freeze_level,
-    aggregation_scope: BILLING_USAGE_AGGREGATION_SCOPE,
+    aggregation_scope: SUBSCRIPTION_USAGE_AGGREGATION_SCOPE,
+    usage_unit: SUBSCRIPTION_USAGE_UNIT,
+    usage_status: usageStatus,
   };
 }
 
@@ -331,14 +267,15 @@ export async function resolveMonthlySalesUsage(supabase, userId, planId, cycle =
       totalSalesMonth,
       window.window_kind,
       window.period_start,
-      window.period_end
+      window.period_end,
+      { usage_status: "available" },
     );
 
     return {
       window_kind: window.window_kind,
       period_start: window.period_start,
       period_end: window.period_end,
-      aggregation_scope: BILLING_USAGE_AGGREGATION_SCOPE,
+      aggregation_scope: SUBSCRIPTION_USAGE_AGGREGATION_SCOPE,
       monthly_sales_limit: limitConfig?.monthly_sales_limit ?? null,
       current_month_sales: totalSalesMonth,
       warning_threshold_percent: limitConfig?.warning_threshold_percent ?? 80,

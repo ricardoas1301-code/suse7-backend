@@ -32,6 +32,7 @@ import {
   setDefaultSellerPaymentMethod,
 } from "../services/billingPaymentMethodsService.js";
 import { tokenizeAndPersistSellerCard } from "../services/billingCardPaymentMethodService.js";
+import { withPaymentMethodCreateIdempotency } from "../services/billingPaymentMethodCreateIdempotencyService.js";
 import {
   buildCardCheckoutFromRequestBody,
   resolveCardCheckoutPaymentMethod,
@@ -39,6 +40,10 @@ import {
 } from "../utils/billingRequestContext.js";
 import { listSellerPaymentHistory } from "../services/billingPaymentsHistoryService.js";
 import { requestSubscriptionCancellationAtPeriodEnd, enrichSubscriptionCancellationFields } from "../services/billingSubscriptionCancelService.js";
+import {
+  consumeSubscriptionCancelChallenge,
+  issueSubscriptionCancelChallenge,
+} from "../services/billingSubscriptionCancelChallengeService.js";
 import { reactivateSubscriptionCancellation } from "../services/billingSubscriptionReactivateService.js";
 import {
   enrichSubscriptionPlanChangeFields,
@@ -65,6 +70,7 @@ import {
   findPendingCheckoutPaymentRow,
 } from "../services/billingPendingPaymentPresentationService.js";
 import { resolvePendingRenewalPresentation } from "../services/billingPendingRenewalPresentationService.js";
+import { resolveBillingRenewalExperience } from "../services/billingRenewalExperienceService.js";
 import { computeRenewalNotice } from "../services/billingRenewalNoticeEngine.js";
 import { resolveRenewalAccessPresentation } from "../services/billingRenewalAccessPolicy.js";
 import { recordRenewalNoticeEvent } from "../services/billingRenewalNoticeEventService.js";
@@ -149,6 +155,17 @@ function respondCheckoutRouteError(res, e, traceId, userId) {
   }
   if (code === "PAYMENT_METHOD_NOT_FOUND") {
     return fail(res, { code: "PAYMENT_METHOD_NOT_FOUND", message: "Forma de pagamento não encontrada." }, 404, traceId);
+  }
+  if (code === "PAYMENT_METHOD_ALREADY_EXISTS") {
+    return fail(
+      res,
+      {
+        code: "PAYMENT_METHOD_ALREADY_EXISTS",
+        message: "Este cartão já está cadastrado.",
+      },
+      409,
+      traceId
+    );
   }
   if (code === "DEBIT_CARD_NOT_SUPPORTED") {
     return fail(
@@ -599,30 +616,33 @@ export async function handleBillingRoutes(req, res, path) {
       const providerApi = getBillingProvider(config.billingProviderDefault || "asaas");
       const remoteIp = resolveClientRemoteIp(req);
       assertCreditCardCheckoutOnly("CREDIT_CARD", body.card_type);
-      const saved = await tokenizeAndPersistSellerCard(
-        supabase,
-        providerApi,
-        user,
-        {
-          holder_name: String(body.holder_name ?? ""),
-          card_number: String(body.card_number ?? ""),
-          expiry_month: String(body.expiry_month ?? ""),
-          expiry_year: String(body.expiry_year ?? ""),
-          cvv: String(body.cvv ?? ""),
-          cpf_cnpj: typeof body.cpf_cnpj === "string" ? body.cpf_cnpj : undefined,
-          postal_code: typeof body.postal_code === "string" ? body.postal_code : undefined,
-          address_number: typeof body.address_number === "string" ? body.address_number : undefined,
-          phone: typeof body.phone === "string" ? body.phone : undefined,
-          card_type: "credit",
-          set_default: body.set_default !== false,
-          persist: true,
-        },
-        remoteIp,
-        {
-          user_id: user.id,
-          card_type: "CREDIT",
-          request_id: traceId,
-        }
+      const idempotencyKey = typeof body.idempotency_key === "string" ? body.idempotency_key.trim() : "";
+      const saved = await withPaymentMethodCreateIdempotency(user.id, idempotencyKey, () =>
+        tokenizeAndPersistSellerCard(
+          supabase,
+          providerApi,
+          user,
+          {
+            holder_name: String(body.holder_name ?? ""),
+            card_number: String(body.card_number ?? ""),
+            expiry_month: String(body.expiry_month ?? ""),
+            expiry_year: String(body.expiry_year ?? ""),
+            cvv: String(body.cvv ?? ""),
+            cpf_cnpj: typeof body.cpf_cnpj === "string" ? body.cpf_cnpj : undefined,
+            postal_code: typeof body.postal_code === "string" ? body.postal_code : undefined,
+            address_number: typeof body.address_number === "string" ? body.address_number : undefined,
+            phone: typeof body.phone === "string" ? body.phone : undefined,
+            card_type: "credit",
+            set_default: body.set_default === true,
+            persist: true,
+          },
+          remoteIp,
+          {
+            user_id: user.id,
+            card_type: "CREDIT",
+            request_id: traceId,
+          }
+        )
       );
       return ok(res, { ok: true, payment_method: saved.paymentMethod, traceId });
     } catch (error) {
@@ -770,6 +790,8 @@ export async function handleBillingRoutes(req, res, path) {
         remoteIp: resolveClientRemoteIp(req, cardCheckout?.remoteIp),
         paymentMethodId: cardCheckout?.payment_method_id ?? null,
         card: cardCheckout?.card ?? null,
+        recurringConsent: body.recurring_consent === true,
+        correlationId: typeof body.correlation_id === "string" ? body.correlation_id : traceId,
       });
       return ok(res, { ok: true, ...result, traceId });
     } catch (error) {
@@ -782,6 +804,14 @@ export async function handleBillingRoutes(req, res, path) {
       }
       if (code === "RENEWAL_PLAN_MISMATCH") {
         return fail(res, { code: "RENEWAL_PLAN_MISMATCH", message: "Plano do ciclo não corresponde à assinatura ativa." }, 409, traceId);
+      }
+      if (code === "RECURRING_CONSENT_REQUIRED") {
+        return fail(
+          res,
+          { code: "RECURRING_CONSENT_REQUIRED", message: "Confirme o consentimento para renovação automática no cartão." },
+          400,
+          traceId
+        );
       }
       return respondCheckoutRouteError(res, error, traceId, user.id);
     }
@@ -884,23 +914,81 @@ export async function handleBillingRoutes(req, res, path) {
     }
     const auth = await requireAuthUser(req);
     if (auth.error) {
-      return fail(res, { code: "UNAUTHORIZED", message: auth.error.message }, auth.error.status, traceId);
+      return fail(
+        res,
+        { code: "AUTH_SESSION_INVALID", message: "Sua sessão expirou. Entre novamente para continuar." },
+        auth.error.status,
+        traceId,
+      );
     }
     const { user, supabase } = auth;
     try {
-      const result = await reactivateSubscriptionCancellation({ supabase, user });
+      const body = await readRequestJson(req);
+      const subscriptionId =
+        typeof body?.subscription_id === "string" && body.subscription_id.trim() !== ""
+          ? body.subscription_id.trim()
+          : null;
+      const result = await reactivateSubscriptionCancellation({ supabase, user, subscriptionId });
       return ok(res, { ok: true, ...result, traceId });
     } catch (error) {
       const code = /** @type {{ code?: string }} */ (error)?.code;
+      if (code === "SUBSCRIPTION_NOT_FOUND") {
+        return fail(
+          res,
+          { code, message: "Não foi possível localizar esta assinatura." },
+          404,
+          traceId,
+        );
+      }
+      if (code === "SUBSCRIPTION_FORBIDDEN") {
+        return fail(
+          res,
+          { code, message: "Você não possui permissão para reativar esta assinatura." },
+          403,
+          traceId,
+        );
+      }
+      if (code === "SUBSCRIPTION_NOT_SCHEDULED_FOR_CANCELLATION") {
+        return fail(
+          res,
+          { code, message: "Esta assinatura não possui cancelamento agendado." },
+          409,
+          traceId,
+        );
+      }
+      if (code === "SUBSCRIPTION_ALREADY_ENDED") {
+        return fail(
+          res,
+          { code, message: "Esta assinatura já foi encerrada. Escolha um plano para continuar." },
+          410,
+          traceId,
+        );
+      }
       if (code === "REACTIVATION_NOT_AVAILABLE") {
-        return fail(res, { code: "REACTIVATION_NOT_AVAILABLE", message: "Nenhuma assinatura elegível para reativação." }, 404, traceId);
+        return fail(
+          res,
+          { code, message: "Nenhuma assinatura elegível para reativação." },
+          404,
+          traceId,
+        );
+      }
+      if (code === "PROVIDER_REACTIVATION_FAILED") {
+        return fail(
+          res,
+          { code, message: "Não foi possível reativar a assinatura agora. Tente novamente em instantes." },
+          502,
+          traceId,
+        );
       }
       logBillingError("billing", "subscription_reactivate_failed", error, { user_id: user.id });
       return fail(
         res,
-        { code: "SUBSCRIPTION_REACTIVATE_FAILED", message: error instanceof Error ? error.message : "Falha ao reativar assinatura." },
-        500,
-        traceId
+        {
+          code: "SERVICE_UNAVAILABLE",
+          message: "O serviço está temporariamente indisponível. Tente novamente em instantes.",
+        },
+        503,
+        traceId,
       );
     }
   }
@@ -963,13 +1051,76 @@ export async function handleBillingRoutes(req, res, path) {
           traceId
         );
       }
-      if (code === "ENTERPRISE_PLAN_REQUIRES_SALES") {
-        return fail(res, { code: "ENTERPRISE_PLAN_REQUIRES_SALES", message: "Este plano exige contato com o suporte." }, 422, traceId);
+      if (code === "ENTERPRISE_PLAN_REQUIRES_SALES" || code === "QUOTE_PLAN_REQUIRES_SALES") {
+        return fail(res, { code: "QUOTE_PLAN_REQUIRES_SALES", message: "Este plano exige contato comercial." }, 422, traceId);
       }
       if (code === "CREDIT_CARD_NOT_SUPPORTED_YET") {
         return fail(res, { code: "PAYMENT_METHOD_NOT_SUPPORTED", message: "Cartão de crédito ainda não está habilitado." }, 400, traceId);
       }
       return respondCheckoutRouteError(res, error, traceId, user.id);
+    }
+  }
+
+  if (pathNorm === "/api/billing/subscription/cancel/challenge") {
+    if (method !== "POST") {
+      return fail(res, { code: "METHOD_NOT_ALLOWED", message: "Use POST" }, 405, traceId);
+    }
+    const auth = await requireAuthUser(req);
+    if (auth.error) {
+      return fail(
+        res,
+        { code: "AUTH_SESSION_INVALID", message: "Sua sessão expirou. Entre novamente para continuar." },
+        auth.error.status,
+        traceId,
+      );
+    }
+    const { user, supabase } = auth;
+    try {
+      const body = await readRequestJson(req);
+      const subscriptionId = typeof body?.subscription_id === "string" ? body.subscription_id.trim() : "";
+
+      const { data: subs, error: subsError } = await supabase
+        .from("billing_subscriptions")
+        .select("id, user_id, status, metadata")
+        .eq("user_id", user.id)
+        .order("created_at", { ascending: false })
+        .limit(20);
+      if (subsError) throw subsError;
+
+      const rows = Array.isArray(subs) ? subs : [];
+      const target =
+        (subscriptionId ? rows.find((row) => String(row.id) === subscriptionId) : null) ?? rows[0] ?? null;
+      if (!target?.id) {
+        return fail(
+          res,
+          { code: "SUBSCRIPTION_NOT_FOUND", message: "Não foi possível localizar esta assinatura." },
+          404,
+          traceId,
+        );
+      }
+
+      const challenge = await issueSubscriptionCancelChallenge(supabase, user.id, String(target.id));
+      return ok(res, { ok: true, ...challenge, traceId });
+    } catch (error) {
+      const code = /** @type {{ code?: string }} */ (error)?.code;
+      if (code === "SERVICE_UNAVAILABLE") {
+        return fail(
+          res,
+          {
+            code: "SERVICE_UNAVAILABLE",
+            message: "Não foi possível concluir o cancelamento agora. Tente novamente em instantes.",
+          },
+          503,
+          traceId,
+        );
+      }
+      logBillingError("billing", "subscription_cancel_challenge_failed", error, { user_id: user.id });
+      return fail(
+        res,
+        { code: "SERVICE_UNAVAILABLE", message: "Não foi possível concluir o cancelamento agora. Tente novamente em instantes." },
+        503,
+        traceId,
+      );
     }
   }
 
@@ -979,24 +1130,134 @@ export async function handleBillingRoutes(req, res, path) {
     }
     const auth = await requireAuthUser(req);
     if (auth.error) {
-      return fail(res, { code: "UNAUTHORIZED", message: auth.error.message }, auth.error.status, traceId);
+      return fail(
+        res,
+        { code: "AUTH_SESSION_INVALID", message: "Sua sessão expirou. Entre novamente para continuar." },
+        auth.error.status,
+        traceId,
+      );
     }
     const { user, supabase } = auth;
     try {
+      const body = await readRequestJson(req);
+      const challengeId = typeof body?.challenge_id === "string" ? body.challenge_id.trim() : "";
+      const confirmationCode = typeof body?.confirmation_code === "string" ? body.confirmation_code : "";
+      const subscriptionId =
+        typeof body?.subscription_id === "string" && body.subscription_id.trim() !== ""
+          ? body.subscription_id.trim()
+          : null;
+
+      const { data: subs, error: subsError } = await supabase
+        .from("billing_subscriptions")
+        .select("id")
+        .eq("user_id", user.id)
+        .order("created_at", { ascending: false })
+        .limit(20);
+      if (subsError) throw subsError;
+      const rows = Array.isArray(subs) ? subs : [];
+      const target = subscriptionId ? rows.find((row) => String(row.id) === subscriptionId) : rows[0];
+      if (!target?.id) {
+        return fail(
+          res,
+          { code: "SUBSCRIPTION_NOT_FOUND", message: "Não foi possível localizar esta assinatura." },
+          404,
+          traceId,
+        );
+      }
+
+      await consumeSubscriptionCancelChallenge(
+        supabase,
+        user.id,
+        String(target.id),
+        challengeId,
+        confirmationCode,
+      );
       const result = await requestSubscriptionCancellationAtPeriodEnd({ supabase, user });
       return ok(res, { ok: true, ...result, traceId });
     } catch (error) {
       const code = /** @type {{ code?: string }} */ (error)?.code;
-      if (code === "NO_ACTIVE_SUBSCRIPTION") {
-        return fail(res, { code: "NO_ACTIVE_SUBSCRIPTION", message: "Nenhuma assinatura elegível para cancelamento." }, 404, traceId);
+      if (code === "CONFIRMATION_CODE_INVALID") {
+        return fail(res, { code, message: "O código informado não confere." }, 401, traceId);
+      }
+      if (code === "CONFIRMATION_CHALLENGE_EXPIRED") {
+        return fail(res, { code, message: "O código expirou. Um novo código foi gerado." }, 410, traceId);
+      }
+      if (code === "CONFIRMATION_CHALLENGE_REPLAYED") {
+        return fail(res, { code, message: "Este código já foi utilizado. Gere uma nova confirmação." }, 409, traceId);
+      }
+      if (code === "CONFIRMATION_CHALLENGE_INVALID") {
+        return fail(
+          res,
+          { code, message: "Não foi possível validar a confirmação. Feche e abra o modal novamente." },
+          401,
+          traceId,
+        );
+      }
+      if (code === "SUBSCRIPTION_FORBIDDEN") {
+        return fail(
+          res,
+          { code, message: "Você não possui permissão para cancelar esta assinatura." },
+          403,
+          traceId,
+        );
+      }
+      if (code === "NO_ACTIVE_SUBSCRIPTION" || code === "SUBSCRIPTION_NOT_FOUND") {
+        return fail(
+          res,
+          { code: "SUBSCRIPTION_NOT_FOUND", message: "Não foi possível localizar esta assinatura." },
+          404,
+          traceId,
+        );
       }
       if (code === "CANCEL_ALREADY_REQUESTED") {
-        return fail(res, { code: "CANCEL_ALREADY_REQUESTED", message: "O cancelamento ao fim do ciclo já foi solicitado." }, 409, traceId);
+        return fail(
+          res,
+          { code: "CANCEL_ALREADY_REQUESTED", message: "O cancelamento desta assinatura já está agendado." },
+          409,
+          traceId,
+        );
+      }
+      if (code === "SERVICE_UNAVAILABLE") {
+        return fail(
+          res,
+          {
+            code: "SERVICE_UNAVAILABLE",
+            message: "Não foi possível concluir o cancelamento agora. Tente novamente em instantes.",
+          },
+          503,
+          traceId,
+        );
       }
       logBillingError("billing", "subscription_cancel_failed", error, { user_id: user.id });
       return fail(
         res,
-        { code: "SUBSCRIPTION_CANCEL_FAILED", message: error instanceof Error ? error.message : "Falha ao solicitar cancelamento." },
+        {
+          code: "SERVICE_UNAVAILABLE",
+          message: "Não foi possível concluir o cancelamento agora. Tente novamente em instantes.",
+        },
+        500,
+        traceId,
+      );
+    }
+  }
+
+  if (pathNorm === "/api/billing/renewal/experience") {
+    if (method !== "GET") {
+      return fail(res, { code: "METHOD_NOT_ALLOWED", message: "Use GET" }, 405, traceId);
+    }
+    const auth = await requireAuthUser(req);
+    if (auth.error) {
+      return fail(res, { code: "UNAUTHORIZED", message: auth.error.message }, auth.error.status, traceId);
+    }
+    const { user, supabase } = auth;
+    try {
+      const renewalExperience = await resolveBillingRenewalExperience(supabase, user.id);
+      return ok(res, { ok: true, renewal_experience: renewalExperience, traceId });
+    } catch (error) {
+      logBillingError("billing", "renewal_experience_failed", error, { user_id: user.id });
+      return fail(
+        res,
+        { code: "SERVICE_UNAVAILABLE", message: "Não foi possível carregar a experiência de renovação." },
         500,
         traceId
       );
@@ -1077,7 +1338,7 @@ export async function handleBillingRoutes(req, res, path) {
       const { data: subs, error: subsError } = await supabase
         .from("billing_subscriptions")
         .select(
-          "id, plan_id, plan_key, provider, status, amount, currency, current_period_start, current_period_end, next_due_date, canceled_at, metadata, created_at, updated_at, provider_subscription_id"
+          "id, user_id, plan_id, plan_key, provider, status, amount, currency, current_period_start, current_period_end, next_due_date, canceled_at, metadata, created_at, updated_at, provider_subscription_id"
         )
         .eq("user_id", user.id)
         .order("created_at", { ascending: false })
@@ -1090,6 +1351,24 @@ export async function handleBillingRoutes(req, res, path) {
 
       const subsList = Array.isArray(subs) ? subs : [];
       statusLog("subscriptions_list_ready", { count: subsList.length });
+
+      /** @type {Map<string, Record<string, unknown>>} */
+      const openRenewalCyclesBySubId = new Map();
+      for (const sub of subsList) {
+        if (!sub?.id) continue;
+        try {
+          const openCycle = await findOpenRenewalCycleForSubscription(supabase, String(sub.id), {
+            userId: user.id,
+            reason: "subscription_status",
+          });
+          if (openCycle) openRenewalCyclesBySubId.set(String(sub.id), openCycle);
+        } catch (openCycleError) {
+          logBillingError("billing", "subscription_status_open_cycle_failed", openCycleError, {
+            user_id: user.id,
+            subscription_id: sub.id,
+          });
+        }
+      }
 
       if (subsList.length === 0 && !billing?.access?.subscription_id) {
         statusLog("subscription_not_found", {
@@ -1114,7 +1393,13 @@ export async function handleBillingRoutes(req, res, path) {
         enrichSubscriptionDelinquencyFields(
           enrichSubscriptionPlanChangeFields(
             enrichSubscriptionCancellationFields(
-              enrichSubscriptionWithBillingCycle(sub, resolveSubscriptionBillingCycle(sub))
+              enrichSubscriptionWithBillingCycle(
+                sub,
+                resolveSubscriptionBillingCycle(sub, new Date(), {
+                  openRenewalCycle: openRenewalCyclesBySubId.get(String(sub.id)) ?? null,
+                  allowCalendarRollForward: String(sub.provider || "").toLowerCase() === "internal",
+                })
+              )
             )
           )
         )
@@ -1152,6 +1437,7 @@ export async function handleBillingRoutes(req, res, path) {
 
     let pendingRenewal = null;
     let renewalNotice = null;
+    let renewalExperience = null;
     let renewalAccess = null;
     let revenueHealth = null;
     try {
@@ -1159,13 +1445,25 @@ export async function handleBillingRoutes(req, res, path) {
     } catch (healthErr) {
       logBillingError("billing", "revenue_health_status_failed", healthErr, { user_id: user.id });
     }
+
+    const activeSub = activeSubscription ? /** @type {Record<string, unknown>} */ (activeSubscription) : null;
+
     try {
-      const activeSub = activeSubscription ? /** @type {Record<string, unknown>} */ (activeSubscription) : null;
       pendingRenewal = await resolvePendingRenewalPresentation(supabase, user.id, activeSub);
+    } catch (pendingRenewalError) {
+      logBillingError("billing", "pending_renewal_presentation_failed", pendingRenewalError, {
+        user_id: user.id,
+        step: "pending_renewal",
+      });
+    }
+
+    try {
       if (activeSub?.id) {
-        const openCycle = await findOpenRenewalCycleForSubscription(supabase, String(activeSub.id));
+        const openCycle = await findOpenRenewalCycleForSubscription(supabase, String(activeSub.id), {
+          userId: user.id,
+        });
         if (openCycle) {
-          const strategyInfo = await resolveRenewalStrategyForSubscription(supabase, activeSub);
+          const strategyInfo = await resolveRenewalStrategyForSubscription(supabase, activeSub, { userId: user.id });
           renewalNotice = await computeRenewalNotice(supabase, user.id, activeSub, openCycle, {
             strategy: strategyInfo.strategy,
           });
@@ -1176,8 +1474,22 @@ export async function handleBillingRoutes(req, res, path) {
         billing.access,
         primarySubscription ? /** @type {Record<string, unknown>} */ (primarySubscription) : null
       );
-    } catch (pendingRenewalError) {
-      logBillingError("billing", "pending_renewal_presentation_failed", pendingRenewalError, { user_id: user.id });
+    } catch (renewalNoticeError) {
+      logBillingError("billing", "pending_renewal_presentation_failed", renewalNoticeError, {
+        user_id: user.id,
+        step: "renewal_notice",
+      });
+    }
+
+    try {
+      renewalExperience = await resolveBillingRenewalExperience(supabase, user.id, {
+        subscription: activeSub,
+      });
+    } catch (renewalExperienceError) {
+      logBillingError("billing", "renewal_experience_status_failed", renewalExperienceError, {
+        user_id: user.id,
+        step: "renewal_experience",
+      });
     }
 
       statusLog("response_sent", {
@@ -1199,6 +1511,7 @@ export async function handleBillingRoutes(req, res, path) {
       can_access: billing.can_access,
       show_usage_growth_notice: Boolean(billing.show_usage_growth_notice),
       usage_growth_grace: billing.usage_growth_grace ?? null,
+      usage_fallback: Boolean(billing.usage_fallback),
       billing_cycle_anchor: billing.billing_cycle_anchor ?? null,
       current_period_start: billing.current_period_start ?? null,
       current_period_end: billing.current_period_end ?? null,
@@ -1227,6 +1540,10 @@ export async function handleBillingRoutes(req, res, path) {
         : null,
       pending_renewal: pendingRenewal,
       renewal_notice: renewalNotice,
+      renewal_experience: renewalExperience,
+      subscription_entitlement: billing.subscription_entitlement ?? null,
+      entitlement_capabilities: billing.entitlement_capabilities ?? null,
+      access_profile: billing.access_profile ?? billing.subscription_entitlement?.access_profile ?? null,
       subscription_status: renewalAccess?.subscription_status ?? primarySubscription?.renewal_subscription_status ?? null,
       access_status: renewalAccess?.access_status ?? "FULL",
       access_restrictions: renewalAccess?.access_restrictions ?? {

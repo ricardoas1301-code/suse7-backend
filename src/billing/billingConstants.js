@@ -32,8 +32,12 @@ export const DELINQUENCY_STATUS = /** @type {const} */ ({
   SUSPENDED: "suspended",
 });
 
-/** Grace period padrão (dias) para cobrança vencida (dunning legado). */
-export const BILLING_DUNNING_GRACE_PERIOD_DAYS_DEFAULT = 3;
+/**
+ * @deprecated S1.HF.6.9A.12A — dunning legado de 3 dias neutralizado.
+ * Carência financeira canônica = BILLING_RENEWAL_GRACE_PERIOD_DAYS_DEFAULT (10).
+ * Mantido como alias de 10 para não reabilitar 3 dias via import antigo.
+ */
+export const BILLING_DUNNING_GRACE_PERIOD_DAYS_DEFAULT = 10;
 
 /** Grace period padrão (dias) do motor de renovação Fase 2.1. */
 export const BILLING_RENEWAL_GRACE_PERIOD_DAYS_DEFAULT = 10;
@@ -135,10 +139,390 @@ export const PAYMENT_HISTORY_ACTION_TYPE = /** @type {const} */ ({
   VIEW_PIX_QR: "VIEW_PIX_QR",
   VIEW_BOLETO: "VIEW_BOLETO",
   PAY_RENEWAL: "PAY_RENEWAL",
+  PAY_MONTHLY: "PAY_MONTHLY",
   UPDATE_CARD: "UPDATE_CARD",
   WAITING_CARD_CONFIRMATION: "WAITING_CARD_CONFIRMATION",
   GENERATE_INVOICE: "GENERATE_INVOICE",
   NONE: "NONE",
+});
+
+/** Estados canônicos da experiência de renovação manual (Minha assinatura). */
+export const RENEWAL_EXPERIENCE_STATE = /** @type {const} */ ({
+  ACTIVE_NOT_DUE: "ACTIVE_NOT_DUE",
+  RENEWAL_AWAITING_GENERATION: "RENEWAL_AWAITING_GENERATION",
+  REACTIVATION_AWAITING_GENERATION: "REACTIVATION_AWAITING_GENERATION",
+  RENEWAL_PAYMENT_GENERATING: "RENEWAL_PAYMENT_GENERATING",
+  RENEWAL_PIX_OPEN: "RENEWAL_PIX_OPEN",
+  RENEWAL_BOLETO_OPEN: "RENEWAL_BOLETO_OPEN",
+  RENEWAL_PAID: "RENEWAL_PAID",
+  PAYMENT_EXPIRED_OR_INVALID: "PAYMENT_EXPIRED_OR_INVALID",
+});
+
+/** Estado financeiro civil canônico (DTO — separado de billing_subscriptions.status). */
+export const BILLING_FINANCIAL_STATE = /** @type {const} */ ({
+  CURRENT: "CURRENT",
+  DUE_SOON: "DUE_SOON",
+  DUE_TODAY: "DUE_TODAY",
+  GRACE_PERIOD: "GRACE_PERIOD",
+  SUSPENDED: "SUSPENDED",
+});
+
+/** Estado de acesso operacional (DTO). */
+export const BILLING_ACCESS_STATE = /** @type {const} */ ({
+  LIBERATED: "LIBERATED",
+  /** @deprecated use DETAILED_ACCESS_RESTRICTED — alias legado 6.6 */
+  LIMITED: "LIMITED",
+  DETAILED_ACCESS_RESTRICTED: "DETAILED_ACCESS_RESTRICTED",
+  /** @deprecated use access_profile ARCHIVE_READ_ONLY — sync_state HARD_PAUSED não implica tela fechada */
+  HARD_PAUSED: "HARD_PAUSED",
+  ARCHIVE_READ_ONLY: "ARCHIVE_READ_ONLY",
+  BLOCKED: "BLOCKED",
+});
+
+/** Perfil canônico de acesso — separado de sync_state (S1.HF.6.8). */
+export const BILLING_ACCESS_PROFILE = /** @type {const} */ ({
+  FULL_ACCESS: "FULL_ACCESS",
+  EXECUTIVE_ONLY: "EXECUTIVE_ONLY",
+  ARCHIVE_READ_ONLY: "ARCHIVE_READ_ONLY",
+  FINANCIAL_RECOVERY_ONLY: "FINANCIAL_RECOVERY_ONLY",
+});
+
+/** Motivo canônico de restrição — separado de access_profile (S1.HF.6.9). */
+export const BILLING_ACCESS_RESTRICTION_REASON = /** @type {const} */ ({
+  SECURITY_REVOKED: "SECURITY_REVOKED",
+  INTEGRATION_REVOKED: "INTEGRATION_REVOKED",
+  FINANCIAL_STATE_WITHOUT_FALLBACK: "FINANCIAL_STATE_WITHOUT_FALLBACK",
+  TENANT_DISABLED: "TENANT_DISABLED",
+  DATA_INTEGRITY_HOLD: "DATA_INTEGRITY_HOLD",
+  ADMINISTRATIVE_HOLD: "ADMINISTRATIVE_HOLD",
+  /** Pós-trial — owner TRIAL_LIFECYCLE_ENGINE (S1.HF.6.9A.11). */
+  TRIAL_EXPIRED: "TRIAL_EXPIRED",
+  /** Inadimplência / suspensão financeira — owner PAYMENT_DELINQUENCY_ENGINE (S1.HF.6.9A.12). */
+  PAYMENT_DELINQUENCY: "PAYMENT_DELINQUENCY",
+});
+
+/** Owner do ciclo financeiro pago (S1.HF.6.9A.12). */
+export const BILLING_PAYMENT_DELINQUENCY_OWNER = /** @type {const} */ ({
+  PAYMENT_DELINQUENCY_ENGINE: "PAYMENT_DELINQUENCY_ENGINE",
+});
+
+/** Estados canônicos do ciclo financeiro pago (S1.HF.6.9A.12). */
+export const BILLING_PAID_LIFECYCLE_STATE = /** @type {const} */ ({
+  PAID_ACTIVE: "PAID_ACTIVE",
+  RENEWAL_AVAILABLE: "RENEWAL_AVAILABLE",
+  PAYMENT_PENDING: "PAYMENT_PENDING",
+  RENEWAL_PAID_SCHEDULED: "RENEWAL_PAID_SCHEDULED",
+  PAYMENT_DUE: "PAYMENT_DUE",
+  FINANCIAL_GRACE: "FINANCIAL_GRACE",
+  PAID_SUSPENDED: "PAID_SUSPENDED",
+  BABY_FALLBACK_ACTIVE: "BABY_FALLBACK_ACTIVE",
+  REACTIVATION_PENDING: "REACTIVATION_PENDING",
+  PAID_REACTIVATED: "PAID_REACTIVATED",
+});
+
+/** Estado de sincronização operacional (DTO). */
+export const BILLING_SYNC_STATE = /** @type {const} */ ({
+  FULL: "FULL",
+  HARD_PAUSED: "HARD_PAUSED",
+});
+
+/** Estado financeiro quando trial ativo (sem cobrança). */
+export const BILLING_FINANCIAL_STATE_NOT_APPLICABLE = "NOT_APPLICABLE";
+
+/** Ciclo de vida comercial da assinatura (DTO). */
+export const BILLING_SUBSCRIPTION_LIFECYCLE_STATUS = /** @type {const} */ ({
+  ACTIVE: "ACTIVE",
+  SUSPENDED: "SUSPENDED",
+  CANCELED: "CANCELED",
+  SUPERSEDED: "SUPERSEDED",
+});
+
+/** Contexto do modal de pagamento (renovação vs reativação). */
+export const BILLING_PAYMENT_CONTEXT = /** @type {const} */ ({
+  MONTHLY_RENEWAL_GRACE: "MONTHLY_RENEWAL_GRACE",
+  SUBSCRIPTION_REACTIVATION: "SUBSCRIPTION_REACTIVATION",
+});
+
+/** Entitlement efetivo exposto ao seller (contrato × fallback). */
+export const BILLING_EFFECTIVE_ENTITLEMENT = /** @type {const} */ ({
+  PAID_PLAN: "PAID_PLAN",
+  BABY_INTERNAL_FREE: "BABY_INTERNAL_FREE",
+  TRIAL_FULL_ACCESS: "TRIAL_FULL_ACCESS",
+  /** Pós-trial restrito — NÃO é Baby (S1.HF.6.9A.11). */
+  TRIAL_EXPIRED_RESTRICTED: "TRIAL_EXPIRED_RESTRICTED",
+});
+
+/** Origem do entitlement efetivo. */
+export const BILLING_ENTITLEMENT_SOURCE = /** @type {const} */ ({
+  SUBSCRIPTION_ACTIVE: "SUBSCRIPTION_ACTIVE",
+  SUSPENSION_FALLBACK: "SUSPENSION_FALLBACK",
+  /** @deprecated 6.9A.11 — não usar fallback silencioso trial→Baby */
+  TRIAL_EXPIRATION_FALLBACK: "TRIAL_EXPIRATION_FALLBACK",
+  TRIAL_LIFECYCLE_EXPIRATION: "TRIAL_LIFECYCLE_EXPIRATION",
+  /** Alias canônico 6.9A.12 — Baby pós-suspensão financeira. */
+  BABY_FALLBACK: "BABY_FALLBACK",
+  NEW_SELLER_TRIAL: "NEW_SELLER_TRIAL",
+  INTERNAL_FREE: "INTERNAL_FREE",
+});
+
+/** Estado temporal do trial (DTO). */
+export const BILLING_TRIAL_STATE = /** @type {const} */ ({
+  NOT_STARTED: "NOT_STARTED",
+  ELIGIBLE: "ELIGIBLE",
+  ACTIVE: "ACTIVE",
+  ENDING_SOON: "ENDING_SOON",
+  ENDS_TODAY: "ENDS_TODAY",
+  CONVERTED: "CONVERTED",
+  EXPIRED: "EXPIRED",
+  REVOKED: "REVOKED",
+});
+
+/** Estados canônicos do ciclo de vida do trial (S1.HF.6.9A.11). */
+export const BILLING_TRIAL_LIFECYCLE_STATE = /** @type {const} */ ({
+  TRIAL_ACTIVE: "TRIAL_ACTIVE",
+  TRIAL_ENDING_D3: "TRIAL_ENDING_D3",
+  TRIAL_ENDING_D2: "TRIAL_ENDING_D2",
+  TRIAL_ENDING_D1: "TRIAL_ENDING_D1",
+  TRIAL_EXPIRED_RESTRICTED: "TRIAL_EXPIRED_RESTRICTED",
+  PAID_ACTIVE: "PAID_ACTIVE",
+});
+
+/** Evento canônico de ativação do trial. */
+export const BILLING_TRIAL_ACTIVATION_EVENT = /** @type {const} */ ({
+  FIRST_MARKETPLACE_SYNC_READY: "FIRST_MARKETPLACE_SYNC_READY",
+});
+
+/** Dias civis padrão do trial (configurável — não hard-code comercial no frontend). */
+export const BILLING_TRIAL_DURATION_DAYS_DEFAULT = 15;
+
+/** Limite de proteção do trial — recomendação técnica inicial para homologação. */
+export const BILLING_TRIAL_USAGE_LIMIT_RECOMMENDED_DEFAULT = 500;
+
+/** Uso do trial atingiu limite de proteção (sem grace de plano pago). */
+export const BILLING_TRIAL_USAGE_STATE = /** @type {const} */ ({
+  TRIAL_LIMIT_REACHED: "TRIAL_LIMIT_REACHED",
+});
+
+/** Máquina de estados de consumo (independente do billing_financial_state). */
+export const BILLING_USAGE_STATE = /** @type {const} */ ({
+  WITHIN_LIMIT: "WITHIN_LIMIT",
+  LIMIT_REACHED: "LIMIT_REACHED",
+  LIMIT_REACHED_GRACE: "LIMIT_REACHED_GRACE",
+  LIMIT_RESTRICTED: "LIMIT_RESTRICTED",
+  HARD_LIMIT_REACHED: "HARD_LIMIT_REACHED",
+});
+
+/** Códigos de domínio — gate backend. */
+export const BILLING_ENTITLEMENT_ERROR_CODE = /** @type {const} */ ({
+  PLAN_USAGE_LIMIT_RESTRICTED: "PLAN_USAGE_LIMIT_RESTRICTED",
+  PLAN_USAGE_LIMIT_DETAILED_ACCESS_RESTRICTED: "PLAN_USAGE_LIMIT_DETAILED_ACCESS_RESTRICTED",
+  BABY_LIMIT_ARCHIVE_READ_ONLY: "BABY_LIMIT_ARCHIVE_READ_ONLY",
+  BABY_HARD_LIMIT_REACHED: "BABY_HARD_LIMIT_REACHED",
+  SYNC_HARD_PAUSED: "SYNC_HARD_PAUSED",
+  TRIAL_LIMIT_REACHED: "TRIAL_LIMIT_REACHED",
+  FINANCIAL_ACCESS_BLOCKED: "FINANCIAL_ACCESS_BLOCKED",
+  BILLING_CAPABILITY_CLASSIFICATION_REQUIRED: "BILLING_CAPABILITY_CLASSIFICATION_REQUIRED",
+});
+
+/** Capabilities declarativas — SSOT S1.HF.6.8. */
+export const BILLING_ENTITLEMENT_CAPABILITY = /** @type {const} */ ({
+  VIEW_EXECUTIVE_CARDS: "VIEW_EXECUTIVE_CARDS",
+  VIEW_STORED_LISTS: "VIEW_STORED_LISTS",
+  USE_LIST_FILTERS: "USE_LIST_FILTERS",
+  VIEW_STORED_DETAILS: "VIEW_STORED_DETAILS",
+  VIEW_LIVE_DETAILS: "VIEW_LIVE_DETAILS",
+  RUN_REPORTS: "RUN_REPORTS",
+  EXPORT_DATA: "EXPORT_DATA",
+  EXECUTE_BATCH_ACTIONS: "EXECUTE_BATCH_ACTIONS",
+  CHANGE_MARKETPLACE_DATA: "CHANGE_MARKETPLACE_DATA",
+  RUN_AUTOMATIONS: "RUN_AUTOMATIONS",
+  REQUEST_MANUAL_SYNC: "REQUEST_MANUAL_SYNC",
+  RECEIVE_AND_PROCESS_WEBHOOKS: "RECEIVE_AND_PROCESS_WEBHOOKS",
+  CALL_MARKETPLACE_APIS: "CALL_MARKETPLACE_APIS",
+  MANAGE_BILLING: "MANAGE_BILLING",
+  CHANGE_PLAN: "CHANGE_PLAN",
+});
+
+/** Aliases legados 6.7 → capability canônica 6.8. */
+export const BILLING_ENTITLEMENT_CAPABILITY_LEGACY_ALIAS = /** @type {const} */ ({
+  executive_cards: BILLING_ENTITLEMENT_CAPABILITY.VIEW_EXECUTIVE_CARDS,
+  detailed_lists: BILLING_ENTITLEMENT_CAPABILITY.VIEW_STORED_LISTS,
+  filters_search: BILLING_ENTITLEMENT_CAPABILITY.USE_LIST_FILTERS,
+  sale_rayx: BILLING_ENTITLEMENT_CAPABILITY.VIEW_LIVE_DETAILS,
+  listing_rayx: BILLING_ENTITLEMENT_CAPABILITY.VIEW_LIVE_DETAILS,
+  detail_modals: BILLING_ENTITLEMENT_CAPABILITY.VIEW_STORED_DETAILS,
+  reports: BILLING_ENTITLEMENT_CAPABILITY.RUN_REPORTS,
+  exports: BILLING_ENTITLEMENT_CAPABILITY.EXPORT_DATA,
+  batch_actions: BILLING_ENTITLEMENT_CAPABILITY.EXECUTE_BATCH_ACTIONS,
+  automations: BILLING_ENTITLEMENT_CAPABILITY.RUN_AUTOMATIONS,
+  marketplace_ops: BILLING_ENTITLEMENT_CAPABILITY.CHANGE_MARKETPLACE_DATA,
+  active_sync: BILLING_ENTITLEMENT_CAPABILITY.REQUEST_MANUAL_SYNC,
+  webhook_ingest: BILLING_ENTITLEMENT_CAPABILITY.RECEIVE_AND_PROCESS_WEBHOOKS,
+  executive_refresh: BILLING_ENTITLEMENT_CAPABILITY.VIEW_EXECUTIVE_CARDS,
+});
+
+/** Tolerância civil ao atingir limite de vendas (dias). */
+export const BILLING_USAGE_LIMIT_GRACE_DAYS_DEFAULT = 5;
+
+/** Limite de vendas do fallback Baby interno pós-suspensão. */
+export const BILLING_SUSPENSION_FALLBACK_SALES_LIMIT_DEFAULT = 60;
+
+/** Chave plano fallback interno. */
+export const BILLING_SUSPENSION_FALLBACK_PLAN_KEY = "baby_internal_free";
+
+/** Metadata — fallback Baby por suspensão financeira. */
+export const BILLING_SUSPENSION_FALLBACK_METADATA_KEYS = /** @type {const} */ ({
+  ACTIVE: "suspension_fallback_active",
+  SOURCE: "effective_entitlement_source",
+  ENTITLEMENT: "effective_entitlement",
+  PLAN_KEY: "effective_plan_key",
+  PERIOD_START: "fallback_period_start",
+  PERIOD_END: "fallback_period_end",
+  NEXT_RESET: "fallback_next_reset",
+  ACTIVATED_AT: "fallback_activated_at",
+  CONTRACTED_PLAN_KEY: "contracted_plan_key",
+});
+
+/** Metadata — tolerância de limite de consumo por ciclo. */
+export const BILLING_USAGE_LIMIT_METADATA_KEYS = /** @type {const} */ ({
+  USAGE_STATE: "usage_state",
+  LIMIT_REACHED_AT: "limit_reached_at",
+  USAGE_GRACE_END: "usage_grace_end",
+  GRACE_CONSUMED_IN_CYCLE: "usage_grace_consumed_in_cycle",
+  CYCLE_KEY: "usage_limit_cycle_key",
+  BILLED_COUNT: "usage_billed_count",
+  /** Limite congelado no início do ciclo — SSOT RPC admissão (S1.HF.6.9A.4). */
+  SALES_LIMIT_SNAPSHOT: "sales_limit_snapshot",
+  SALES_LIMIT_SNAPSHOT_CYCLE_KEY: "sales_limit_snapshot_cycle_key",
+});
+
+/** Metadata — sync pause / gap (Baby HARD_PAUSED). */
+export const BILLING_SYNC_METADATA_KEYS = /** @type {const} */ ({
+  SYNC_STATE: "sync_state",
+  PAUSE_STARTED_AT: "pause_started_at",
+  SYNC_RESUMED_AT: "sync_resumed_at",
+  DATA_GAP_START: "data_gap_start",
+  DATA_GAP_END: "data_gap_end",
+  IGNORED_EVENT_COUNT: "ignored_event_count",
+  BACKFILL_STATUS: "backfill_status",
+  LAST_DATA_UPDATED_AT: "last_data_updated_at",
+  FIRST_IGNORED_EVENT_AT: "first_ignored_event_at",
+  LAST_IGNORED_EVENT_AT: "last_ignored_event_at",
+  IGNORED_MARKETPLACE: "ignored_marketplace",
+  IGNORED_ACCOUNT_ID: "ignored_account_id",
+  IGNORED_REASON: "ignored_reason",
+});
+
+export const BILLING_BACKFILL_STATUS = /** @type {const} */ ({
+  NOT_REQUESTED: "NOT_REQUESTED",
+});
+
+/** Metadata — trial seller (overlay entitlement, sem assinatura paga). */
+export const BILLING_TRIAL_METADATA_KEYS = /** @type {const} */ ({
+  TRIAL_STATE: "trial_state",
+  TRIAL_STARTED_AT: "trial_started_at",
+  TRIAL_START_DATE: "trial_start_date",
+  TRIAL_END_DATE: "trial_end_date",
+  /** Fim temporal canônico (timestamptz ISO) — 15 dias civis. */
+  TRIAL_ENDS_AT: "trial_ends_at",
+  TRIAL_ACTIVATION_SOURCE: "trial_activation_source",
+  /** @deprecated 6.9A.8 — trial sem limite de vendas; só telemetria legada. */
+  TRIAL_USAGE_LIMIT: "trial_usage_limit",
+  /** @deprecated 6.9A.8 — volume observado deriva de sales_orders no intervalo. */
+  TRIAL_USAGE_COUNT: "trial_usage_count",
+  TRIAL_CONVERTED_AT: "trial_converted_at",
+  TRIAL_SELECTED_PLAN_ID: "trial_selected_plan_id",
+  TRIAL_ELIGIBILITY_EXPIRES_AT: "trial_eligibility_expires_at",
+  TRIAL_ORIGINAL_END_DATE: "trial_original_end_date",
+  TRIAL_EXTENDED_END_DATE: "trial_extended_end_date",
+  TRIAL_EXTENSION_DAYS: "trial_extension_days",
+  TRIAL_EXTENSION_REASON: "trial_extension_reason",
+  TRIAL_EXTENDED_BY: "trial_extended_by",
+  TRIAL_EXTENDED_AT: "trial_extended_at",
+  TRIAL_FINGERPRINT: "trial_fingerprint",
+  /** Trial único na vida da titularidade. */
+  TRIAL_CONSUMED: "trial_consumed",
+  /** Instante FIRST_MARKETPLACE_SYNC_READY. */
+  OPERATIONAL_CUTOVER_AT: "operational_cutover_at",
+  /**
+   * Início efetivo da franquia (Baby ou plano pago).
+   * NULL enquanto trial_state temporalmente ACTIVE.
+   */
+  QUOTA_COUNTING_STARTED_AT: "quota_counting_started_at",
+});
+
+/** Períodos canônicos de classificação de venda (S1.HF.6.9A.8). */
+export const BILLING_SALE_PERIOD_CLASS = /** @type {const} */ ({
+  IMPORTACAO_HISTORICA: "IMPORTACAO_HISTORICA",
+  PRE_OPERATIONAL_CUTOVER: "PRE_OPERATIONAL_CUTOVER",
+  TRIAL_OBSERVADO: "TRIAL_OBSERVADO",
+  FRANQUIA_ELEGIVEL: "FRANQUIA_ELEGIVEL",
+  MANUAL_REVIEW: "MANUAL_REVIEW",
+});
+
+/** Origem canônica da venda (S1.HF.6.9A.10) — nunca assumir post_suse7_sale. */
+export const BILLING_SNAPSHOT_ORIGIN = /** @type {const} */ ({
+  ONBOARDING_IMPORT: "onboarding_import",
+  OPERATIONAL_WEBHOOK: "operational_webhook",
+  OPERATIONAL_RECONCILIATION: "operational_reconciliation",
+  OPERATIONAL_SYNC: "operational_sync",
+  UNKNOWN: "unknown",
+});
+
+/** Propriedade canônica da pausa Baby (S1.HF.6.9A.10). */
+export const BILLING_HARD_PAUSE_OWNER = /** @type {const} */ ({
+  BABY_QUOTA_ENGINE: "BABY_QUOTA_ENGINE",
+});
+
+/** Owners de domínio — não misturar (S1.HF.6.9A.12). */
+export const BILLING_DOMAIN_ENGINE_OWNER = /** @type {const} */ ({
+  PAYMENT_DELINQUENCY_ENGINE: "PAYMENT_DELINQUENCY_ENGINE",
+  TRIAL_LIFECYCLE_ENGINE: "TRIAL_LIFECYCLE_ENGINE",
+  BABY_QUOTA_ENGINE: "BABY_QUOTA_ENGINE",
+  CONSUMPTION_LIMIT_ENGINE: "CONSUMPTION_LIMIT_ENGINE",
+});
+
+/** Fonte da materialização da pausa Baby. */
+export const BILLING_HARD_PAUSE_SOURCE = /** @type {const} */ ({
+  RUNTIME: "RUNTIME",
+  MIGRATION_BASELINE: "MIGRATION_BASELINE",
+});
+
+/** Provider interno — registro overlay de entitlement (não é assinatura paga). */
+export const BILLING_ENTITLEMENT_OVERLAY_PROVIDER = "suse7_entitlement";
+export const BILLING_ENTITLEMENT_OVERLAY_STATUS = "entitlement_only";
+
+/** Prefixos liberados em LIMIT_RESTRICTED ou suspensão operacional. */
+export const BILLING_LIMIT_RESTRICTED_ALLOWED_PATH_PREFIXES = [
+  "/perfil/assinatura",
+  "/assinatura",
+  "/billing",
+  "/suporte",
+  "/support",
+];
+
+/** Prefixos bloqueados em LIMIT_RESTRICTED. */
+export const BILLING_LIMIT_RESTRICTED_BLOCKED_PATH_PREFIXES = [
+  "/vendas",
+  "/precific",
+  "/anuncios",
+  "/anúncios",
+  "/produtos",
+  "/concorrencia",
+  "/concorrência",
+  "/relatorios",
+  "/relatórios",
+  "/registros",
+  "/dashboard",
+  "/raiox",
+  "/rayx",
+];
+
+/** Ações canônicas da experiência de renovação manual. */
+export const RENEWAL_EXPERIENCE_ACTION = /** @type {const} */ ({
+  RENEW_SUBSCRIPTION: "RENEW_SUBSCRIPTION",
+  VIEW_PIX: "VIEW_PIX",
+  REISSUE_BOLETO: "REISSUE_BOLETO",
 });
 
 /** Níveis de alerta de renovação (Fase 2.1 — contrato frontend). */

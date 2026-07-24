@@ -40,6 +40,8 @@ import {
 
 } from "./billingPaymentMethodsService.js";
 
+import { resolveStablePaymentMethodIdentity } from "./billingPaymentMethodIdentity.js";
+
 
 
 /**
@@ -238,6 +240,9 @@ export async function tokenizeAndPersistSellerCard(supabase, providerApi, user, 
 
 
 
+  const identity = resolveStablePaymentMethodIdentity("asaas", tokenResponse);
+  const gatewayPaymentMethodId = identity?.gatewayPaymentMethodId ?? parsed.creditCardToken;
+
   let saved = null;
 
   if (shouldPersist) {
@@ -248,7 +253,7 @@ export async function tokenizeAndPersistSellerCard(supabase, providerApi, user, 
 
       asaasCustomerId: customer.provider_customer_id,
 
-      gatewayPaymentMethodId: parsed.creditCardToken,
+      gatewayPaymentMethodId,
 
       brand: parsed.brand,
 
@@ -262,7 +267,7 @@ export async function tokenizeAndPersistSellerCard(supabase, providerApi, user, 
 
       cardType,
 
-      setDefault: body.set_default !== false,
+      setDefault: Boolean(body.set_default),
 
       rawPayload: sanitizeBillingCardPayload(tokenResponse),
 

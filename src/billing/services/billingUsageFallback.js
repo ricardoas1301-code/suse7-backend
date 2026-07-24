@@ -7,8 +7,9 @@ import {
   deriveInclusivePeriodEndBeforeNextBilling,
   startOfUtcDay,
 } from "./billingCycleService.js";
+import { SUBSCRIPTION_USAGE_AGGREGATION_SCOPE } from "./subscriptionUsageMeter.js";
 
-export const BILLING_USAGE_AGGREGATION_SCOPE = "seller_ecosystem";
+export { SUBSCRIPTION_USAGE_AGGREGATION_SCOPE as BILLING_USAGE_AGGREGATION_SCOPE };
 
 /**
  * @param {Date} [now]
@@ -47,7 +48,7 @@ export function buildDefaultMonthlySalesUsageResolution(reason = null, cycle = n
     window_kind: window.window_kind,
     period_start: window.period_start,
     period_end: window.period_end,
-    aggregation_scope: BILLING_USAGE_AGGREGATION_SCOPE,
+    aggregation_scope: SUBSCRIPTION_USAGE_AGGREGATION_SCOPE,
     monthly_sales_limit: null,
     current_month_sales: 0,
     warning_threshold_percent: 80,
@@ -65,7 +66,9 @@ export function buildDefaultMonthlySalesUsageResolution(reason = null, cycle = n
     ux_state: "unmetered",
     usage: {
       total_sales_month: 0,
+      used_sales: 0,
       limit_sales_month: null,
+      sales_limit: null,
       usage_percent: 0,
       near_limit: false,
       window_kind: window.window_kind,
@@ -76,7 +79,9 @@ export function buildDefaultMonthlySalesUsageResolution(reason = null, cycle = n
       hard_blocked: false,
       soft_block: false,
       freeze_level: "none",
-      aggregation_scope: BILLING_USAGE_AGGREGATION_SCOPE,
+      aggregation_scope: SUBSCRIPTION_USAGE_AGGREGATION_SCOPE,
+      usage_unit: "sale_order",
+      usage_status: "unavailable",
     },
     breakdowns: buildDefaultSellerBreakdowns(),
     plan: null,

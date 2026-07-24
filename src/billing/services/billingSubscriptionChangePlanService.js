@@ -21,6 +21,7 @@ import {
   loadBillingSubscriptionSnapshot,
   summarizeSubscriptionRow,
 } from "./billingSubscriptionQueryService.js";
+import { isQuotePlanRow } from "../suse7PlanCatalog.js";
 
 /**
  * @param {unknown} value
@@ -39,10 +40,8 @@ function asTrimmedString(value) {
 /**
  * @param {import("./billingPlanRepository.js").Suse7PlanRow | null | undefined} plan
  */
-function isEnterprisePlanRow(plan) {
-  if (!plan) return false;
-  const key = String(plan.plan_key || plan.slug || "").trim().toLowerCase();
-  return key === "enterprise";
+function isCommercialQuotePlanRow(plan) {
+  return isQuotePlanRow(plan);
 }
 
 /**
@@ -169,9 +168,9 @@ export async function requestSubscriptionPlanChange(ctx) {
     /** @type {any} */ (err).code = "PLAN_NOT_FOUND";
     throw err;
   }
-  if (isEnterprisePlanRow(targetPlan)) {
-    const err = new Error("ENTERPRISE_PLAN_REQUIRES_SALES");
-    /** @type {any} */ (err).code = "ENTERPRISE_PLAN_REQUIRES_SALES";
+  if (isCommercialQuotePlanRow(targetPlan)) {
+    const err = new Error("QUOTE_PLAN_REQUIRES_SALES");
+    /** @type {any} */ (err).code = "QUOTE_PLAN_REQUIRES_SALES";
     throw err;
   }
 

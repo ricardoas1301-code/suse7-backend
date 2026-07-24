@@ -7,9 +7,24 @@ import { SUBSCRIPTION_STATUS } from "../billingConstants.js";
 import { recordBillingEvent } from "../billingEventService.js";
 import { resolveSubscriptionBillingCycle } from "./billingCycleService.js";
 import { resolveBillingAccess } from "./resolveBillingAccess.js";
+import {
+  listUserBillingSubscriptions,
+  pickPaidManagedSubscription,
+} from "./billingSubscriptionQueryService.js";
 
 const CANCELABLE_STATUSES = new Set([SUBSCRIPTION_STATUS.ACTIVE, SUBSCRIPTION_STATUS.PAST_DUE, SUBSCRIPTION_STATUS.PENDING]);
+const REACTIVATABLE_STATUSES = new Set([SUBSCRIPTION_STATUS.ACTIVE, SUBSCRIPTION_STATUS.PAST_DUE]);
+const TERMINAL_SUBSCRIPTION_STATUSES = new Set([SUBSCRIPTION_STATUS.CANCELED, SUBSCRIPTION_STATUS.REFUNDED]);
 const INTERNAL_PROVIDERS = new Set(["internal"]);
+
+/**
+ * @param {unknown} value
+ */
+function parseUtcDateTime(value) {
+  if (value == null || value === "") return null;
+  const date = new Date(String(value));
+  return Number.isNaN(date.getTime()) ? null : date;
+}
 
 /**
  * @param {unknown} value
@@ -37,15 +52,107 @@ export function readSubscriptionCancellation(metadata) {
 }
 
 /**
- * @param {Record<string, unknown>} subscription
+ * Estado canônico de cancelamento agendado — mesma verdade para status, banner e reativação.
+ *
+ * @param {Record<string, unknown> | null | undefined} subscription
+ * @param {Date} [now]
  */
-export function enrichSubscriptionCancellationFields(subscription) {
-  const cancellation = readSubscriptionCancellation(subscription.metadata);
+export function resolveSubscriptionScheduledCancellationState(subscription, now = new Date()) {
+  const cancellation = readSubscriptionCancellation(subscription?.metadata);
+  const cycle = resolveSubscriptionBillingCycle(subscription, now);
+  const status = String(subscription?.status ?? "").toLowerCase();
+  const accessEndsAt = cycle.current_period_end ?? subscription?.current_period_end ?? null;
+  const accessEnds = parseUtcDateTime(accessEndsAt);
+  const accessEnded = accessEnds ? accessEnds.getTime() <= now.getTime() : false;
+  const terminallyEnded = TERMINAL_SUBSCRIPTION_STATUSES.has(status);
+  const managedStatus = REACTIVATABLE_STATUSES.has(status);
+  const isScheduledForCancellation =
+    cancellation.cancel_at_period_end === true && managedStatus && !terminallyEnded && !accessEnded;
+
+  return {
+    ...cancellation,
+    access_ends_at: accessEndsAt,
+    is_scheduled_for_cancellation: isScheduledForCancellation,
+    is_reactivatable: isScheduledForCancellation,
+    is_already_reactivated: managedStatus && cancellation.cancel_at_period_end !== true && !terminallyEnded,
+    is_definitively_ended:
+      terminallyEnded || (cancellation.cancel_at_period_end === true && managedStatus && accessEnded),
+  };
+}
+
+/**
+ * @param {Record<string, unknown>} subscription
+ * @param {Date} [now]
+ */
+export function enrichSubscriptionCancellationFields(subscription, now = new Date()) {
+  const state = resolveSubscriptionScheduledCancellationState(subscription, now);
   return {
     ...subscription,
-    ...cancellation,
-    access_ends_at: subscription.current_period_end ?? null,
+    cancel_at_period_end: state.cancel_at_period_end,
+    cancel_requested_at: state.cancel_requested_at,
+    downgrade_target_plan_key: state.downgrade_target_plan_key,
+    access_ends_at: state.access_ends_at,
   };
+}
+
+/**
+ * @param {import("@supabase/supabase-js").SupabaseClient} supabase
+ * @param {string} userId
+ * @param {string | null | undefined} [subscriptionId]
+ */
+export async function findReactivatableSubscription(supabase, userId, subscriptionId = null) {
+  const list = await listUserBillingSubscriptions(supabase, userId);
+  const now = new Date();
+  const normalizedId = subscriptionId != null && String(subscriptionId).trim() !== "" ? String(subscriptionId).trim() : null;
+
+  /** @type {Record<string, unknown>[]} */
+  const candidates = [];
+  if (normalizedId) {
+    const row = list.find((item) => String(item.id) === normalizedId);
+    if (!row) {
+      const err = new Error("SUBSCRIPTION_NOT_FOUND");
+      /** @type {any} */ (err).code = "SUBSCRIPTION_NOT_FOUND";
+      throw err;
+    }
+    if (String(row.user_id ?? "") !== userId) {
+      const err = new Error("SUBSCRIPTION_FORBIDDEN");
+      /** @type {any} */ (err).code = "SUBSCRIPTION_FORBIDDEN";
+      throw err;
+    }
+    candidates.push(row);
+  } else {
+    const paidManaged = pickPaidManagedSubscription(list);
+    if (paidManaged) candidates.push(paidManaged);
+  }
+
+  for (const row of candidates) {
+    const state = resolveSubscriptionScheduledCancellationState(row, now);
+    if (state.is_reactivatable) {
+      return { row, state };
+    }
+    if (state.is_already_reactivated) {
+      return { row, state, alreadyReactivated: true };
+    }
+    if (state.is_definitively_ended) {
+      const err = new Error("SUBSCRIPTION_ALREADY_ENDED");
+      /** @type {any} */ (err).code = "SUBSCRIPTION_ALREADY_ENDED";
+      throw err;
+    }
+    if (state.is_scheduled_for_cancellation !== true) {
+      const err = new Error("SUBSCRIPTION_NOT_SCHEDULED_FOR_CANCELLATION");
+      /** @type {any} */ (err).code = "SUBSCRIPTION_NOT_SCHEDULED_FOR_CANCELLATION";
+      throw err;
+    }
+  }
+
+  for (const row of list) {
+    const state = resolveSubscriptionScheduledCancellationState(row, now);
+    if (state.is_reactivatable) {
+      return { row, state };
+    }
+  }
+
+  return null;
 }
 
 /**

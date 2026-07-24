@@ -1,24 +1,24 @@
 // ======================================================================
-// Inadimplência — grace period, suspensão e recuperação
+// Inadimplência — LEGADO NEUTRALIZADO (S1.HF.6.9A.12A)
+// Carência financeira SSOT = 10 dias civis (renewal / paid lifecycle).
+// Este módulo: leitura + sinalização; NÃO suspende em +3 dias.
 // ======================================================================
 
 import {
-  BILLING_DUNNING_GRACE_PERIOD_DAYS_DEFAULT,
+  BILLING_RENEWAL_GRACE_PERIOD_DAYS_DEFAULT,
   DELINQUENCY_STATUS,
-  SUBSCRIPTION_STATUS,
 } from "../billingConstants.js";
 import { logBilling, logBillingError } from "../billingLog.js";
-import { activateSubscriptionFromPaidPayment } from "./billingSubscriptionActivationService.js";
+import { confirmCanonicalSubscriptionPayment } from "./billingConfirmCanonicalSubscriptionPaymentService.js";
 import { recordBillingEvent } from "../billingEventService.js";
-import { derivePeriodEndFromNextBilling, startOfUtcDay } from "./billingCycleService.js";
-
-const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
 /**
  * @param {unknown} value
  */
 function asObject(value) {
-  return value && typeof value === "object" && !Array.isArray(value) ? /** @type {Record<string, unknown>} */ (value) : null;
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? /** @type {Record<string, unknown>} */ (value)
+    : null;
 }
 
 /**
@@ -37,18 +37,18 @@ function parseDate(value) {
   return Number.isNaN(date.getTime()) ? null : date;
 }
 
-export function resolveBillingDunningGracePeriodDays() {
-  const raw = Number(process.env.BILLING_DUNNING_GRACE_PERIOD_DAYS ?? BILLING_DUNNING_GRACE_PERIOD_DAYS_DEFAULT);
-  if (!Number.isFinite(raw) || raw < 0) return BILLING_DUNNING_GRACE_PERIOD_DAYS_DEFAULT;
-  return Math.floor(raw);
-}
-
 /**
- * @param {Date} from
- * @param {number} days
+ * Sempre 10 — ignora env legado que tentaria reabilitar 3 dias.
  */
-function addUtcDays(from, days) {
-  return new Date(from.getTime() + days * MS_PER_DAY);
+export function resolveBillingDunningGracePeriodDays() {
+  const raw = Number(process.env.BILLING_DUNNING_GRACE_PERIOD_DAYS);
+  if (Number.isFinite(raw) && raw === 3) {
+    logBilling("billing", "LEGACY_DUNNING_3D_ENV_IGNORED", {
+      env_value: raw,
+      effective_days: BILLING_RENEWAL_GRACE_PERIOD_DAYS_DEFAULT,
+    });
+  }
+  return BILLING_RENEWAL_GRACE_PERIOD_DAYS_DEFAULT;
 }
 
 /**
@@ -120,40 +120,11 @@ async function recordDunningEvent(supabase, eventType, providerEventId, rawPaylo
       rawPayload,
     });
   } catch (error) {
-    logBillingError("billing", "dunning_event_failed", error, { event_type: eventType, provider_event_id: providerEventId });
+    logBillingError("billing", "dunning_event_failed", error, {
+      event_type: eventType,
+      provider_event_id: providerEventId,
+    });
   }
-}
-
-/**
- * @param {import("@supabase/supabase-js").SupabaseClient} supabase
- * @param {string} providerSubscriptionId
- */
-async function loadSubscriptionByProviderId(supabase, providerSubscriptionId) {
-  const { data, error } = await supabase
-    .from("billing_subscriptions")
-    .select(
-      "id, user_id, plan_id, plan_key, provider, provider_subscription_id, status, current_period_start, current_period_end, next_due_date, metadata"
-    )
-    .eq("provider", "asaas")
-    .eq("provider_subscription_id", providerSubscriptionId)
-    .order("created_at", { ascending: false })
-    .limit(1);
-  if (error) throw error;
-  return Array.isArray(data) ? data[0] ?? null : null;
-}
-
-/**
- * @param {import("@supabase/supabase-js").SupabaseClient} supabase
- * @param {string} providerSubscriptionId
- * @param {Record<string, unknown>} patch
- */
-async function updateSubscriptionByProviderId(supabase, providerSubscriptionId, patch) {
-  const { error } = await supabase
-    .from("billing_subscriptions")
-    .update({ ...patch, updated_at: new Date().toISOString() })
-    .eq("provider", "asaas")
-    .eq("provider_subscription_id", providerSubscriptionId);
-  if (error) throw error;
 }
 
 /**
@@ -186,187 +157,162 @@ export async function findLatestOverduePaymentInvoiceUrl(supabase, userId, subsc
 }
 
 /**
+ * PAYMENT_OVERDUE — somente sinalização / projeção.
+ * NÃO marca PAST_DUE, NÃO inicia grace de 3 dias, NÃO suspende.
+ * Suspensão financeira = D11 via billingRenewalEngine (10 dias civis).
+ *
  * @param {import("@supabase/supabase-js").SupabaseClient} supabase
  * @param {{
  *   providerSubscriptionId: string;
  *   paymentId?: string | null;
  *   nextDueDate?: string | null;
+ *   userId?: string | null;
+ *   subscriptionId?: string | null;
  * }} ctx
  */
 export async function applyPaymentOverdueDelinquency(supabase, ctx) {
-  const subscription = await loadSubscriptionByProviderId(supabase, ctx.providerSubscriptionId);
-  if (!subscription?.id) return null;
-
   const now = new Date();
   const graceDays = resolveBillingDunningGracePeriodDays();
-  const graceEndsAt = addUtcDays(now, graceDays);
-  const metadata = {
-    ...(asObject(subscription.metadata) ?? {}),
-    overdue_since: asObject(subscription.metadata)?.overdue_since ?? now.toISOString(),
-  };
-  const previousStatus = readSubscriptionDelinquency(metadata).delinquency_status;
-  if (previousStatus !== DELINQUENCY_STATUS.GRACE && previousStatus !== DELINQUENCY_STATUS.SUSPENDED) {
-    metadata.delinquency_status = DELINQUENCY_STATUS.GRACE;
-    metadata.grace_period_ends_at = graceEndsAt.toISOString();
-    metadata.access_suspended_at = null;
-  }
 
-  await updateSubscriptionByProviderId(supabase, ctx.providerSubscriptionId, {
-    status: SUBSCRIPTION_STATUS.PAST_DUE,
-    ...(ctx.nextDueDate ? { next_due_date: ctx.nextDueDate } : {}),
-    metadata,
-  });
-
-  if (previousStatus !== DELINQUENCY_STATUS.GRACE) {
-    await recordDunningEvent(supabase, "SUBSCRIPTION_GRACE_PERIOD_STARTED", `grace:${subscription.id}`, {
-      subscription_id: subscription.id,
-      user_id: subscription.user_id,
+  await recordDunningEvent(
+    supabase,
+    "PAYMENT_OVERDUE_SIGNAL",
+    `payment_overdue_signal:${ctx.paymentId ?? ctx.providerSubscriptionId}:${now.toISOString().slice(0, 10)}`,
+    {
+      provider_subscription_id: ctx.providerSubscriptionId,
+      subscription_id: ctx.subscriptionId ?? null,
+      user_id: ctx.userId ?? null,
       payment_id: ctx.paymentId ?? null,
-      grace_period_ends_at: metadata.grace_period_ends_at,
-      grace_period_days: graceDays,
-    });
+      next_due_date: ctx.nextDueDate ?? null,
+      financial_grace_days_canonical: graceDays,
+      legacy_3d_dunning: false,
+      decision_engine: "PAYMENT_DELINQUENCY_ENGINE",
+      note: "Sinal overdue não altera entitlement; carência 10d no renewal engine",
+    },
+  );
+
+  if (ctx.subscriptionId) {
+    const { data: sub } = await supabase
+      .from("billing_subscriptions")
+      .select("id, metadata")
+      .eq("id", ctx.subscriptionId)
+      .maybeSingle();
+    if (sub?.id) {
+      const meta = {
+        ...(asObject(sub.metadata) ?? {}),
+        payment_overdue_signal_at: now.toISOString(),
+        payment_overdue_payment_id: ctx.paymentId ?? null,
+      };
+      await supabase
+        .from("billing_subscriptions")
+        .update({
+          ...(ctx.nextDueDate ? { next_due_date: ctx.nextDueDate } : {}),
+          metadata: meta,
+          updated_at: now.toISOString(),
+        })
+        .eq("id", sub.id);
+    }
   }
 
-  await recordDunningEvent(supabase, "PAYMENT_OVERDUE", `payment_overdue:${ctx.paymentId ?? subscription.id}:${now.toISOString().slice(0, 10)}`, {
-    subscription_id: subscription.id,
-    user_id: subscription.user_id,
+  logBilling("billing", "payment_overdue_signal_only", {
+    provider_subscription_id: ctx.providerSubscriptionId,
+    subscription_id: ctx.subscriptionId ?? null,
     payment_id: ctx.paymentId ?? null,
-    grace_period_ends_at: metadata.grace_period_ends_at,
+    financial_grace_days_canonical: graceDays,
+    legacy_dunning_disabled: true,
   });
 
-  logBilling("billing", "payment_overdue_grace_started", {
-    subscription_id: subscription.id,
-    user_id: subscription.user_id,
-    grace_period_ends_at: metadata.grace_period_ends_at,
-  });
-
-  return { subscription_id: subscription.id, grace_period_ends_at: metadata.grace_period_ends_at };
+  return {
+    signal_only: true,
+    legacy_dunning_disabled: true,
+    financial_grace_days_canonical: graceDays,
+    subscription_id: ctx.subscriptionId ?? null,
+  };
 }
 
 /**
+ * Recuperação — converge para fachada canônica.
+ *
  * @param {import("@supabase/supabase-js").SupabaseClient} supabase
  * @param {{
  *   providerSubscriptionId: string;
  *   paymentId?: string | null;
  *   nextDueDate?: string | null;
  *   paidAt?: string | null;
+ *   userId?: string | null;
+ *   subscriptionId?: string | null;
  * }} ctx
  */
 export async function applyPaymentRecoveryDelinquency(supabase, ctx) {
-  const result = await activateSubscriptionFromPaidPayment(supabase, {
-    providerSubscriptionId: ctx.providerSubscriptionId,
+  let userId = asTrimmedString(ctx.userId);
+  let subscriptionId = asTrimmedString(ctx.subscriptionId);
+
+  if (!userId || !subscriptionId) {
+    const { data, error } = await supabase
+      .from("billing_subscriptions")
+      .select("id, user_id")
+      .eq("provider", "asaas")
+      .eq("provider_subscription_id", ctx.providerSubscriptionId)
+      .order("created_at", { ascending: false })
+      .limit(1);
+    if (error) throw error;
+    const row = Array.isArray(data) ? data[0] : null;
+    userId = userId ?? (row?.user_id != null ? String(row.user_id) : null);
+    subscriptionId = subscriptionId ?? (row?.id != null ? String(row.id) : null);
+  }
+
+  if (!userId) {
+    return { subscription_id: subscriptionId, recovered: false, reason: "missing_user" };
+  }
+
+  const result = await confirmCanonicalSubscriptionPayment(supabase, {
+    userId,
+    linkedSubscriptionId: subscriptionId,
     providerPaymentId: ctx.paymentId ?? null,
+    eventType: "PAYMENT_CONFIRMED",
+    paymentStatus: "CONFIRMED",
     nextDueDate: ctx.nextDueDate ?? null,
-    paidAt: ctx.paidAt ?? null,
+    paidAt: ctx.paidAt ?? new Date().toISOString(),
     source: "payment_recovery",
   });
 
-  if (!result?.subscription_id) return null;
-
-  const subscription = await loadSubscriptionByProviderId(supabase, ctx.providerSubscriptionId);
-  if (!subscription?.id) {
-    return { subscription_id: result.subscription_id, recovered: Boolean(result.activated) };
-  }
-
-  const previous = readSubscriptionDelinquency(subscription.metadata);
-  if (previous.delinquency_status === DELINQUENCY_STATUS.GRACE || previous.delinquency_status === DELINQUENCY_STATUS.SUSPENDED) {
-    await recordDunningEvent(supabase, "SUBSCRIPTION_RECOVERED", `recovered:${subscription.id}:${ctx.paymentId ?? "payment"}`, {
-      subscription_id: subscription.id,
-      user_id: subscription.user_id,
-      payment_id: ctx.paymentId ?? null,
-      previous_delinquency_status: previous.delinquency_status,
-    });
-  }
-
-  logBilling("billing", "subscription_recovered", {
-    subscription_id: result.subscription_id,
-    user_id: result.user_id ?? subscription.user_id,
+  logBilling("billing", "subscription_recovered_via_canonical_facade", {
+    subscription_id: result.canonical_subscription_id ?? subscriptionId,
+    user_id: userId,
     payment_id: ctx.paymentId ?? null,
-    activated: result.activated,
+    confirmed: Boolean(result.confirmed),
   });
-
-  return { subscription_id: result.subscription_id, recovered: true, activated: result.activated };
-}
-
-/**
- * @param {import("@supabase/supabase-js").SupabaseClient} supabase
- * @param {Record<string, unknown>} subscription
- * @param {Date} now
- */
-async function suspendDelinquentSubscription(supabase, subscription, now) {
-  const metadata = {
-    ...(asObject(subscription.metadata) ?? {}),
-    delinquency_status: DELINQUENCY_STATUS.SUSPENDED,
-    access_suspended_at: now.toISOString(),
-  };
-  const { error } = await supabase
-    .from("billing_subscriptions")
-    .update({
-      status: SUBSCRIPTION_STATUS.PAST_DUE,
-      metadata,
-      updated_at: now.toISOString(),
-    })
-    .eq("id", subscription.id);
-  if (error) throw error;
-
-  await recordDunningEvent(supabase, "SUBSCRIPTION_ACCESS_SUSPENDED", `suspended:${subscription.id}`, {
-    subscription_id: subscription.id,
-    user_id: subscription.user_id,
-    access_suspended_at: metadata.access_suspended_at,
-    grace_period_ends_at: readSubscriptionDelinquency(subscription.metadata).grace_period_ends_at,
-  });
-
-  logBilling("billing", "subscription_access_suspended", {
-    subscription_id: subscription.id,
-    user_id: subscription.user_id,
-  });
-
-  return { subscription_id: String(subscription.id), user_id: String(subscription.user_id) };
-}
-
-/**
- * @param {import("@supabase/supabase-js").SupabaseClient} supabase
- * @param {{ now?: Date; limit?: number }} [options]
- */
-export async function processBillingOverdues(supabase, options = {}) {
-  const now = options.now instanceof Date ? options.now : new Date();
-  const { data, error } = await supabase
-    .from("billing_subscriptions")
-    .select("id, user_id, status, metadata")
-    .in("status", [SUBSCRIPTION_STATUS.ACTIVE, SUBSCRIPTION_STATUS.PAST_DUE, SUBSCRIPTION_STATUS.PENDING])
-    .limit(200);
-  if (error) throw error;
-
-  const dueRows = (Array.isArray(data) ? data : []).filter((row) => {
-    const delinquency = readSubscriptionDelinquency(row.metadata);
-    if (delinquency.delinquency_status !== DELINQUENCY_STATUS.GRACE) return false;
-    const graceEndsAt = parseDate(delinquency.grace_period_ends_at);
-    return graceEndsAt != null && graceEndsAt.getTime() <= now.getTime();
-  });
-
-  const limit = Number.isFinite(Number(options.limit)) ? Math.max(1, Number(options.limit)) : dueRows.length;
-  const selected = dueRows.slice(0, limit);
-  /** @type {Array<Record<string, unknown>>} */
-  const processed = [];
-  /** @type {Array<{ subscription_id: string; message: string }>} */
-  const failures = [];
-
-  for (const row of selected) {
-    try {
-      const result = await suspendDelinquentSubscription(supabase, row, now);
-      processed.push(result);
-    } catch (err) {
-      failures.push({ subscription_id: String(row.id), message: err instanceof Error ? err.message : String(err) });
-      logBillingError("billing", "process_overdue_failed", err, { subscription_id: row.id });
-    }
-  }
 
   return {
-    scanned: dueRows.length,
-    selected: selected.length,
-    processed_count: processed.length,
-    failed_count: failures.length,
-    processed,
-    failures,
+    subscription_id: result.canonical_subscription_id ?? subscriptionId,
+    recovered: Boolean(result.confirmed),
+    activated: Boolean(result.activation?.activated),
+    facade: result,
+  };
+}
+
+/**
+ * Job legado de suspensão +3d — DESATIVADO.
+ * Suspensão canônica: processBillingRenewalEngine (D11 / 10 dias civis).
+ *
+ * @param {import("@supabase/supabase-js").SupabaseClient} _supabase
+ * @param {{ now?: Date; limit?: number }} [options]
+ */
+export async function processBillingOverdues(_supabase, options = {}) {
+  logBilling("billing", "LEGACY_DUNNING_OVERDUES_JOB_DISABLED", {
+    reason: "S1.HF.6.9A.12A_use_renewal_engine_10d",
+    limit: options.limit ?? null,
+    redirect: "processBillingRenewalEngine",
+  });
+  return {
+    scanned: 0,
+    selected: 0,
+    processed_count: 0,
+    failed_count: 0,
+    processed: [],
+    failures: [],
+    disabled: true,
+    legacy_dunning_disabled: true,
+    use_instead: "processBillingRenewalEngine",
   };
 }

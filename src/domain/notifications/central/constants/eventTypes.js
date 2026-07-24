@@ -39,10 +39,55 @@ export const S7_NOTIFICATION_TYPE_CATALOG = Object.freeze({
     templateKey: "billing.grace.started",
     severity: "warning",
   },
+  [`${S7_NOTIFICATION_CATEGORY.BILLING}:GRACE_LAST_DAY`]: {
+    typeKey: "GRACE_LAST_DAY",
+    templateKey: "billing.grace.last_day",
+    severity: "warning",
+  },
+  [`${S7_NOTIFICATION_CATEGORY.BILLING}:RENEWAL_AVAILABLE`]: {
+    typeKey: "RENEWAL_AVAILABLE",
+    templateKey: "billing.renewal.available",
+    severity: "info",
+  },
+  [`${S7_NOTIFICATION_CATEGORY.BILLING}:PAYMENT_PENDING`]: {
+    typeKey: "PAYMENT_PENDING",
+    templateKey: "billing.payment.pending",
+    severity: "info",
+  },
+  [`${S7_NOTIFICATION_CATEGORY.BILLING}:PAYMENT_DUE`]: {
+    typeKey: "PAYMENT_DUE",
+    templateKey: "billing.payment.due",
+    severity: "warning",
+  },
+  [`${S7_NOTIFICATION_CATEGORY.BILLING}:BABY_FALLBACK_ACTIVATED`]: {
+    typeKey: "BABY_FALLBACK_ACTIVATED",
+    templateKey: "billing.baby.fallback_activated",
+    severity: "warning",
+  },
   [`${S7_NOTIFICATION_CATEGORY.BILLING}:RENEWAL_COMPLETED`]: {
     typeKey: "RENEWAL_COMPLETED",
     templateKey: "billing.renewal.completed",
     severity: "info",
+  },
+  [`${S7_NOTIFICATION_CATEGORY.BILLING}:TRIAL_ENDING_D3`]: {
+    typeKey: "TRIAL_ENDING_D3",
+    templateKey: "billing.trial.ending_d3",
+    severity: "info",
+  },
+  [`${S7_NOTIFICATION_CATEGORY.BILLING}:TRIAL_ENDING_D2`]: {
+    typeKey: "TRIAL_ENDING_D2",
+    templateKey: "billing.trial.ending_d2",
+    severity: "info",
+  },
+  [`${S7_NOTIFICATION_CATEGORY.BILLING}:TRIAL_ENDING_D1`]: {
+    typeKey: "TRIAL_ENDING_D1",
+    templateKey: "billing.trial.ending_d1",
+    severity: "warning",
+  },
+  [`${S7_NOTIFICATION_CATEGORY.BILLING}:TRIAL_EXPIRED`]: {
+    typeKey: "TRIAL_EXPIRED",
+    templateKey: "billing.trial.expired",
+    severity: "warning",
   },
   [`${S7_NOTIFICATION_CATEGORY.ACCOUNT_HEALTH}:MARKETPLACE_DISCONNECTED`]: {
     typeKey: "MARKETPLACE_DISCONNECTED",

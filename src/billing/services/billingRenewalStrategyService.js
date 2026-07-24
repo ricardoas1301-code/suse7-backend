@@ -33,9 +33,13 @@ function isAutoRenewEnabled(subscription) {
 /**
  * @param {import("@supabase/supabase-js").SupabaseClient} supabase
  * @param {Record<string, unknown>} subscription
+ * @param {{ userId?: string | null }} [options]
  */
-export async function resolveRenewalStrategyForSubscription(supabase, subscription) {
-  const userId = String(subscription.user_id);
+export async function resolveRenewalStrategyForSubscription(supabase, subscription, options = {}) {
+  const userId = String(options.userId ?? subscription.user_id ?? "").trim();
+  if (!userId || userId === "undefined") {
+    throw new Error("BILLING_RENEWAL_STRATEGY_USER_ID_REQUIRED");
+  }
   const paymentMethod = readSubscriptionPaymentMethod(subscription);
   const methods = await listSellerPaymentMethods(supabase, userId);
   const defaultCard = methods.find((m) => m.is_default && m.supports_auto_renew && m.card_type === "CREDIT");
