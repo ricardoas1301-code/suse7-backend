@@ -5,7 +5,7 @@
 import Decimal from "decimal.js";
 import { decimalToScale2String, isZeroMoney, toDecimal } from "../utils/moneyDecimal.js";
 import { logBilling, logBillingError } from "../billingLog.js";
-import { ensureBillingCustomerForUser } from "./billingCustomerService.js";
+import { assertBillingCustomerReadyForCharge, ensureBillingCustomerForUser } from "./billingCustomerService.js";
 import { resolveSubscriptionBillingCycle } from "./billingCycleService.js";
 import { getActivePlanById, getActivePlanByKey } from "./billingPlanRepository.js";
 import { SUBSCRIPTION_STATUS, SUBSCRIPTION_STATUS_SUPERSEDED } from "../billingConstants.js";
@@ -244,6 +244,12 @@ export async function checkoutPlan(ctx) {
 
     /** Plano atual permanece até pagamento confirmado (webhook/refresh). */
     const customer = await ensureBillingCustomerForUser(supabase, providerApi, providerKey, user);
+    if (providerKey === "asaas") {
+      await assertBillingCustomerReadyForCharge(providerApi, {
+        providerCustomerId: String(customer.provider_customer_id),
+        userId: user.id,
+      });
+    }
     const todayIso = new Date().toISOString().slice(0, 10);
     const nextDueDate = paymentMethodResolved === "CREDIT_CARD" ? todayIso : addDaysUtcIso(3);
 

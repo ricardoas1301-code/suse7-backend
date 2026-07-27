@@ -6,6 +6,7 @@ import { config } from "../../infra/config.js";
 import { BillingProvider } from "./BillingProvider.js";
 import { logBilling, logBillingError } from "../billingLog.js";
 import { normalizeAsaasApiBaseUrl, summarizeAsaasErrorBody } from "./asaasApiHelpers.js";
+import { applyAsaasCustomerNotificationPolicy } from "./asaas/applyAsaasCustomerNotificationPolicy.js";
 
 export class AsaasApiError extends Error {
   /**
@@ -88,22 +89,41 @@ export class AsaasBillingProvider extends BillingProvider {
 
   /** @param {{ name: string; email: string; externalReference?: string; cpfCnpj?: string; notificationDisabled?: boolean }} input */
   async createCustomer(input) {
-    const payload = {
+    // Política canônica por último — caller não pode forçar false/string.
+    const payload = applyAsaasCustomerNotificationPolicy({
       name: input.name,
       email: input.email,
-      notificationDisabled: input.notificationDisabled !== false,
       ...(input.externalReference ? { externalReference: input.externalReference } : {}),
       ...(input.cpfCnpj ? { cpfCnpj: input.cpfCnpj } : {}),
-    };
+      // valores vindos do input são deliberadamente sobrescritos abaixo
+      notificationDisabled: input.notificationDisabled,
+    });
     return this.request("POST", "/customers", payload);
   }
 
   /**
    * @param {string} providerCustomerId
-   * @param {{ notificationDisabled?: boolean; name?: string; email?: string }} input
+   * @param {Record<string, unknown>} input
    */
   async updateCustomer(providerCustomerId, input) {
-    return this.request("PUT", `/customers/${encodeURIComponent(providerCustomerId)}`, input);
+    const payload = applyAsaasCustomerNotificationPolicy(
+      input && typeof input === "object" ? input : {}
+    );
+    return this.request("PUT", `/customers/${encodeURIComponent(providerCustomerId)}`, payload);
+  }
+
+  /** @param {string} providerCustomerId */
+  async getCustomer(providerCustomerId) {
+    return this.request("GET", `/customers/${encodeURIComponent(providerCustomerId)}`, undefined);
+  }
+
+  /** Auditoria Camada 2 — não substitui notificationDisabled. */
+  async listCustomerNotifications(providerCustomerId) {
+    return this.request(
+      "GET",
+      `/customers/${encodeURIComponent(providerCustomerId)}/notifications`,
+      undefined
+    );
   }
 
   /**

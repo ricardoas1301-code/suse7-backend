@@ -1,8 +1,14 @@
 // ======================================================================
 // billingCustomerService — cliente de cobrança por usuário + provider
+// S1.HF.ASAAS-NOTIFICATIONS.1 — política de notificação fail-closed
 // ======================================================================
 
-import { logBilling, logBillingError } from "../billingLog.js";
+import { logBilling } from "../billingLog.js";
+import {
+  assertCustomerNotificationPolicyForCharge,
+  ensureAsaasCustomerNotificationPolicy,
+  ASAAS_CUSTOMER_NOTIFICATION_POLICY_UNCONFIRMED,
+} from "./billingAsaasCustomerNotificationPolicyService.js";
 
 /**
  * @param {unknown} value
@@ -81,22 +87,29 @@ export async function getBillingCustomerByUser(supabase, provider, userId) {
 /**
  * @param {import("../providers/BillingProvider.js").BillingProvider} providerApi
  * @param {string} providerCustomerId
- * @param {string | null} [taxId]
+ * @param {{ userId?: string | null; taxId?: string | null }} [opts]
  */
-async function ensureAsaasNotificationsDisabled(providerApi, providerCustomerId, taxId = null) {
-  if (typeof providerApi.updateCustomer !== "function") return;
-
-  try {
-    await providerApi.updateCustomer(providerCustomerId, {
-      notificationDisabled: true,
-      ...(taxId ? { cpfCnpj: taxId } : {}),
-    });
-    logBilling("billing", "customer_notifications_disabled", { provider_customer_id: providerCustomerId });
-  } catch (error) {
-    logBillingError("billing", "customer_notifications_disable_failed", error, {
-      provider_customer_id: providerCustomerId,
-    });
+async function ensureAsaasNotificationsDisabled(providerApi, providerCustomerId, opts = {}) {
+  const result = await ensureAsaasCustomerNotificationPolicy(providerApi, {
+    providerCustomerId,
+    userId: opts.userId ?? null,
+    taxId: opts.taxId ?? null,
+  });
+  if (!result.ok) {
+    const err = new Error("Operação temporariamente indisponível. Tente novamente em instantes.");
+    /** @type {any} */ (err).code = ASAAS_CUSTOMER_NOTIFICATION_POLICY_UNCONFIRMED;
+    /** @type {any} */ (err).httpStatus = 503;
+    /** @type {any} */ (err).policyStatus = result.status;
+    /** @type {any} */ (err).doesNotAffect = {
+      delinquency: false,
+      entitlement: false,
+      babyFallback: false,
+      grace: false,
+      periodAdvance: false,
+    };
+    throw err;
   }
+  return result;
 }
 
 /**
@@ -115,7 +128,12 @@ export async function ensureBillingCustomerForUser(supabase, providerApi, provid
 
   const existing = await getBillingCustomerByUser(supabase, providerKey, user.id);
   if (existing?.provider_customer_id) {
-    await ensureAsaasNotificationsDisabled(providerApi, existing.provider_customer_id, taxId);
+    if (providerKey === "asaas") {
+      await ensureAsaasNotificationsDisabled(providerApi, existing.provider_customer_id, {
+        userId: user.id,
+        taxId,
+      });
+    }
     return existing;
   }
 
@@ -132,12 +150,13 @@ export async function ensureBillingCustomerForUser(supabase, providerApi, provid
 
   logBilling("billing", "create_remote_customer", { provider: providerKey, user_id: user.id });
 
+  // Adapter Asaas aplica a política por último (ignora false do caller).
   const created = await providerApi.createCustomer({
     name,
     email,
     externalReference: user.id,
-    notificationDisabled: true,
     cpfCnpj: taxId,
+    notificationDisabled: true,
   });
 
   const providerCustomerId =
@@ -146,6 +165,14 @@ export async function ensureBillingCustomerForUser(supabase, providerApi, provid
       : null;
   if (!providerCustomerId) {
     throw new Error("Resposta do gateway sem id de cliente");
+  }
+
+  if (providerKey === "asaas") {
+    // Confirmação remota pós-criação (idempotente; usa cache após sucesso)
+    await ensureAsaasNotificationsDisabled(providerApi, providerCustomerId, {
+      userId: user.id,
+      taxId,
+    });
   }
 
   const row = {
@@ -158,8 +185,28 @@ export async function ensureBillingCustomerForUser(supabase, providerApi, provid
   const { data, error } = await supabase.from("billing_customers").insert(row).select("*").single();
   if (error?.code === "23505") {
     const again = await getBillingCustomerByUser(supabase, providerKey, user.id);
-    if (again) return again;
+    if (again) {
+      if (providerKey === "asaas" && again.provider_customer_id) {
+        await ensureAsaasNotificationsDisabled(providerApi, again.provider_customer_id, {
+          userId: user.id,
+          taxId,
+        });
+      }
+      return again;
+    }
   }
   if (error) throw error;
   return data;
+}
+
+/**
+ * Gate explícito antes de createPayment/createSubscription (defesa em profundidade).
+ * @param {import("../providers/BillingProvider.js").BillingProvider} providerApi
+ * @param {{ providerCustomerId: string; userId?: string | null }} input
+ */
+export async function assertBillingCustomerReadyForCharge(providerApi, input) {
+  return assertCustomerNotificationPolicyForCharge(providerApi, {
+    providerCustomerId: input.providerCustomerId,
+    userId: input.userId ?? null,
+  });
 }

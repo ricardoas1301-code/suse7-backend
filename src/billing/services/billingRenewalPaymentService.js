@@ -11,7 +11,7 @@ import {
   logEffectiveRenewalPriceResolved,
 } from "./billingEffectiveRenewalPriceService.js";
 import { decimalToScale2String, toDecimal } from "../utils/moneyDecimal.js";
-import { ensureBillingCustomerForUser } from "./billingCustomerService.js";
+import { assertBillingCustomerReadyForCharge, ensureBillingCustomerForUser } from "./billingCustomerService.js";
 import { getActivePlanById } from "./billingPlanRepository.js";
 import { assertRenewalPlanMatchesActiveSubscription } from "./billingRenewalService.js";
 import { updateRenewalCycle } from "./billingRenewalCycleRepository.js";
@@ -66,6 +66,10 @@ export async function createRenewalCyclePayment(supabase, subscription, plan, cy
   providerApi.assertConfigured();
   const user = { id: userId, email: null, user_metadata: {} };
   const customer = await ensureBillingCustomerForUser(supabase, providerApi, "asaas", user);
+  await assertBillingCustomerReadyForCharge(providerApi, {
+    providerCustomerId: String(customer.provider_customer_id),
+    userId,
+  });
 
   const cycleStart = String(cycle.cycle_start).slice(0, 10);
   /** @type {Record<string, unknown>} */
