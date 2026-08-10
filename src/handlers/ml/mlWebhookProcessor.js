@@ -306,14 +306,34 @@ async function resolveEventContext(supabase, event) {
     seller_company_id: sellerCompanyId,
   });
 
-  if (marketplaceAccountId && directUserId) {
-    console.info("[WEBHOOK_CONTEXT_RESOLVE_MATCH_FOUND]", {
-      stage: "processor",
-      attempt: "event_contains_marketplace_account_and_user",
-      matches_found_count: 1,
-      candidate_marketplace_accounts: [{ id: marketplaceAccountId, user_id: directUserId }],
+  if (marketplaceAccountId) {
+    const rows = await lookupAccounts(supabase, {
+      marketplaceAccountId,
+      reason: "event_marketplace_account_id",
     });
-    return { userId: directUserId, marketplaceAccountId, sellerCompanyId };
+    if (rows.length === 1 && rows[0]?.user_id) {
+      console.info("[WEBHOOK_CONTEXT_RESOLVE_MATCH_FOUND]", {
+        stage: "processor",
+        attempt: "event_marketplace_account_id",
+        matches_found_count: 1,
+        candidate_marketplace_accounts: rows,
+      });
+      return {
+        userId: String(rows[0].user_id),
+        marketplaceAccountId: String(rows[0].id),
+        sellerCompanyId: rows[0].seller_company_id != null ? String(rows[0].seller_company_id) : null,
+        mlUserId: marketplaceUserId ?? directUserId,
+      };
+    }
+    const account = pickUniqueAccountFromRows(rows, "event_marketplace_account_id");
+    if (account?.id && account?.user_id) {
+      return {
+        userId: String(account.user_id),
+        marketplaceAccountId: String(account.id),
+        sellerCompanyId: account.seller_company_id != null ? String(account.seller_company_id) : null,
+        mlUserId: marketplaceUserId ?? directUserId,
+      };
+    }
   }
 
   if (marketplaceAccountId && !directUserId) {
@@ -564,7 +584,7 @@ export async function runMlWebhookProcessor(input = {}) {
 
   let rows = [];
   try {
-    rows = await fetchPendingMlWebhookEvents(supabase, batchSize, { priorityEventIds });
+    rows = await fetchPendingMlWebhookEvents(supabase, batchSize, { priorityEventIds, maxAttempts });
   } catch (error) {
     const message = error?.message ? String(error.message) : String(error);
     console.error("[ML_PROCESSOR_FETCH_ERROR]", { message });
@@ -574,8 +594,8 @@ export async function runMlWebhookProcessor(input = {}) {
   console.info("[ML_PROCESSOR_FETCHED_EVENTS]", {
     found: rows.length,
     status_filter: "pending",
-    priority: "fast_lane_then_orders_v2_fairness",
-    order_by: "priority_ids > recent_orders_desc > recovery_orders_asc > other_asc",
+    priority: "fast_lane_retry_stale_recent_recovery",
+    order_by: "priority_ids > retry_due > stale_pending > recent_desc > recovery_asc > other_asc",
     priority_event_ids: priorityEventIds,
     limit: batchSize,
   });

@@ -123,4 +123,65 @@ describe("multi-tenant processor — WEBHOOK_ACCOUNT_AMBIGUOUS", () => {
     assert.match(src, /pickUniqueAccountFromRows/);
     assert.match(src, /status: "ignored"/);
   });
+
+  it("resolveEventContext usa tenant user_id quando event tem marketplace_account_id + ml user_id", async () => {
+    const src = await import("node:fs/promises").then((fs) =>
+      fs.readFile(new URL("./mlWebhookProcessor.js", import.meta.url), "utf8"),
+    );
+    assert.match(src, /attempt: "event_marketplace_account_id"/);
+    assert.match(src, /userId: String\(rows\[0\]\.user_id\)/);
+    assert.doesNotMatch(src, /return \{ userId: directUserId, marketplaceAccountId, sellerCompanyId \}/);
+  });
+});
+
+describe("mlWebhookRetry — contrato de retry", () => {
+  it("erro transitório reconhecido", async () => {
+    const { isMlWebhookTransientError } = await import("./_helpers/mlWebhookRetry.js");
+    assert.equal(isMlWebhookTransientError("ML_CLIENT_ID ou ML_CLIENT_SECRET ausentes", "WEBHOOK_PROCESS_ERROR"), true);
+    assert.equal(isMlWebhookTransientError("Tokens não encontrados", "WEBHOOK_PROCESS_ERROR"), true);
+    assert.equal(isMlWebhookTransientError("account_ambiguous_multi_tenant", "WEBHOOK_ACCOUNT_AMBIGUOUS"), false);
+  });
+
+  it("backoff respeita updated_at + attempts", async () => {
+    const { isMlWebhookEventRetryDue, calcMlWebhookRetryBackoffMs } = await import("./_helpers/mlWebhookRetry.js");
+    const now = Date.parse("2026-08-10T18:00:00.000Z");
+    const backoff = calcMlWebhookRetryBackoffMs(1);
+    assert.equal(
+      isMlWebhookEventRetryDue(
+        {
+          status: "pending",
+          attempts: 1,
+          last_error_code: "WEBHOOK_PROCESS_ERROR",
+          error_message: "Tokens não encontrados",
+          updated_at: new Date(now - backoff - 1000).toISOString(),
+        },
+        5,
+        now,
+      ),
+      true,
+    );
+    assert.equal(
+      isMlWebhookEventRetryDue(
+        {
+          status: "pending",
+          attempts: 1,
+          error_message: "Tokens não encontrados",
+          updated_at: new Date(now).toISOString(),
+        },
+        5,
+        now,
+      ),
+      false,
+    );
+  });
+
+  it("fila inclui lanes retry e stale", async () => {
+    const src = await import("node:fs/promises").then((fs) =>
+      fs.readFile(new URL("./_helpers/mlWebhookEventQueue.js", import.meta.url), "utf8"),
+    );
+    assert.match(src, /retryQuota/);
+    assert.match(src, /staleQuota/);
+    assert.match(src, /isMlWebhookEventRetryDue/);
+    assert.match(src, /isMlWebhookStalePendingEvent/);
+  });
 });
