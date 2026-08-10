@@ -3,8 +3,8 @@
 //
 // Pedido:
 // - upsert sales_orders por (marketplace, marketplace_account_id, external_order_id) — multi-conta
-// - itens: DELETE por sales_order_id + INSERT (evita duplicata em resync;
-//   external_order_item_id do ML é persistido em raw_json quando existir)
+// - itens: UPSERT canônico por (marketplace, marketplace_account_id, external_order_id, external_order_item_id)
+//   + remoção de órfãos; identidade ML em mercadoLivreOrderItemIdentity.js
 // - snapshot: append-only em order_raw_snapshots
 //
 // Consolidado:
@@ -14,6 +14,12 @@
 // ======================================================
 
 import Decimal from "decimal.js";
+import { resolveMercadoLivreOrderItemIdentity } from "../../../domain/sales/mercadoLivreOrderItemIdentity.js";
+import {
+  logSalesOrderItemsReconciliationAlert,
+  persistSalesOrderItemsCanonicalUpsert,
+  reconcileSalesOrderItemsGrossVsHeader,
+} from "./salesOrderItemsCanonicalPersist.js";
 import { ML_MARKETPLACE_SLUG } from "./mlMarketplace.js";
 import { fetchOrderById } from "./mercadoLibreOrdersApi.js";
 import {
@@ -534,7 +540,7 @@ export async function backfillMissingSalesOrderItemsFromOrderRaw(supabase, userI
       ord.marketplace_account_id != null ? String(ord.marketplace_account_id).trim() : null;
     const sellerCompanyId = ord.seller_company_id != null ? String(ord.seller_company_id).trim() : null;
 
-    const rows = lines.map((line) =>
+    const rows = lines.map((line, lineIndex) =>
       mapMlOrderItemToRow(
         userId,
         marketplace,
@@ -543,12 +549,19 @@ export async function backfillMissingSalesOrderItemsFromOrderRaw(supabase, userI
         nowIso,
         marketplaceAccountId,
         sellerCompanyId,
-        extPreview
+        extPreview,
+        { lineIndex, linesInOrder: lines },
       )
     );
 
-    const { error: insErr } = await supabase.from("sales_order_items").insert(rows);
-    if (insErr) {
+    try {
+      await persistSalesOrderItemsCanonicalUpsert(
+        supabase,
+        salesOrderId,
+        rows,
+        (msg, extra) => log(msg, { salesOrderId, external_order_id: extPreview, ...(extra ?? {}) }),
+      );
+    } catch (insErr) {
       log("backfill_items_insert_failed", { salesOrderId, external_order_id: extPreview, insErr });
       continue;
     }
@@ -598,7 +611,7 @@ export async function ensureSalesOrderItemsFromOrderLines(
   const sellerCompanyId =
     salesOrder.seller_company_id != null ? String(salesOrder.seller_company_id).trim() : null;
 
-  const rows = lines.map((line) =>
+  const rows = lines.map((line, lineIndex) =>
     mapMlOrderItemToRow(
       userId,
       marketplace,
@@ -607,12 +620,12 @@ export async function ensureSalesOrderItemsFromOrderLines(
       nowIso,
       marketplaceAccountId,
       sellerCompanyId,
-      extPreview
+      extPreview,
+      { lineIndex, linesInOrder: lines },
     )
   );
 
-  const { error: insErr } = await supabase.from("sales_order_items").insert(rows);
-  if (insErr) throw insErr;
+  await persistSalesOrderItemsCanonicalUpsert(supabase, salesOrderId, rows);
   return { inserted: rows.length, skipped: null };
 }
 
@@ -680,8 +693,7 @@ export function mapMlOrderToSalesOrderRow(
 
 /**
  * Converte uma linha de order_items do ML em sales_order_items.
- * Estratégia: sem id estável confiável em todos os casos → sempre substituir
- * todas as linhas do pedido no resync (ver persistMercadoLibreOrder).
+ * Identidade canônica via resolveMercadoLivreOrderItemIdentity (UPSERT idempotente).
  */
 export function mapMlOrderItemToRow(
   userId,
@@ -691,7 +703,8 @@ export function mapMlOrderItemToRow(
   nowIso,
   marketplaceAccountId = null,
   sellerCompanyId = null,
-  externalOrderId = null
+  externalOrderId = null,
+  identityContext = null,
 ) {
   const itemObj = line?.item && typeof line.item === "object" ? line.item : {};
   const listingId = extractExternalListingIdFromOrderLine(line);
@@ -704,12 +717,20 @@ export function mapMlOrderItemToRow(
 
   const { qty, unit, gross: lineTotal, fee, net } = extractOrderLinePricing(line);
 
-  const extLineId =
-    line.id != null
-      ? String(line.id)
-      : line.order_item_id != null
-        ? String(line.order_item_id)
-        : null;
+  const linesInOrder =
+    identityContext?.linesInOrder && Array.isArray(identityContext.linesInOrder)
+      ? identityContext.linesInOrder
+      : [line];
+  const lineIndex =
+    identityContext?.lineIndex != null && Number.isFinite(Number(identityContext.lineIndex))
+      ? Number(identityContext.lineIndex)
+      : 0;
+  const extOrderId = externalOrderId != null ? String(externalOrderId).trim() : "";
+  const identity = resolveMercadoLivreOrderItemIdentity(line, {
+    externalOrderId: extOrderId,
+    lineIndex,
+    linesInOrder,
+  });
 
   return {
     sales_order_id: salesOrderId,
@@ -718,7 +739,7 @@ export function mapMlOrderItemToRow(
     marketplace_account_id: marketplaceAccountId,
     seller_company_id: sellerCompanyId,
     external_order_id: externalOrderId,
-    external_order_item_id: extLineId,
+    external_order_item_id: identity.external_order_item_id,
     external_listing_id: listingId,
     external_variation_id: variationId,
     title_snapshot:
@@ -856,12 +877,9 @@ export async function persistMercadoLibreOrder(supabase, userId, order, opts = {
   }
 
   logStep("persist items");
-  const { error: delI } = await supabase.from("sales_order_items").delete().eq("sales_order_id", salesOrderId);
-  if (delI) log("delete_order_items_warn", { delI, salesOrderId });
-
   const lines = resolveMlOrderLinesFromOrder(orderForPersist);
   if (lines.length > 0) {
-    const rows = lines.map((line) =>
+    const rows = lines.map((line, lineIndex) =>
       mapMlOrderItemToRow(
         userId,
         marketplace,
@@ -870,7 +888,8 @@ export async function persistMercadoLibreOrder(supabase, userId, order, opts = {
         nowIso,
         marketplaceAccountId,
         sellerCompanyId,
-        extPreview
+        extPreview,
+        { lineIndex, linesInOrder: lines },
       )
     );
 
@@ -878,6 +897,7 @@ export async function persistMercadoLibreOrder(supabase, userId, order, opts = {
       console.log("[ml/sync-sales] pricing_debug_sample", {
         external_order_id: extPreview,
         lines: rows.map((r) => ({
+          external_order_item_id: r.external_order_item_id,
           external_listing_id: r.external_listing_id,
           quantity: r.quantity,
           unit_price: r.unit_price,
@@ -890,10 +910,20 @@ export async function persistMercadoLibreOrder(supabase, userId, order, opts = {
       pricingDebug.remaining -= 1;
     }
 
-    const { error: insErr } = await supabase.from("sales_order_items").insert(rows);
-    if (insErr) log("insert_order_items_failed", { insErr, salesOrderId });
-    if (insErr) throw insErr;
+    await persistSalesOrderItemsCanonicalUpsert(supabase, salesOrderId, rows, (msg, extra) =>
+      log(msg, { salesOrderId, external_order_id: extPreview, ...(extra ?? {}) }),
+    );
+
+    const reconciliation = reconcileSalesOrderItemsGrossVsHeader(orderRow.total_amount, rows);
+    logSalesOrderItemsReconciliationAlert(orderRow, reconciliation, (msg, extra) =>
+      log(msg, { salesOrderId, external_order_id: extPreview, ...(extra ?? {}) }),
+    );
   } else {
+    const { error: delAllErr } = await supabase.from("sales_order_items").delete().eq("sales_order_id", salesOrderId);
+    if (delAllErr) {
+      log("delete_all_order_items_failed", { delAllErr, salesOrderId, external_order_id: extPreview });
+      throw delAllErr;
+    }
     const delivery = extractMlOrderDeliveryMeta(orderForPersist);
     log("persist_order_without_items", {
       salesOrderId,
