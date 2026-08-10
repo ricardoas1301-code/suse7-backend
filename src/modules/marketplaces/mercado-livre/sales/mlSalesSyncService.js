@@ -2,7 +2,7 @@ import { ML_MARKETPLACE_SLUG } from "../../../../handlers/ml/_helpers/mlMarketpl
 import { fetchMercadoLibreUserById } from "../../../../handlers/ml/_helpers/mercadoLibreOrdersApi.js";
 import { persistMercadoLibreOrder } from "../../../../handlers/ml/_helpers/mlSalesPersist.js";
 import { extractBuyerThumbFromOrderRaw } from "../../../../handlers/sales/_vendasSalesRows.js";
-import { enrichMercadoLibreSaleFinancialSnapshot } from "../../../../services/marketplace/mercadoLivreSaleFinancialEnrichment.js";
+import { enrichMercadoLivreSaleFinancialSnapshot } from "../../../../services/marketplace/mercadoLivreSaleFinancialEnrichment.js";
 import { notifyBillableSaleRecorded } from "../../../../billing/services/billingBillableSaleEntitlementHook.js";
 import {
   finalizeBillableSaleV2,
@@ -520,7 +520,7 @@ export async function applyMlOrderDetailToMarketplaceSales(
   if (accessToken && String(accessToken).trim() !== "" && out?.salesOrderId) {
     logStep("enrich financial snapshot optional");
     try {
-      await enrichMercadoLibreSaleFinancialSnapshot(supabase, userId, orderForEnrichment, {
+      await enrichMercadoLivreSaleFinancialSnapshot(supabase, userId, orderForEnrichment, {
         accessToken: String(accessToken).trim(),
         marketplaceAccountId: marketplaceAccountId || null,
         salesOrderId: String(out.salesOrderId),

@@ -65,7 +65,23 @@ function withTimeout(promise, ms, label) {
 }
 
 function resolveLookbackHours() {
-  return Math.min(72, Math.max(2, parseInt(process.env.ML_INCREMENTAL_SALES_LOOKBACK_HOURS || "6", 10) || 6));
+  return Math.min(168, Math.max(2, parseInt(process.env.ML_INCREMENTAL_SALES_LOOKBACK_HOURS || "6", 10) || 6));
+}
+
+/** Sobreposição segura atrás do watermark confirmado (minutos). */
+function resolveOverlapMinutes() {
+  return Math.min(
+    360,
+    Math.max(15, parseInt(process.env.ML_INCREMENTAL_SALES_OVERLAP_MINUTES || "90", 10) || 90)
+  );
+}
+
+/** Teto de catch-up após outagem (horas) — evita full historical acidental. */
+function resolveMaxCatchupHours() {
+  return Math.min(
+    168,
+    Math.max(12, parseInt(process.env.ML_INCREMENTAL_SALES_MAX_CATCHUP_HOURS || "120", 10) || 120)
+  );
 }
 
 function resolveMaxPages() {
@@ -77,6 +93,49 @@ function resolveDetailConcurrency() {
     8,
     Math.max(1, parseInt(process.env.ML_INCREMENTAL_SALES_DETAIL_CONCURRENCY || "3", 10) || 3)
   );
+}
+
+/**
+ * Janela incremental oficial:
+ * - baseline: now − lookback
+ * - se houver watermark confirmado: estende até watermark − overlap (catch-up)
+ * - nunca além de maxCatchup (sem full historical implícito)
+ *
+ * @param {{
+ *   nowMs?: number;
+ *   lookbackHours: number;
+ *   overlapMinutes: number;
+ *   maxCatchupHours: number;
+ *   watermarkIso?: string | null;
+ * }} args
+ */
+export function resolveIncrementalSalesWindow(args) {
+  const nowMs = Number.isFinite(args.nowMs) ? /** @type {number} */ (args.nowMs) : Date.now();
+  const lookbackHours = Math.max(1, Number(args.lookbackHours) || 6);
+  const overlapMinutes = Math.max(0, Number(args.overlapMinutes) || 0);
+  const maxCatchupHours = Math.max(lookbackHours, Number(args.maxCatchupHours) || lookbackHours);
+  const rangeTo = new Date(nowMs).toISOString();
+  const lookbackFromMs = nowMs - lookbackHours * 3600000;
+  const maxCatchupFromMs = nowMs - maxCatchupHours * 3600000;
+  let fromMs = lookbackFromMs;
+  const wmRaw = args.watermarkIso != null ? String(args.watermarkIso).trim() : "";
+  if (wmRaw) {
+    const wmMs = Date.parse(wmRaw);
+    if (Number.isFinite(wmMs)) {
+      const withOverlapMs = wmMs - overlapMinutes * 60000;
+      fromMs = Math.min(fromMs, withOverlapMs);
+    }
+  }
+  fromMs = Math.max(fromMs, maxCatchupFromMs);
+  if (fromMs > nowMs) fromMs = lookbackFromMs;
+  return {
+    rangeFrom: new Date(fromMs).toISOString(),
+    rangeTo,
+    lookback_hours: lookbackHours,
+    overlap_minutes: overlapMinutes,
+    max_catchup_hours: maxCatchupHours,
+    watermark_used: wmRaw || null,
+  };
 }
 
 /**
@@ -137,11 +196,13 @@ export async function runIncrementalMlSalesPollWave(supabase, opts = {}) {
   const maxAccounts = Math.min(40, Math.max(1, Number(opts.maxAccounts) || 12));
   const pageLimit = Math.min(50, Math.max(10, Number(opts.pageLimit) || 50));
   const lookbackH = resolveLookbackHours();
+  const overlapMin = resolveOverlapMinutes();
+  const maxCatchupH = resolveMaxCatchupHours();
   const maxPages = resolveMaxPages();
-  const rangeTo = new Date().toISOString();
-  const rangeFrom = new Date(Date.now() - lookbackH * 3600000).toISOString();
 
   const selectVariants = [
+    "id,user_id,seller_company_id,external_seller_id,status,ml_sales_last_sync_at,ml_sales_last_synced_order_created_to,token_expires_at",
+    "id,user_id,seller_company_id,external_seller_id,status,ml_sales_last_sync_at,ml_sales_last_synced_order_created_to",
     "id,user_id,seller_company_id,external_seller_id,status,ml_sales_last_sync_at,token_expires_at",
     "id,user_id,seller_company_id,external_seller_id,status,ml_sales_last_sync_at",
     "id,user_id,seller_company_id,external_seller_id,status",
@@ -257,6 +318,20 @@ export async function runIncrementalMlSalesPollWave(supabase, opts = {}) {
       continue;
     }
 
+    const watermarkIso =
+      acc.ml_sales_last_synced_order_created_to != null
+        ? String(acc.ml_sales_last_synced_order_created_to)
+        : acc.ml_sales_last_sync_at != null
+          ? String(acc.ml_sales_last_sync_at)
+          : null;
+    const window = resolveIncrementalSalesWindow({
+      lookbackHours: lookbackH,
+      overlapMinutes: overlapMin,
+      maxCatchupHours: maxCatchupH,
+      watermarkIso,
+    });
+    const { rangeFrom, rangeTo } = window;
+
     console.info("[sales-sync] fetch_orders_start", {
       phase: "incremental_poll",
       marketplace: ML_MARKETPLACE_SLUG,
@@ -266,11 +341,16 @@ export async function runIncrementalMlSalesPollWave(supabase, opts = {}) {
       external_seller_id: sellerId,
       window_start: rangeFrom,
       window_end: rangeTo,
+      watermark: watermarkIso,
+      lookback_hours: window.lookback_hours,
+      overlap_minutes: window.overlap_minutes,
+      max_catchup_hours: window.max_catchup_hours,
     });
 
     let offset = 0;
     /** @type {string | null} */
     let batchMaxCreated = null;
+    let accountPersisted = 0;
     const summaryStub = {
       synced_count: 0,
       created_count: 0,
@@ -347,6 +427,7 @@ export async function runIncrementalMlSalesPollWave(supabase, opts = {}) {
             "incremental_order"
           );
           out.orders_persisted += 1;
+          accountPersisted += 1;
           console.info("[sales-sync] persist_order_ok", {
             phase: "incremental_poll",
             marketplace_account_id: accountId,
@@ -374,7 +455,8 @@ export async function runIncrementalMlSalesPollWave(supabase, opts = {}) {
       offset += pageLimit;
     }
 
-    if (batchMaxCreated || out.orders_persisted > 0) {
+    // Watermark só avança após persistência confirmada desta conta (nunca por contador global).
+    if (batchMaxCreated || accountPersisted > 0) {
       try {
         await advanceMlSalesWatermark(supabase, accountId, batchMaxCreated, new Date().toISOString());
       } catch (e) {
@@ -388,6 +470,7 @@ export async function runIncrementalMlSalesPollWave(supabase, opts = {}) {
     console.info("[sales-sync] account_done", {
       phase: "incremental_poll",
       marketplace_account_id: accountId,
+      account_orders_persisted: accountPersisted,
       orders_persisted_total: out.orders_persisted,
     });
   }
