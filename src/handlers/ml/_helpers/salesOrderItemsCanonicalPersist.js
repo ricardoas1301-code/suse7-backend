@@ -3,6 +3,8 @@
 // ======================================================================
 
 import Decimal from "decimal.js";
+import { mergeIncomingSalesOrderItemWithExistingSnapshot } from "../../../domain/sales/salesOrderItemSnapshotPreservation.js";
+import { isItemFinancialSnapshotComplete } from "../../../services/marketplace/mercadoLivreSaleFinancialEnrichment.js";
 
 /** Tolerância formal para reconciliação header vs linhas (BRL). */
 export const SALES_ORDER_ITEMS_RECONCILIATION_TOLERANCE_BRL = new Decimal("0.01");
@@ -67,7 +69,37 @@ export async function persistSalesOrderItemsCanonicalUpsert(supabase, salesOrder
     return { upserted: 0, orphans_removed: 0, canonical_ids: [] };
   }
 
-  const { error: upsertErr } = await supabase.from("sales_order_items").upsert(canonicalRows, {
+  const { data: existingRows, error: existingFetchErr } = await supabase
+    .from("sales_order_items")
+    .select(
+      "id, external_order_item_id, raw_json, fee_amount, shipping_share_amount, net_amount, gross_amount",
+    )
+    .eq("sales_order_id", salesOrderId);
+  if (existingFetchErr) {
+    log("fetch_existing_order_items_for_snapshot_preservation_failed", {
+      salesOrderId,
+      existingFetchErr,
+    });
+    throw existingFetchErr;
+  }
+
+  /** @type {Map<string, Record<string, unknown>>} */
+  const existingByExternalItemId = new Map();
+  for (const row of existingRows ?? []) {
+    const eid = row?.external_order_item_id != null ? String(row.external_order_item_id).trim() : "";
+    if (eid) existingByExternalItemId.set(eid, /** @type {Record<string, unknown>} */ (row));
+  }
+
+  const rowsToUpsert = canonicalRows.map((incoming) => {
+    const extId =
+      incoming?.external_order_item_id != null ? String(incoming.external_order_item_id).trim() : "";
+    const existing = extId ? existingByExternalItemId.get(extId) ?? null : null;
+    return mergeIncomingSalesOrderItemWithExistingSnapshot(incoming, existing, {
+      isMarketplaceSnapshotComplete: isItemFinancialSnapshotComplete,
+    });
+  });
+
+  const { error: upsertErr } = await supabase.from("sales_order_items").upsert(rowsToUpsert, {
     onConflict: SALES_ORDER_ITEMS_CANONICAL_UPSERT_CONFLICT,
   });
   if (upsertErr) {
@@ -106,7 +138,7 @@ export async function persistSalesOrderItemsCanonicalUpsert(supabase, salesOrder
   }
 
   return {
-    upserted: canonicalRows.length,
+    upserted: rowsToUpsert.length,
     orphans_removed: orphanIds.length,
     canonical_ids: [...canonicalIds],
   };

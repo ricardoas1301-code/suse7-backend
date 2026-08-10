@@ -35,6 +35,7 @@
     "test:pricing-health-buckets": "node ./scripts/test_pricing_health_buckets_unit.mjs",
     "test:normalize-ml-shipping-summary": "node ./scripts/test_normalize_ml_shipping_summary_unit.mjs",
     "test:listing-summary-kpis": "node ./scripts/test_normalize_ml_shipping_summary_unit.mjs",
+    "test:sales-order-item-snapshot-preservation": "node ./scripts/test_sales_order_item_snapshot_preservation_unit.mjs",
     "test": "npm run test:listing-health-buckets && npm run test:product-health-buckets && npm run test:competition-health-buckets && npm run test:pricing-health-buckets",
     "backfill:recent-cost-snapshots": "node ./scripts/backfill_recent_cost_snapshots_dev.mjs"
   },
