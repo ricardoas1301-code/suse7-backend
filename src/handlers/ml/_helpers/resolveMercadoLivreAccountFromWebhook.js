@@ -1,5 +1,26 @@
 import { asMlWebhookObject, extractMlWebhookMeta } from "./mlWebhookPayload.js";
 
+/** @typedef {{ id: string; user_id?: string | null; seller_company_id?: string | null; external_seller_id?: string | null }} MercadoLivreAccountCandidate */
+
+/**
+ * Classifica candidatos de conta ML — nunca escolhe silenciosamente quando >1 ativa.
+ *
+ * @param {MercadoLivreAccountCandidate[] | null | undefined} candidates
+ * @returns {{ kind: "none" | "unique" | "ambiguous"; account: MercadoLivreAccountCandidate | null; candidates: MercadoLivreAccountCandidate[] }}
+ */
+export function classifyMercadoLivreAccountCandidates(candidates) {
+  const rows = Array.isArray(candidates)
+    ? candidates.filter((row) => row?.id != null && String(row.id).trim() !== "")
+    : [];
+  if (rows.length === 0) {
+    return { kind: "none", account: null, candidates: [] };
+  }
+  if (rows.length === 1) {
+    return { kind: "unique", account: rows[0], candidates: rows };
+  }
+  return { kind: "ambiguous", account: null, candidates: rows };
+}
+
 function pickOrderIdFromResource(resource) {
   if (resource == null) return null;
   const parts = String(resource)
@@ -90,7 +111,8 @@ export async function resolveMercadoLivreAccountFromWebhook(supabase, payload) {
       .order("updated_at", { ascending: false })
       .limit(5);
     const candidates = Array.isArray(rows) ? rows : [];
-    if (candidates.length > 0) {
+    const classified = classifyMercadoLivreAccountCandidates(candidates);
+    if (classified.kind === "unique" && classified.account?.id) {
       console.info("[WEBHOOK_CONTEXT_RESOLVE_MATCH_FOUND]", {
         stage: "ingest",
         attempt: "external_seller_id_from_payload",
@@ -99,8 +121,22 @@ export async function resolveMercadoLivreAccountFromWebhook(supabase, payload) {
       });
       return {
         resolved: true,
-        marketplace_account_id: String(candidates[0].id),
+        marketplace_account_id: String(classified.account.id),
         warning: null,
+      };
+    }
+    if (classified.kind === "ambiguous") {
+      console.warn("[WEBHOOK_CONTEXT_RESOLVE_AMBIGUOUS]", {
+        stage: "ingest",
+        attempt: "external_seller_id_from_payload",
+        external_seller_id: marketplaceUserId,
+        matches_found_count: candidates.length,
+        candidate_marketplace_accounts: candidates,
+      });
+      return {
+        resolved: false,
+        marketplace_account_id: null,
+        warning: "account_ambiguous_multi_tenant",
       };
     }
   }

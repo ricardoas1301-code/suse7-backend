@@ -51,6 +51,23 @@ export async function handleJobsMlWebhookEvents(req, res) {
   );
 
   const body = req.body && typeof req.body === "object" ? req.body : {};
+  const priorityFromBody = body.priority_event_ids ?? body.priorityEventIds;
+  const priorityFromQuery = req.query?.priority_event_ids ?? req.query?.priorityEventIds;
+  const priorityRaw = priorityFromBody ?? priorityFromQuery;
+  /** @type {string[]} */
+  const priorityEventIds = [];
+  if (Array.isArray(priorityRaw)) {
+    for (const id of priorityRaw) {
+      const s = String(id || "").trim();
+      if (s) priorityEventIds.push(s);
+    }
+  } else if (typeof priorityRaw === "string" && priorityRaw.trim() !== "") {
+    for (const part of priorityRaw.split(",")) {
+      const s = part.trim();
+      if (s) priorityEventIds.push(s);
+    }
+  }
+
   const inputLimit = parseInt(
     String(body.limit ?? req.query?.limit ?? body.batchSize ?? req.query?.batchSize ?? batchSize),
     10
@@ -83,7 +100,11 @@ export async function handleJobsMlWebhookEvents(req, res) {
     if (reprocessRequested) {
       reprocess = await reprocessPendingOrdersV2({ limit: 5000 });
     }
-    const out = await runMlWebhookProcessor({ batchSize: effectiveLimit, maxAttempts });
+    const out = await runMlWebhookProcessor({
+      batchSize: effectiveLimit,
+      maxAttempts,
+      priorityEventIds,
+    });
     console.info("[ml-webhook-events-job] drain_summary", {
       timestamp: new Date().toISOString(),
       limit: effectiveLimit,

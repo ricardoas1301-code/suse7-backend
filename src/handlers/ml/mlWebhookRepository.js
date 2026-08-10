@@ -1,7 +1,11 @@
 import { createClient } from "@supabase/supabase-js";
 import { config } from "../../infra/config.js";
-import { buildMlWebhookDedupeKey, extractMlWebhookMeta, inferOrderIdFromMlWebhook, inferShipmentIdFromMlWebhook } from "./_helpers/mlWebhookPayload.js";
-import { resolveMercadoLivreAccountFromWebhook } from "./_helpers/resolveMercadoLivreAccountFromWebhook.js";
+import {
+  buildMlWebhookDedupeKey,
+  extractMlWebhookMeta,
+  inferOrderIdFromMlWebhook,
+  inferShipmentIdFromMlWebhook,
+} from "./_helpers/mlWebhookPayload.js";
 
 /**
  * @returns {import("@supabase/supabase-js").SupabaseClient}
@@ -34,15 +38,18 @@ function parseMissingColumnsFromSchemaError(error) {
 }
 
 /**
+ * Persistência idempotente mínima — insert-first (1 RTT no caminho feliz).
+ * Resolução de conta deferida ao processor (fora do ACK).
+ *
  * @param {unknown} payload
  * @param {{ ip: string | null; marketplace?: string }} opts
  */
 export async function saveMlWebhookEvent(payload, opts) {
+  const timing = { db_start_ms: Date.now() };
   const supabase = getSupabaseAdmin();
   const marketplace = opts.marketplace || "mercado_livre";
   const meta = extractMlWebhookMeta(payload);
   const dedupeKey = buildMlWebhookDedupeKey(payload);
-  const resolved = await resolveMercadoLivreAccountFromWebhook(supabase, payload);
 
   const row = {
     marketplace,
@@ -57,67 +64,72 @@ export async function saveMlWebhookEvent(payload, opts) {
     dedupe_key: dedupeKey,
     external_event_id: meta.externalEventId,
     status: "pending",
-    marketplace_account_id: resolved.marketplace_account_id,
-    error_message: resolved.resolved ? null : resolved.warning,
+    marketplace_account_id: null,
+    error_message: null,
   };
-
-  const { data: existing } = await supabase
-    .from("ml_webhook_events")
-    .select("id, status")
-    .eq("dedupe_key", dedupeKey)
-    .maybeSingle();
-  if (existing?.id) {
-    console.info("[ml-webhook] event_queued", {
-      id: String(existing.id),
-      duplicate: true,
-      status: String(existing.status || "pending"),
-      topic: meta.topic,
-      resource: meta.resource,
-      user_id: meta.marketplaceUserId,
-      ml_user_id: meta.marketplaceUserId,
-      order_id: inferOrderIdFromMlWebhook(meta.topic, meta.resource),
-      shipment_id: inferShipmentIdFromMlWebhook(meta.topic, meta.resource),
-      marketplace_account_id: resolved.marketplace_account_id ?? null,
-    });
-    return {
-      saved: true,
-      duplicate: true,
-      id: String(existing.id),
-      status: String(existing.status || "pending"),
-      topic: meta.topic,
-      resource: meta.resource,
-      user_id: meta.marketplaceUserId,
-    };
-  }
 
   const { data: inserted, error } = await supabase
     .from("ml_webhook_events")
     .insert(row)
     .select("id, status")
     .maybeSingle();
+  timing.dedupe_done_ms = Date.now();
+
+  if (!error && inserted?.id) {
+    timing.db_done_ms = timing.dedupe_done_ms;
+    console.info("[ml-webhook] event_queued", {
+      id: String(inserted.id),
+      duplicate: false,
+      status: String(inserted.status || "pending"),
+      topic: meta.topic,
+      resource: meta.resource,
+      user_id: meta.marketplaceUserId,
+      ml_user_id: meta.marketplaceUserId,
+      order_id: inferOrderIdFromMlWebhook(meta.topic, meta.resource),
+      shipment_id: inferShipmentIdFromMlWebhook(meta.topic, meta.resource),
+      marketplace_account_id: null,
+    });
+    return {
+      saved: true,
+      duplicate: false,
+      id: String(inserted.id),
+      status: String(inserted.status || "pending"),
+      topic: meta.topic,
+      resource: meta.resource,
+      user_id: meta.marketplaceUserId,
+      timing,
+    };
+  }
 
   if (error) {
     const code = /** @type {{ code?: string }} */ (error).code;
     if (code === "23505") {
+      const { data: existing } = await supabase
+        .from("ml_webhook_events")
+        .select("id, status")
+        .eq("dedupe_key", dedupeKey)
+        .maybeSingle();
+      timing.db_done_ms = Date.now();
       console.info("[ml-webhook] event_queued", {
+        id: existing?.id != null ? String(existing.id) : null,
         duplicate: true,
-        status: "pending",
+        status: String(existing?.status || "pending"),
         topic: meta.topic,
         resource: meta.resource,
         user_id: meta.marketplaceUserId,
         ml_user_id: meta.marketplaceUserId,
         order_id: inferOrderIdFromMlWebhook(meta.topic, meta.resource),
         shipment_id: inferShipmentIdFromMlWebhook(meta.topic, meta.resource),
-        marketplace_account_id: resolved.marketplace_account_id ?? null,
       });
       return {
         saved: true,
         duplicate: true,
-        id: null,
-        status: "pending",
+        id: existing?.id != null ? String(existing.id) : null,
+        status: String(existing?.status || "pending"),
         topic: meta.topic,
         resource: meta.resource,
         user_id: meta.marketplaceUserId,
+        timing,
       };
     }
     const schemaError =
@@ -140,26 +152,6 @@ export async function saveMlWebhookEvent(payload, opts) {
     throw error;
   }
 
-  console.info("[ml-webhook] event_queued", {
-    id: inserted?.id != null ? String(inserted.id) : null,
-    duplicate: false,
-    status: inserted?.status != null ? String(inserted.status) : row.status,
-    topic: meta.topic,
-    resource: meta.resource,
-    user_id: meta.marketplaceUserId,
-    ml_user_id: meta.marketplaceUserId,
-    order_id: inferOrderIdFromMlWebhook(meta.topic, meta.resource),
-    shipment_id: inferShipmentIdFromMlWebhook(meta.topic, meta.resource),
-    marketplace_account_id: resolved.marketplace_account_id ?? null,
-  });
-
-  return {
-    saved: true,
-    duplicate: false,
-    id: inserted?.id != null ? String(inserted.id) : null,
-    status: inserted?.status != null ? String(inserted.status) : row.status,
-    topic: meta.topic,
-    resource: meta.resource,
-    user_id: meta.marketplaceUserId,
-  };
+  timing.db_done_ms = Date.now();
+  throw new Error("ML_WEBHOOK_INSERT_UNEXPECTED_EMPTY");
 }

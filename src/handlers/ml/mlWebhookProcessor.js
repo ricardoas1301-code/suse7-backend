@@ -10,6 +10,8 @@ import { enrichMlOrderBuyerThumbnailIfNeeded } from "../../modules/marketplaces/
 import { applyMlOrderDetailToMarketplaceSales } from "../../modules/marketplaces/mercado-livre/sales/mlSalesSyncService.js";
 import { getValidMLToken } from "./_helpers/mlToken.js";
 import { inferOrderIdFromMlWebhook, inferShipmentIdFromMlWebhook } from "./_helpers/mlWebhookPayload.js";
+import { classifyMercadoLivreAccountCandidates } from "./_helpers/resolveMercadoLivreAccountFromWebhook.js";
+import { fetchPendingMlWebhookEvents } from "./_helpers/mlWebhookEventQueue.js";
 
 /**
  * @returns {import("@supabase/supabase-js").SupabaseClient}
@@ -161,42 +163,6 @@ async function reclaimStaleMlWebhookProcessingEvents(supabase) {
 
 /**
  * @param {import("@supabase/supabase-js").SupabaseClient} supabase
- * @param {number} batchSize
- */
-async function fetchPendingMlWebhookEvents(supabase, batchSize) {
-  const orderLimit = Math.max(1, Math.min(batchSize, Math.ceil(batchSize * 0.75) || batchSize));
-  const { data: orderEvents, error: orderErr } = await supabase
-    .from("ml_webhook_events")
-    .select("*")
-    .eq("status", "pending")
-    .eq("topic", "orders_v2")
-    .order("created_at", { ascending: true })
-    .limit(orderLimit);
-  if (orderErr) throw orderErr;
-  const picked = Array.isArray(orderEvents) ? [...orderEvents] : [];
-  const pickedIds = new Set(picked.map((row) => String(row.id || "")));
-  const remaining = Math.max(0, batchSize - picked.length);
-  if (remaining > 0) {
-    const { data: otherEvents, error: otherErr } = await supabase
-      .from("ml_webhook_events")
-      .select("*")
-      .eq("status", "pending")
-      .neq("topic", "orders_v2")
-      .order("created_at", { ascending: true })
-      .limit(remaining);
-    if (otherErr) throw otherErr;
-    for (const row of otherEvents || []) {
-      const id = String(row.id || "");
-      if (!id || pickedIds.has(id)) continue;
-      picked.push(row);
-      pickedIds.add(id);
-    }
-  }
-  return picked;
-}
-
-/**
- * @param {import("@supabase/supabase-js").SupabaseClient} supabase
  * @param {{ marketplaceAccountId?: string | null; sellerId?: string | null; reason: string }} input
  */
 async function lookupAccounts(supabase, input) {
@@ -227,6 +193,33 @@ async function lookupAccounts(supabase, input) {
     candidate_marketplace_accounts: rows,
   });
   return rows;
+}
+
+/**
+ * @param {Record<string, unknown>[]} rows
+ * @param {string} attempt
+ */
+function pickUniqueAccountFromRows(rows, attempt) {
+  const classified = classifyMercadoLivreAccountCandidates(
+    /** @type {import("./_helpers/resolveMercadoLivreAccountFromWebhook.js").MercadoLivreAccountCandidate[]} */ (
+      rows
+    ),
+  );
+  if (classified.kind === "unique" && classified.account?.id && classified.account?.user_id) {
+    return classified.account;
+  }
+  if (classified.kind === "ambiguous") {
+    console.warn("[WEBHOOK_CONTEXT_RESOLVE_AMBIGUOUS]", {
+      stage: "processor",
+      attempt,
+      matches_found_count: rows.length,
+      candidate_marketplace_accounts: rows,
+    });
+    const err = new Error("WEBHOOK_ACCOUNT_AMBIGUOUS");
+    /** @type {any} */ (err).code = "WEBHOOK_ACCOUNT_AMBIGUOUS";
+    throw err;
+  }
+  return null;
 }
 
 /**
@@ -348,7 +341,8 @@ async function resolveEventContext(supabase, event) {
       sellerId: marketplaceUserId,
       reason: "external_seller_id_from_payload",
     });
-    if (rows[0]?.id && rows[0]?.user_id) {
+    const account = pickUniqueAccountFromRows(rows, "external_seller_id_from_payload");
+    if (account?.id && account?.user_id) {
       console.info("[WEBHOOK_CONTEXT_RESOLVE_MATCH_FOUND]", {
         stage: "processor",
         attempt: "external_seller_id_from_payload",
@@ -356,9 +350,9 @@ async function resolveEventContext(supabase, event) {
         candidate_marketplace_accounts: rows,
       });
       return {
-        userId: String(rows[0].user_id),
-        marketplaceAccountId: String(rows[0].id),
-        sellerCompanyId: rows[0].seller_company_id != null ? String(rows[0].seller_company_id) : null,
+        userId: String(account.user_id),
+        marketplaceAccountId: String(account.id),
+        sellerCompanyId: account.seller_company_id != null ? String(account.seller_company_id) : null,
       };
     }
   }
@@ -387,7 +381,11 @@ async function resolveEventContext(supabase, event) {
           sellerId: sellerIdFromOrder,
           reason: "external_seller_id_from_order_seller",
         });
-        if (orderSellerRows[0]?.id && orderSellerRows[0]?.user_id) {
+        const orderAccount = pickUniqueAccountFromRows(
+          orderSellerRows,
+          "external_seller_id_from_order_seller",
+        );
+        if (orderAccount?.id && orderAccount?.user_id) {
           console.info("[WEBHOOK_CONTEXT_RESOLVE_MATCH_FOUND]", {
             stage: "processor",
             attempt: "external_seller_id_from_order_seller",
@@ -398,10 +396,10 @@ async function resolveEventContext(supabase, event) {
             candidate_marketplace_accounts: orderSellerRows,
           });
           return {
-            userId: String(orderSellerRows[0].user_id),
-            marketplaceAccountId: String(orderSellerRows[0].id),
+            userId: String(orderAccount.user_id),
+            marketplaceAccountId: String(orderAccount.id),
             sellerCompanyId:
-              orderSellerRows[0].seller_company_id != null ? String(orderSellerRows[0].seller_company_id) : null,
+              orderAccount.seller_company_id != null ? String(orderAccount.seller_company_id) : null,
             sellerIdFromOrder,
             packId,
           };
@@ -522,25 +520,26 @@ async function processOrderEvent(supabase, event, resolvedContext = null) {
  * Prepara o ponto único para job assíncrono.
  * Suporta assinatura antiga `runMlWebhookProcessor(10)` e nova por objeto.
  *
- * @param {number | { batchSize?: number; maxAttempts?: number }} [input]
+ * @param {number | { batchSize?: number; maxAttempts?: number; priorityEventIds?: string[] }} [input]
  */
 export async function runMlWebhookProcessor(input = {}) {
   const supabase = getSupabaseAdmin();
 
-  const batchSize =
-    typeof input === "number"
-      ? Math.max(1, Math.min(500, input))
-      : Math.max(1, Math.min(500, parseInt(String(input.batchSize ?? "20"), 10) || 20));
-  const maxAttempts =
-    typeof input === "number"
-      ? Math.max(1, parseInt(process.env.ML_WEBHOOK_EVENTS_MAX_ATTEMPTS || "5", 10) || 5)
-      : Math.max(
-          1,
-          parseInt(
-            String(input.maxAttempts ?? process.env.ML_WEBHOOK_EVENTS_MAX_ATTEMPTS ?? "5"),
-            10
-          ) || 5
-        );
+  const isNumberInput = typeof input === "number";
+  const batchSize = isNumberInput
+    ? Math.max(1, Math.min(500, input))
+    : Math.max(1, Math.min(500, parseInt(String(input.batchSize ?? "20"), 10) || 20));
+  const maxAttempts = isNumberInput
+    ? Math.max(1, parseInt(process.env.ML_WEBHOOK_EVENTS_MAX_ATTEMPTS || "5", 10) || 5)
+    : Math.max(
+        1,
+        parseInt(String(input.maxAttempts ?? process.env.ML_WEBHOOK_EVENTS_MAX_ATTEMPTS ?? "5"), 10) || 5,
+      );
+  const priorityEventIds = isNumberInput
+    ? []
+    : (Array.isArray(input.priorityEventIds) ? input.priorityEventIds : [])
+        .map((id) => String(id || "").trim())
+        .filter(Boolean);
 
   const budgetMs = resolveMlWebhookEventsBudgetMs();
   const drainStartedAt = Date.now();
@@ -565,7 +564,7 @@ export async function runMlWebhookProcessor(input = {}) {
 
   let rows = [];
   try {
-    rows = await fetchPendingMlWebhookEvents(supabase, batchSize);
+    rows = await fetchPendingMlWebhookEvents(supabase, batchSize, { priorityEventIds });
   } catch (error) {
     const message = error?.message ? String(error.message) : String(error);
     console.error("[ML_PROCESSOR_FETCH_ERROR]", { message });
@@ -575,8 +574,9 @@ export async function runMlWebhookProcessor(input = {}) {
   console.info("[ML_PROCESSOR_FETCHED_EVENTS]", {
     found: rows.length,
     status_filter: "pending",
-    priority: "orders_v2_first",
-    order_by: "created_at_asc",
+    priority: "fast_lane_then_orders_v2_fairness",
+    order_by: "priority_ids > recent_orders_desc > recovery_orders_asc > other_asc",
+    priority_event_ids: priorityEventIds,
     limit: batchSize,
   });
   /** @type {Record<string, unknown>[]} */
@@ -685,10 +685,20 @@ export async function runMlWebhookProcessor(input = {}) {
         err && typeof err === "object" && "code" in err && err.code != null
           ? String(/** @type {{ code?: unknown }} */ (err).code)
           : "WEBHOOK_PROCESS_ERROR";
-      const nextStatus = attempts >= maxAttempts ? "error" : "pending";
-      const completedAt = nextStatus === "error" ? new Date().toISOString() : null;
+      const isAmbiguous = code === "WEBHOOK_ACCOUNT_AMBIGUOUS" || message.includes("WEBHOOK_ACCOUNT_AMBIGUOUS");
+      const nextStatus = isAmbiguous
+        ? "ignored"
+        : attempts >= maxAttempts
+          ? "error"
+          : "pending";
+      const completedAt =
+        nextStatus === "error" || nextStatus === "ignored" ? new Date().toISOString() : null;
 
-      failedCount += 1;
+      if (!isAmbiguous) {
+        failedCount += 1;
+      } else {
+        ignoredCount += 1;
+      }
       console.error("[ml-webhook-events-job] event_failed", {
         event_id: eventId,
         topic: topicLower || null,
@@ -698,7 +708,8 @@ export async function runMlWebhookProcessor(input = {}) {
         attempts,
         next_status: nextStatus,
       });
-      if (message.includes("WEBHOOK_ACCOUNT_CONTEXT_NOT_FOUND")) {
+
+      if (message.includes("WEBHOOK_ACCOUNT_CONTEXT_NOT_FOUND") || isAmbiguous) {
         console.error("[WEBHOOK_CONTEXT_RESOLVE_FAILED]", {
           stage: "processor",
           event_id: eventId,
@@ -710,14 +721,15 @@ export async function runMlWebhookProcessor(input = {}) {
           marketplace_account_id: event.marketplace_account_id ?? null,
           order_id: orderId,
           message,
+          ambiguous: isAmbiguous,
         });
       }
 
       await updateWebhookEventRow(supabase, eventId, {
         status: nextStatus,
-        attempts,
-        error_message: message.slice(0, 4000),
-        last_error_code: code.slice(0, 120),
+        attempts: isAmbiguous ? attempts : attempts,
+        error_message: (isAmbiguous ? "account_ambiguous_multi_tenant" : message).slice(0, 4000),
+        last_error_code: (isAmbiguous ? "WEBHOOK_ACCOUNT_AMBIGUOUS" : code).slice(0, 120),
         last_error_message: message.slice(0, 4000),
         processed_at: completedAt,
         completed_at: completedAt,
