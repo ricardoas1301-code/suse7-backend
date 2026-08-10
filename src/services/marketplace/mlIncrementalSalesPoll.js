@@ -119,13 +119,17 @@ export function resolveIncrementalSalesWindow(args) {
   const maxCatchupFromMs = nowMs - maxCatchupHours * 3600000;
   let fromMs = lookbackFromMs;
   const wmRaw = args.watermarkIso != null ? String(args.watermarkIso).trim() : "";
+  let desiredFromMs = lookbackFromMs;
   if (wmRaw) {
     const wmMs = Date.parse(wmRaw);
     if (Number.isFinite(wmMs)) {
       const withOverlapMs = wmMs - overlapMinutes * 60000;
-      fromMs = Math.min(fromMs, withOverlapMs);
+      desiredFromMs = Math.min(fromMs, withOverlapMs);
+      fromMs = desiredFromMs;
     }
   }
+  const catchup_clamped = Boolean(wmRaw && Number.isFinite(desiredFromMs) && desiredFromMs < maxCatchupFromMs);
+  const uncovered_through_ms = catchup_clamped ? maxCatchupFromMs : null;
   fromMs = Math.max(fromMs, maxCatchupFromMs);
   if (fromMs > nowMs) fromMs = lookbackFromMs;
   return {
@@ -135,7 +139,61 @@ export function resolveIncrementalSalesWindow(args) {
     overlap_minutes: overlapMinutes,
     max_catchup_hours: maxCatchupHours,
     watermark_used: wmRaw || null,
+    catchup_clamped,
+    desired_from: catchup_clamped ? new Date(desiredFromMs).toISOString() : null,
+    uncovered_through: catchup_clamped ? new Date(uncovered_through_ms).toISOString() : null,
   };
+}
+
+/**
+ * Quando a outagem excede maxCatchupHours, divide [watermark−overlap → now] em chunks
+ * explícitos (cada um ≤ maxCatchupHours) — evita descarte silencioso de período.
+ *
+ * @param {{
+ *   nowMs?: number;
+ *   lookbackHours: number;
+ *   overlapMinutes: number;
+ *   maxCatchupHours: number;
+ *   watermarkIso?: string | null;
+ * }} args
+ */
+export function resolveIncrementalSalesCatchupChunks(args) {
+  const single = resolveIncrementalSalesWindow(args);
+  if (!single.catchup_clamped || !single.watermark_used) {
+    return { catchup_clamped: false, total_chunks: 1, chunks: [single] };
+  }
+
+  const nowMs = Number.isFinite(args.nowMs) ? /** @type {number} */ (args.nowMs) : Date.now();
+  const overlapMinutes = Math.max(0, Number(args.overlapMinutes) || 0);
+  const maxCatchupHours = Math.max(
+    Number(args.lookbackHours) || 6,
+    Number(args.maxCatchupHours) || 120
+  );
+  const wmMs = Date.parse(String(single.watermark_used));
+  if (!Number.isFinite(wmMs)) {
+    return { catchup_clamped: false, total_chunks: 1, chunks: [single] };
+  }
+
+  const gapStartMs = wmMs - overlapMinutes * 60000;
+  const chunkMs = maxCatchupHours * 3600000;
+  /** @type {typeof single[]} */
+  const chunks = [];
+  let cursor = gapStartMs;
+  while (cursor < nowMs) {
+    const chunkEndMs = Math.min(nowMs, cursor + chunkMs);
+    chunks.push({
+      ...single,
+      rangeFrom: new Date(cursor).toISOString(),
+      rangeTo: new Date(chunkEndMs).toISOString(),
+      chunk_index: chunks.length,
+      chunk_total: null,
+      catchup_clamped: true,
+    });
+    if (chunkEndMs >= nowMs) break;
+    cursor = chunkEndMs - overlapMinutes * 60000;
+  }
+  for (const c of chunks) c.chunk_total = chunks.length;
+  return { catchup_clamped: true, total_chunks: chunks.length, chunks };
 }
 
 /**
@@ -324,30 +382,23 @@ export async function runIncrementalMlSalesPollWave(supabase, opts = {}) {
         : acc.ml_sales_last_sync_at != null
           ? String(acc.ml_sales_last_sync_at)
           : null;
-    const window = resolveIncrementalSalesWindow({
+    const catchupPlan = resolveIncrementalSalesCatchupChunks({
       lookbackHours: lookbackH,
       overlapMinutes: overlapMin,
       maxCatchupHours: maxCatchupH,
       watermarkIso,
     });
-    const { rangeFrom, rangeTo } = window;
 
-    console.info("[sales-sync] fetch_orders_start", {
-      phase: "incremental_poll",
-      marketplace: ML_MARKETPLACE_SLUG,
-      marketplace_account_id: accountId,
-      seller_company_id: sellerCompanyId,
-      user_id: userId,
-      external_seller_id: sellerId,
-      window_start: rangeFrom,
-      window_end: rangeTo,
-      watermark: watermarkIso,
-      lookback_hours: window.lookback_hours,
-      overlap_minutes: window.overlap_minutes,
-      max_catchup_hours: window.max_catchup_hours,
-    });
+    if (catchupPlan.catchup_clamped) {
+      console.warn("[sales-sync] catchup_chunk_plan", {
+        marketplace_account_id: accountId,
+        total_chunks: catchupPlan.total_chunks,
+        desired_from: catchupPlan.chunks[0]?.desired_from ?? null,
+        uncovered_through: catchupPlan.chunks[0]?.uncovered_through ?? null,
+        watermark: watermarkIso,
+      });
+    }
 
-    let offset = 0;
     /** @type {string | null} */
     let batchMaxCreated = null;
     let accountPersisted = 0;
@@ -361,56 +412,84 @@ export async function runIncrementalMlSalesPollWave(supabase, opts = {}) {
     };
     const nowIso = new Date().toISOString();
 
-    for (let page = 0; page < maxPages; page += 1) {
+    for (const window of catchupPlan.chunks) {
       if (Date.now() >= deadlineMs) break;
-      const tPage = Date.now();
-      let pg;
-      try {
-        pg = await searchSellerOrdersPage(accessToken, sellerId, offset, pageLimit, {
-          dateFrom: rangeFrom,
-          dateTo: rangeTo,
-          marketplaceAccountId: accountId,
-          sort: resolveMlOrdersSearchSort(),
-        });
-      } catch (e) {
-        const em = e?.message ? String(e.message) : String(e);
-        out.errors.push(`${accountId}:search:${em}`);
-        console.warn("[sales-sync] account_error", {
+      const { rangeFrom, rangeTo } = window;
+
+      console.info("[sales-sync] fetch_orders_start", {
+        phase: "incremental_poll",
+        marketplace: ML_MARKETPLACE_SLUG,
+        marketplace_account_id: accountId,
+        seller_company_id: sellerCompanyId,
+        user_id: userId,
+        external_seller_id: sellerId,
+        window_start: rangeFrom,
+        window_end: rangeTo,
+        watermark: watermarkIso,
+        lookback_hours: window.lookback_hours,
+        overlap_minutes: window.overlap_minutes,
+        max_catchup_hours: window.max_catchup_hours,
+        catchup_clamped: window.catchup_clamped ?? false,
+        chunk_index: window.chunk_index ?? null,
+        chunk_total: window.chunk_total ?? null,
+      });
+
+      let offset = 0;
+      /** @type {string | null} */
+      let chunkMaxCreated = null;
+      let chunkPersisted = 0;
+
+      for (let page = 0; page < maxPages; page += 1) {
+        if (Date.now() >= deadlineMs) break;
+        const tPage = Date.now();
+        let pg;
+        try {
+          pg = await searchSellerOrdersPage(accessToken, sellerId, offset, pageLimit, {
+            dateFrom: rangeFrom,
+            dateTo: rangeTo,
+            marketplaceAccountId: accountId,
+            sort: resolveMlOrdersSearchSort(),
+          });
+        } catch (e) {
+          const em = e?.message ? String(e.message) : String(e);
+          out.errors.push(`${accountId}:search:${em}`);
+          console.warn("[sales-sync] account_error", {
+            phase: "incremental_poll",
+            marketplace_account_id: accountId,
+            error_message: em,
+          });
+          break;
+        }
+
+        const orderIds = pg.orderIds || [];
+        out.orders_fetched += orderIds.length;
+        console.info("[sales-sync] fetch_orders_ok", {
           phase: "incremental_poll",
           marketplace_account_id: accountId,
-          error_message: em,
+          offset,
+          batch_count: orderIds.length,
+          duration_ms: Date.now() - tPage,
+          chunk_index: window.chunk_index ?? null,
         });
-        break;
-      }
 
-      const orderIds = pg.orderIds || [];
-      out.orders_fetched += orderIds.length;
-      console.info("[sales-sync] fetch_orders_ok", {
-        phase: "incremental_poll",
-        marketplace_account_id: accountId,
-        offset,
-        batch_count: orderIds.length,
-        duration_ms: Date.now() - tPage,
-      });
+        if (orderIds.length === 0) break;
 
-      if (orderIds.length === 0) break;
+        const detailConcurrency = resolveDetailConcurrency();
+        const pairs = await mapLimit(orderIds, detailConcurrency, async (oid) => {
+          try {
+            const detail = await fetchOrderById(accessToken, oid, { marketplaceAccountId: accountId });
+            return { oid, detail, err: null };
+          } catch (e) {
+            return { oid, detail: null, err: e };
+          }
+        });
 
-      const detailConcurrency = resolveDetailConcurrency();
-      const pairs = await mapLimit(orderIds, detailConcurrency, async (oid) => {
-        try {
-          const detail = await fetchOrderById(accessToken, oid, { marketplaceAccountId: accountId });
-          return { oid, detail, err: null };
-        } catch (e) {
-          return { oid, detail: null, err: e };
-        }
-      });
-
-      for (const pair of pairs) {
-        if (Date.now() >= deadlineMs) break;
-        if (pair.err || !pair.detail) continue;
-        const detail = pair.detail;
-        try {
-          await withTimeout(
+        for (const pair of pairs) {
+          if (Date.now() >= deadlineMs) break;
+          if (pair.err || !pair.detail) continue;
+          const detail = pair.detail;
+          try {
+          const result = await withTimeout(
             applyMlOrderDetailToMarketplaceSales(
               supabase,
               userId,
@@ -426,45 +505,59 @@ export async function runIncrementalMlSalesPollWave(supabase, opts = {}) {
             ORDER_TIMEOUT_MS,
             "incremental_order"
           );
+          if (result?.ok === false) {
+            const reason = result?.reason ? String(result.reason) : "apply_failed";
+            out.errors.push(`${pair.oid}:${reason}`);
+            continue;
+          }
           out.orders_persisted += 1;
-          accountPersisted += 1;
-          console.info("[sales-sync] persist_order_ok", {
-            phase: "incremental_poll",
-            marketplace_account_id: accountId,
-            external_order_id: String(pair.oid),
-          });
-          const created =
-            detail?.date_created != null && String(detail.date_created).trim() !== ""
-              ? String(detail.date_created)
-              : null;
-          if (created && (!batchMaxCreated || Date.parse(created) > Date.parse(batchMaxCreated))) {
-            batchMaxCreated = created;
+            chunkPersisted += 1;
+            accountPersisted += 1;
+            console.info("[sales-sync] persist_order_ok", {
+              phase: "incremental_poll",
+              marketplace_account_id: accountId,
+              external_order_id: String(pair.oid),
+              chunk_index: window.chunk_index ?? null,
+            });
+            const created =
+              detail?.date_created != null && String(detail.date_created).trim() !== ""
+                ? String(detail.date_created)
+                : null;
+            if (created && (!chunkMaxCreated || Date.parse(created) > Date.parse(chunkMaxCreated))) {
+              chunkMaxCreated = created;
+            }
+          } catch (e) {
+            const em = e?.message ? String(e.message) : String(e);
+            out.errors.push(`${pair.oid}:${em}`);
+            console.warn("[sales-sync] account_error", {
+              phase: "incremental_poll",
+              marketplace_account_id: accountId,
+              external_order_id: String(pair.oid),
+              error_message: em,
+            });
+          }
+        }
+
+        if (orderIds.length < pageLimit) break;
+        offset += pageLimit;
+      }
+
+      if (chunkMaxCreated || chunkPersisted > 0) {
+        try {
+          await advanceMlSalesWatermark(supabase, accountId, chunkMaxCreated, new Date().toISOString());
+          if (chunkMaxCreated && (!batchMaxCreated || Date.parse(chunkMaxCreated) > Date.parse(batchMaxCreated))) {
+            batchMaxCreated = chunkMaxCreated;
           }
         } catch (e) {
-          const em = e?.message ? String(e.message) : String(e);
-          out.errors.push(`${pair.oid}:${em}`);
-          console.warn("[sales-sync] account_error", {
-            phase: "incremental_poll",
+          console.warn("[sales-sync] incremental_watermark_warn", {
             marketplace_account_id: accountId,
-            external_order_id: String(pair.oid),
-            error_message: em,
+            chunk_index: window.chunk_index ?? null,
+            message: e?.message,
           });
         }
       }
 
-      offset += pageLimit;
-    }
-
-    // Watermark só avança após persistência confirmada desta conta (nunca por contador global).
-    if (batchMaxCreated || accountPersisted > 0) {
-      try {
-        await advanceMlSalesWatermark(supabase, accountId, batchMaxCreated, new Date().toISOString());
-      } catch (e) {
-        console.warn("[sales-sync] incremental_watermark_warn", {
-          marketplace_account_id: accountId,
-          message: e?.message,
-        });
-      }
+      if (!catchupPlan.catchup_clamped) break;
     }
 
     console.info("[sales-sync] account_done", {
@@ -472,6 +565,9 @@ export async function runIncrementalMlSalesPollWave(supabase, opts = {}) {
       marketplace_account_id: accountId,
       account_orders_persisted: accountPersisted,
       orders_persisted_total: out.orders_persisted,
+      catchup_chunks: catchupPlan.total_chunks,
+      created_count: summaryStub.created_count,
+      updated_count: summaryStub.updated_count,
     });
   }
 
