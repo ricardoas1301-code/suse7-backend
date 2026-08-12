@@ -12,6 +12,11 @@ import { getValidMLToken } from "./_helpers/mlToken.js";
 import { inferOrderIdFromMlWebhook, inferShipmentIdFromMlWebhook } from "./_helpers/mlWebhookPayload.js";
 import { classifyMercadoLivreAccountCandidates } from "./_helpers/resolveMercadoLivreAccountFromWebhook.js";
 import { fetchPendingMlWebhookEvents } from "./_helpers/mlWebhookEventQueue.js";
+import {
+  assertMlWebhookOrdersV2CanonicalOutcome,
+  isMlWebhookTerminalIgnoredError,
+} from "./_helpers/mlWebhookOrderProcessorOutcome.js";
+import { ML_MARKETPLACE_SLUG } from "./_helpers/mlMarketplace.js";
 
 /**
  * @returns {import("@supabase/supabase-js").SupabaseClient}
@@ -503,6 +508,15 @@ async function processOrderEvent(supabase, event, resolvedContext = null) {
     shipping_status: shipping?.status ?? null,
     shipment_id: shipping?.id ?? orderForPersist?.shipment_id ?? null,
   });
+  const { data: existingBeforeApply } = await supabase
+    .from("sales_orders")
+    .select("id")
+    .eq("user_id", userId)
+    .eq("marketplace", ML_MARKETPLACE_SLUG)
+    .eq("marketplace_account_id", marketplaceAccountId)
+    .eq("external_order_id", orderId)
+    .maybeSingle();
+
   const summaryStub = {
     synced_count: 0,
     created_count: 0,
@@ -511,7 +525,7 @@ async function processOrderEvent(supabase, event, resolvedContext = null) {
     skipped_cancelled_or_unavailable_count: 0,
     errors: [],
   };
-  await applyMlOrderDetailToMarketplaceSales(
+  const applyResult = await applyMlOrderDetailToMarketplaceSales(
     supabase,
     userId,
     marketplaceAccountId,
@@ -523,17 +537,29 @@ async function processOrderEvent(supabase, event, resolvedContext = null) {
     { syncRunId: `webhook:${event.id ?? "unknown"}`, orderIndex: null, total: null, syncType: "ml_webhook_orders_v2" },
     { syncType: "ml_webhook_orders_v2" }
   );
+  const canonicalOutcome = await assertMlWebhookOrdersV2CanonicalOutcome(supabase, {
+    applyResult,
+    userId,
+    marketplaceAccountId,
+    externalOrderId: orderId,
+    hadExistingBeforeApply: Boolean(existingBeforeApply?.id),
+  });
   console.info("[ml-webhook-events-job] order_persist_ok", {
     event_id: event.id ?? null,
     order_id: orderId,
     marketplace_account_id: marketplaceAccountId,
     user_id: userId,
+    processor_outcome: canonicalOutcome.outcome,
+    sales_order_id: canonicalOutcome.salesOrderId,
   });
   console.info("[ML_WEBHOOK_PROCESS_ORDER_UPSERT_DONE]", {
     order_id: orderId,
     marketplace_account_id: marketplaceAccountId,
     user_id: userId,
+    processor_outcome: canonicalOutcome.outcome,
+    sales_order_id: canonicalOutcome.salesOrderId,
   });
+  return canonicalOutcome;
 }
 
 /**
@@ -660,6 +686,9 @@ export async function runMlWebhookProcessor(input = {}) {
         last_error_message: null,
       });
 
+      /** @type {{ outcome?: string; salesOrderId?: string | null } | null} */
+      let canonicalOutcome = null;
+
       if (topicLower === "orders_v2") {
         const ctx = await resolveEventContext(supabase, /** @type {Record<string, unknown>} */ (event));
         await updateWebhookEventRow(supabase, eventId, {
@@ -667,7 +696,11 @@ export async function runMlWebhookProcessor(input = {}) {
           seller_company_id: ctx.sellerCompanyId ?? null,
           user_id: ctx.userId,
         });
-        await processOrderEvent(supabase, /** @type {Record<string, unknown>} */ (event), ctx);
+        canonicalOutcome = await processOrderEvent(
+          supabase,
+          /** @type {Record<string, unknown>} */ (event),
+          ctx,
+        );
       } else {
         const completedAt = new Date().toISOString();
         await updateWebhookEventRow(supabase, eventId, {
@@ -696,8 +729,15 @@ export async function runMlWebhookProcessor(input = {}) {
         topic: topicLower || null,
         order_id: orderId,
         marketplace_account_id: event.marketplace_account_id ?? null,
+        processor_outcome: canonicalOutcome?.outcome ?? "PERSISTED",
+        sales_order_id: canonicalOutcome?.salesOrderId ?? null,
       });
-      results.push({ id: eventId, status: "done" });
+      results.push({
+        id: eventId,
+        status: "done",
+        processor_outcome: canonicalOutcome?.outcome ?? "PERSISTED",
+        sales_order_id: canonicalOutcome?.salesOrderId ?? null,
+      });
     } catch (err) {
       const attempts = (event.attempts != null ? Number(event.attempts) : 0) + 1;
       const message = err?.message ? String(err.message) : String(err);
@@ -706,7 +746,9 @@ export async function runMlWebhookProcessor(input = {}) {
           ? String(/** @type {{ code?: unknown }} */ (err).code)
           : "WEBHOOK_PROCESS_ERROR";
       const isAmbiguous = code === "WEBHOOK_ACCOUNT_AMBIGUOUS" || message.includes("WEBHOOK_ACCOUNT_AMBIGUOUS");
-      const nextStatus = isAmbiguous
+      const isTerminalIgnored = isMlWebhookTerminalIgnoredError(err) || isAmbiguous;
+      const isEntitlementBlocked = code === "ML_WEBHOOK_ENTITLEMENT_BLOCKED" || message.startsWith("ENTITLEMENT_BLOCKED:");
+      const nextStatus = isTerminalIgnored
         ? "ignored"
         : attempts >= maxAttempts
           ? "error"
@@ -714,10 +756,10 @@ export async function runMlWebhookProcessor(input = {}) {
       const completedAt =
         nextStatus === "error" || nextStatus === "ignored" ? new Date().toISOString() : null;
 
-      if (!isAmbiguous) {
-        failedCount += 1;
-      } else {
+      if (isTerminalIgnored) {
         ignoredCount += 1;
+      } else {
+        failedCount += 1;
       }
       console.error("[ml-webhook-events-job] event_failed", {
         event_id: eventId,
@@ -745,17 +787,37 @@ export async function runMlWebhookProcessor(input = {}) {
         });
       }
 
+      const ignoredReason = isAmbiguous
+        ? "account_ambiguous_multi_tenant"
+        : isEntitlementBlocked
+          ? `entitlement_blocked:${message.replace(/^ENTITLEMENT_BLOCKED:/, "")}`
+          : code === "ML_WEBHOOK_DEFINITIVE_SKIP"
+            ? message.replace(/^DEFINITIVE_SKIP:/, "")
+            : message;
+
       await updateWebhookEventRow(supabase, eventId, {
         status: nextStatus,
-        attempts: isAmbiguous ? attempts : attempts,
-        error_message: (isAmbiguous ? "account_ambiguous_multi_tenant" : message).slice(0, 4000),
-        last_error_code: (isAmbiguous ? "WEBHOOK_ACCOUNT_AMBIGUOUS" : code).slice(0, 120),
+        attempts,
+        error_message: (isTerminalIgnored ? ignoredReason : message).slice(0, 4000),
+        last_error_code: (isTerminalIgnored ? code : code).slice(0, 120),
         last_error_message: message.slice(0, 4000),
         processed_at: completedAt,
         completed_at: completedAt,
       });
 
-      results.push({ id: eventId, status: nextStatus, error: message });
+      results.push({
+        id: eventId,
+        status: nextStatus,
+        error: message,
+        processor_outcome:
+          err && typeof err === "object" && "processor_outcome" in err
+            ? String(/** @type {{ processor_outcome?: unknown }} */ (err).processor_outcome)
+            : isAmbiguous
+              ? "IGNORED_AMBIGUOUS_ACCOUNT"
+              : isEntitlementBlocked
+                ? "IGNORED_ENTITLEMENT_BLOCKED"
+                : null,
+      });
     }
   }
 
