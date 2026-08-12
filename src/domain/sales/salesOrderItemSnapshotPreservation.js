@@ -3,6 +3,11 @@
 // MARKETPLACE FACTS podem atualizar; SELLER HISTORICAL SNAPSHOTS congelam.
 // ======================================================================
 
+import {
+  INTERNAL_PROVENANCE_CLASS,
+  resolveInternalProvenanceClassForRead,
+} from "./financialSnapshotProvenanceV2.js";
+
 /** Chaves S7 em raw_json que não devem ser apagadas no reprocessamento ML. */
 export const S7_PRESERVED_RAW_JSON_KEYS = Object.freeze([
   "_s7_financial",
@@ -34,22 +39,36 @@ export function isSellerHistoricalFinancialSnapshotFrozen(fin) {
   const snap = toFinancialObject(fin);
   if (!snap) return false;
 
-  if (snap.snapshot_quality === "reconstructed") return false;
-  if (snap.snapshot_origin === "onboarding_import") return false;
-
+  const internalClass = resolveInternalProvenanceClassForRead(snap);
   const hasInternal =
     toFinancialObject(snap.internal_costs_snapshot) != null ||
     toFinancialObject(snap.tax_snapshot) != null ||
     toFinancialObject(snap.product_cost_snapshot) != null;
 
-  if (!hasInternal) return false;
-
   const immutableSince =
     snap.immutable_since != null ? String(snap.immutable_since).trim() : "";
   const createdAt =
     snap.snapshot_created_at != null ? String(snap.snapshot_created_at).trim() : "";
+  const capturedAt = snap.captured_at != null ? String(snap.captured_at).trim() : "";
+  const hasImmutabilityMarker = Boolean(immutableSince || createdAt || capturedAt);
 
-  return Boolean(immutableSince || createdAt);
+  if (internalClass === INTERNAL_PROVENANCE_CLASS.RECONSTRUCTED_ESTIMATED) {
+    return hasInternal && Boolean(immutableSince);
+  }
+
+  if (
+    internalClass === INTERNAL_PROVENANCE_CLASS.CAPTURED_AT_INGESTION ||
+    internalClass === INTERNAL_PROVENANCE_CLASS.RECONSTRUCTED_EXACT
+  ) {
+    return hasInternal && hasImmutabilityMarker;
+  }
+
+  if (snap.snapshot_quality === "reconstructed") return false;
+  if (snap.snapshot_origin === "onboarding_import") return false;
+
+  if (!hasInternal) return false;
+
+  return hasImmutabilityMarker;
 }
 
 /**
@@ -83,8 +102,9 @@ export function mergeIncomingSalesOrderItemWithExistingSnapshot(incomingRow, exi
   const sellerHistoricalFrozen = isSellerHistoricalFinancialSnapshotFrozen(existingFin);
   const marketplaceComplete = isMarketplaceComplete(existingFin);
   const isReconstructedImport =
-    existingFin?.snapshot_quality === "reconstructed" ||
-    existingFin?.snapshot_origin === "onboarding_import";
+    !isSellerHistoricalFinancialSnapshotFrozen(existingFin) &&
+    (existingFin?.snapshot_quality === "reconstructed" ||
+      existingFin?.snapshot_origin === "onboarding_import");
   const shouldPreserve = sellerHistoricalFrozen || (marketplaceComplete && !isReconstructedImport);
 
   if (!shouldPreserve) {

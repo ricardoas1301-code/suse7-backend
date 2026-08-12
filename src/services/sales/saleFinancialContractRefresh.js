@@ -11,6 +11,7 @@ import {
   resolveSaleUnitPriceBrl,
 } from "../../domain/sales/saleDetailMarketplaceRevenue.js";
 import { ML_FINANCIAL_SNAPSHOT_VERSION } from "../../domain/sales/mercadoLivreSaleRevenueRules.js";
+import { OPERATIONAL_ORIGIN_EXTENDED } from "../../domain/sales/financialSnapshotProvenanceV2.js";
 import { enrichMercadoLivreSaleFinancialSnapshot } from "../marketplace/mercadoLivreSaleFinancialEnrichment.js";
 import { resolveMercadoLivreMarketplaceRebate } from "../../domain/sales/mercadoLivreMarketplaceRebate.js";
 import { toFiniteNumber } from "../../handlers/ml/_helpers/mlItemMoneyExtract.js";
@@ -188,6 +189,9 @@ export async function refreshSaleFinancialContractByItemId(supabase, userId, ite
         salesOrderId: String(order.id),
         logContext: "rayx_fee_refresh",
         force: true,
+        snapshotOrigin: OPERATIONAL_ORIGIN_EXTENDED.LAZY_DETAIL_ENRICHMENT,
+        isInitialCanonicalPersist: false,
+        saleCreatedAt: order?.raw_json?.date_created ?? null,
       });
       const { data: refreshed, error: refErr } = await supabase
         .from("sales_order_items")

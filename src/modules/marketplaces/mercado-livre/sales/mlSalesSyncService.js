@@ -527,6 +527,8 @@ export async function applyMlOrderDetailToMarketplaceSales(
         logContext: "ml_sales_sync",
         snapshotOrigin,
         reconstructionReferenceDate,
+        isInitialCanonicalPersist: isNewSale,
+        saleCreatedAt: orderDetail?.date_created ?? null,
       });
     } catch (enrichErr) {
       console.warn("[Suse7][API][ml-sales-apply] financial_enrichment_failed", {

@@ -36,6 +36,11 @@
     "test:normalize-ml-shipping-summary": "node ./scripts/test_normalize_ml_shipping_summary_unit.mjs",
     "test:listing-summary-kpis": "node ./scripts/test_normalize_ml_shipping_summary_unit.mjs",
     "test:sales-order-item-snapshot-preservation": "node ./scripts/test_sales_order_item_snapshot_preservation_unit.mjs",
+    "test:financial-snapshot-provenance-v2": "node ./scripts/test_financial_snapshot_provenance_v2_unit.mjs",
+    "test:provenance-v2-legacy-compat": "node ./scripts/test_provenance_v2_legacy_compat_unit.mjs",
+    "test:ssot-vendas-ao-vivo-golden": "node ./scripts/test_ssot_vendas_ao_vivo_golden_unit.mjs",
+    "test:ssot-vendas-ao-vivo-reconciliation": "node ./scripts/test_ssot_vendas_ao_vivo_reconciliation_unit.mjs",
+    "test:snapshot-immutability-stress": "node ./scripts/prove_snapshot_immutability_stress_concurrent.mjs",
     "test": "npm run test:listing-health-buckets && npm run test:product-health-buckets && npm run test:competition-health-buckets && npm run test:pricing-health-buckets",
     "backfill:recent-cost-snapshots": "node ./scripts/backfill_recent_cost_snapshots_dev.mjs"
   },

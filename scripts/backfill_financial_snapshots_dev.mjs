@@ -152,22 +152,26 @@ function inferSnapshotOrigin(fin) {
 function resolveSnapshotMetaMissingOnly(fin, nowIso) {
   const origin = inferSnapshotOrigin(fin);
   const isOnboarding = origin === "onboarding_import";
-  const estimatedDerived = isOnboarding;
-  const qualityDerived = isOnboarding ? "reconstructed" : "historical";
+  const saleCreatedAt = fin?.sale_created_at ?? fin?.reconstruction_reference_date ?? null;
 
   return {
+    operational_origin: isOnboarding ? "onboarding_import" : "manual_backfill",
     snapshot_origin: origin,
-    snapshot_quality: qualityDerived,
-    estimated: typeof fin?.estimated === "boolean" ? fin.estimated : estimatedDerived,
+    internal_provenance_class: "RECONSTRUCTED_ESTIMATED",
+    snapshot_quality: "reconstructed",
+    estimated: true,
     reconstructed_at:
-      isOnboarding && isMissingValue(fin?.reconstructed_at) ? nowIso : fin?.reconstructed_at ?? null,
+      isOnboarding && isMissingValue(fin?.reconstructed_at) ? nowIso : fin?.reconstructed_at ?? nowIso,
     reconstruction_reference_date:
       isOnboarding && isMissingValue(fin?.reconstruction_reference_date)
         ? nowIso
-        : fin?.reconstruction_reference_date ?? null,
-    snapshot_created_at:
-      !isOnboarding && isMissingValue(fin?.snapshot_created_at) ? nowIso : fin?.snapshot_created_at ?? null,
+        : fin?.reconstruction_reference_date ?? saleCreatedAt ?? nowIso,
+    snapshot_created_at: fin?.snapshot_created_at ?? null,
     immutable_since: isMissingValue(fin?.immutable_since) ? nowIso : fin?.immutable_since ?? null,
+    sale_created_at: saleCreatedAt,
+    captured_at: isMissingValue(fin?.captured_at) ? nowIso : fin?.captured_at ?? null,
+    capture_lag_seconds: fin?.capture_lag_seconds ?? null,
+    provenance_sources: ["manual_backfill_current_config"],
     snapshot_version:
       isMissingValue(fin?.snapshot_version) ? ML_FINANCIAL_SNAPSHOT_VERSION : fin?.snapshot_version ?? null,
   };

@@ -24,6 +24,13 @@ import {
   saleDetailMoneyToDecimal as toMoneyDecimal,
 } from "../../domain/sales/saleDetailInternalCosts.js";
 import { captureOperationalCostsSnapshotForPersist } from "../../domain/sales/saleRayxOperationalCostsSnapshot.js";
+import {
+  hasEstablishedInternalProvenance,
+  mapInternalProvenanceToLegacySnapshotQuality,
+  OPERATIONAL_ORIGIN_EXTENDED,
+  resolveFinancialSnapshotProvenanceV2,
+  resolveMarketplaceProvenanceClass,
+} from "../../domain/sales/financialSnapshotProvenanceV2.js";
 
 export const ML_FINANCIAL_ENRICHMENT_SOURCE = "mercado_livre_financial_enrichment_v1";
 export { ML_FINANCIAL_SNAPSHOT_VERSION };
@@ -50,42 +57,23 @@ function isUuidLike(v) {
 
 /**
  * @param {{
+ *   operational_origin?: string | null;
  *   snapshot_origin?: string | null;
+ *   is_initial_canonical_persist?: boolean;
+ *   sale_created_at?: string | null;
  *   reconstruction_reference_date?: string | null;
+ *   reconstruction_exact?: boolean;
+ *   provenance_sources?: unknown[] | null;
+ *   marketplace_snapshot_complete?: boolean;
  * }} ctx
  * @param {Record<string, unknown> | null | undefined} existing
  * @param {string} nowIso
  */
 function resolveFinancialSnapshotMetadata(ctx, existing, nowIso) {
-  const existingOrigin = pickTrim(existing?.snapshot_origin);
-  const requestedOrigin = pickTrim(ctx.snapshot_origin);
-  const origin = existingOrigin || requestedOrigin || "post_suse7_sale";
-
-  if (origin === "onboarding_import") {
-    return {
-      snapshot_origin: "onboarding_import",
-      snapshot_quality: "reconstructed",
-      estimated: true,
-      reconstructed_at: pickTrim(existing?.reconstructed_at) || nowIso,
-      reconstruction_reference_date:
-        pickTrim(existing?.reconstruction_reference_date) ||
-        pickTrim(ctx.reconstruction_reference_date) ||
-        nowIso,
-      snapshot_created_at: null,
-      immutable_since: pickTrim(existing?.immutable_since) || nowIso,
-    };
-  }
-
-  return {
-    snapshot_origin: "post_suse7_sale",
-    snapshot_quality: "historical",
-    estimated: false,
-    reconstructed_at: null,
-    reconstruction_reference_date: null,
-    snapshot_created_at: pickTrim(existing?.snapshot_created_at) || nowIso,
-    immutable_since: pickTrim(existing?.immutable_since) || nowIso,
-  };
+  return resolveFinancialSnapshotProvenanceV2(ctx, existing, nowIso);
 }
+
+export { resolveFinancialSnapshotMetadata };
 
 /**
  * @param {unknown} v
@@ -183,12 +171,18 @@ function buildDerivedHistoricalFinancialSnapshots(opts) {
     null;
 
   const estimatedFlag = Boolean(snapshotMeta.estimated) || internalCosts.confidence !== "persisted";
+  const internalClass =
+    snapshotMeta.internal_provenance_class != null
+      ? String(snapshotMeta.internal_provenance_class).trim()
+      : "";
   const snapshotQuality =
     snapshotMeta.snapshot_quality != null && String(snapshotMeta.snapshot_quality).trim() !== ""
       ? String(snapshotMeta.snapshot_quality).trim()
-      : estimatedFlag
-        ? "reconstructed"
-        : "historical";
+      : internalClass
+        ? mapInternalProvenanceToLegacySnapshotQuality(internalClass)
+        : estimatedFlag
+          ? "reconstructed"
+          : "reconstructed";
 
   return {
     internal_costs_snapshot:
@@ -556,8 +550,13 @@ function matchDbItemToOrderLine(itemRow, orderLines, orderExternalId = "") {
  *   taxProfile: Record<string, unknown> | null;
  *   existingFinancial: Record<string, unknown> | null;
  *   snapshotContext: {
+ *     operational_origin?: string | null;
  *     snapshot_origin?: string | null;
+ *     is_initial_canonical_persist?: boolean;
+ *     sale_created_at?: string | null;
  *     reconstruction_reference_date?: string | null;
+ *     reconstruction_exact?: boolean;
+ *     provenance_sources?: unknown[] | null;
  *   };
  * }} meta
  */
@@ -583,7 +582,10 @@ function toItemFinancialContract(revenue, meta) {
       ? revenue.marketplace_rebate
       : null;
   const snapshotMeta = resolveFinancialSnapshotMetadata(
-    meta.snapshotContext ?? {},
+    {
+      ...(meta.snapshotContext ?? {}),
+      marketplace_snapshot_complete: snapshotComplete,
+    },
     meta.existingFinancial,
     nowIso,
   );
@@ -623,12 +625,20 @@ function toItemFinancialContract(revenue, meta) {
     sources: revenue._sources ?? revenue.sources ?? null,
     formula_debug: revenue.formula_debug ?? null,
     snapshot_origin: snapshotMeta.snapshot_origin,
+    operational_origin: snapshotMeta.operational_origin,
+    internal_provenance_class: snapshotMeta.internal_provenance_class,
+    marketplace_provenance_class:
+      snapshotMeta.marketplace_provenance_class ?? resolveMarketplaceProvenanceClass(revenue),
     snapshot_quality: snapshotMeta.snapshot_quality,
     estimated: snapshotMeta.estimated,
     reconstructed_at: snapshotMeta.reconstructed_at,
     reconstruction_reference_date: snapshotMeta.reconstruction_reference_date,
     snapshot_created_at: snapshotMeta.snapshot_created_at,
     immutable_since: snapshotMeta.immutable_since,
+    sale_created_at: snapshotMeta.sale_created_at,
+    captured_at: snapshotMeta.captured_at,
+    capture_lag_seconds: snapshotMeta.capture_lag_seconds,
+    provenance_sources: snapshotMeta.provenance_sources,
     ...derivedSnapshots,
     updated_at: nowIso,
   };
@@ -651,6 +661,10 @@ function isEnrichmentDebugEnabled() {
  *   debug: Record<string, unknown>;
  *   snapshotOrigin: string | null;
  *   reconstructionReferenceDate: string | null;
+ *   isInitialCanonicalPersist?: boolean;
+ *   saleCreatedAt?: string | null;
+ *   reconstructionExact?: boolean;
+ *   provenanceSources?: unknown[] | null;
  * }} ctx
  */
 async function persistFinancialEnrichmentToDatabase(supabase, userId, salesOrderId, order, ctx) {
@@ -850,8 +864,14 @@ async function persistFinancialEnrichmentToDatabase(supabase, userId, salesOrder
       taxProfile,
       existingFinancial,
       snapshotContext: {
+        operational_origin: ctx.snapshotOrigin,
         snapshot_origin: ctx.snapshotOrigin,
+        is_initial_canonical_persist:
+          ctx.isInitialCanonicalPersist === true && !hasEstablishedInternalProvenance(existingFinancial),
+        sale_created_at: ctx.saleCreatedAt ?? order.date_created ?? null,
         reconstruction_reference_date: ctx.reconstructionReferenceDate,
+        reconstruction_exact: ctx.reconstructionExact === true,
+        provenance_sources: ctx.provenanceSources ?? null,
       },
     });
 
@@ -1010,6 +1030,10 @@ async function persistFinancialEnrichmentToDatabase(supabase, userId, salesOrder
  *   force?: boolean;
  *   snapshotOrigin?: string | null;
  *   reconstructionReferenceDate?: string | null;
+ *   isInitialCanonicalPersist?: boolean;
+ *   saleCreatedAt?: string | null;
+ *   reconstructionExact?: boolean;
+ *   provenanceSources?: unknown[] | null;
  * }} opts
  */
 export async function enrichMercadoLivreSaleFinancialSnapshot(supabase, userId, order, opts) {
@@ -1112,6 +1136,10 @@ export async function enrichMercadoLivreSaleFinancialSnapshot(supabase, userId, 
         debug,
         snapshotOrigin,
         reconstructionReferenceDate,
+        isInitialCanonicalPersist: opts.isInitialCanonicalPersist === true,
+        saleCreatedAt: opts.saleCreatedAt ?? orderPayload.date_created ?? null,
+        reconstructionExact: opts.reconstructionExact === true,
+        provenanceSources: opts.provenanceSources ?? null,
       },
     );
 
@@ -1236,6 +1264,9 @@ export async function ensureMercadoLivreSaleFinancialEnrichmentForDetail(supabas
     salesOrderId: order.id != null ? String(order.id) : null,
     logContext: "sales_detail_lazy",
     force: true,
+    snapshotOrigin: OPERATIONAL_ORIGIN_EXTENDED.LAZY_DETAIL_ENRICHMENT,
+    isInitialCanonicalPersist: false,
+    saleCreatedAt: orderRaw.date_created ?? order.date_created ?? null,
   });
 
   const { data: refreshedItem, error: refErr } = await supabase
