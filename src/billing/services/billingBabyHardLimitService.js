@@ -13,9 +13,19 @@ import { BILLING_USAGE_STATE } from "../billingConstants.js";
  * }} input
  */
 export function resolveBabyHardLimitState(input) {
-  const usageLimit = input.usageLimit != null ? Number(input.usageLimit) : 60;
+  const usageLimit = input.usageLimit != null ? Number(input.usageLimit) : null;
   const usageCount = Math.max(0, Number(input.usageCount ?? 0));
   const syncPaused = input.syncState === "HARD_PAUSED";
+
+  if (usageLimit == null || !Number.isFinite(usageLimit)) {
+    return {
+      usage_state: BILLING_USAGE_STATE.WITHIN_LIMIT,
+      usage_count: usageCount,
+      usage_limit: null,
+      should_hard_pause: false,
+      already_hard_paused: syncPaused,
+    };
+  }
 
   if (syncPaused || input.persistedUsageState === BILLING_USAGE_STATE.HARD_LIMIT_REACHED) {
     return {

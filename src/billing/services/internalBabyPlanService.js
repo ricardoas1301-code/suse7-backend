@@ -9,24 +9,17 @@ import { getActivePlanByKey } from "./billingPlanRepository.js";
 const BABY_PLAN_KEYS = ["baby", "free", "interno", "internal_free"];
 
 /**
+ * Plano comercial Baby usado como âncora de assinatura interna (amount=0, provider=internal).
+ * Não confundir com entitlement BABY_INTERNAL_FREE — catálogo comercial permanece intacto.
+ *
  * @param {import("@supabase/supabase-js").SupabaseClient} supabase
  */
-async function resolveInternalFreePlan(supabase) {
+async function resolveInternalBabyCommercialPlan(supabase) {
   for (const key of BABY_PLAN_KEYS) {
     const plan = await getActivePlanByKey(supabase, key);
-    if (plan?.billing_required === false) return plan;
+    if (plan?.id) return plan;
   }
-
-  const { data, error } = await supabase
-    .from("plans")
-    .select("id, plan_key, name, price_monthly, sales_limit_monthly, billing_required, is_active, sort_order")
-    .eq("is_active", true)
-    .eq("billing_required", false)
-    .order("sort_order", { ascending: true, nullsFirst: false })
-    .limit(1)
-    .maybeSingle();
-  if (error) throw error;
-  return data ?? null;
+  return null;
 }
 
 /**
@@ -35,7 +28,7 @@ async function resolveInternalFreePlan(supabase) {
  * @param {{ downgrade_from_subscription_id?: string | null; source?: string }} [options]
  */
 export async function activateOrCreateInternalBabySubscription(supabase, userId, options = {}) {
-  const plan = await resolveInternalFreePlan(supabase);
+  const plan = await resolveInternalBabyCommercialPlan(supabase);
   if (!plan?.id) {
     logBilling("billing", "internal_baby_plan_missing", { user_id: userId });
     return { created: false, subscription_id: null, reason: "plan_not_found" };
@@ -120,7 +113,7 @@ export async function ensureInternalBabySubscription(supabase, userId) {
   const existing = Array.isArray(existingRows) ? existingRows[0] : null;
   if (existing?.id) return { created: false, subscription_id: String(existing.id) };
 
-  const plan = await resolveInternalFreePlan(supabase);
+  const plan = await resolveInternalBabyCommercialPlan(supabase);
   if (!plan?.id) {
     logBilling("billing", "internal_baby_plan_missing", { user_id: userId });
     return { created: false, subscription_id: null, reason: "plan_not_found" };
