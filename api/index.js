@@ -19,6 +19,8 @@ const DEBUG_ML_LISTINGS_COVER_CONTEXT_PATH = "/api/debug/ml/listings-cover-conte
 console.log("[S7 API Router] boot — rotas diagnóstico ML:", DEBUG_ML_FIELD_MAP_PATH, DEBUG_ML_COVER_COMPARE_PATH, DEBUG_ML_LISTINGS_COVER_CONTEXT_PATH);
 console.log("[S7 API Router] boot — ML OAuth diag: GET /api/ml/oauth-config");
 console.log("[S7 API Router] boot — billing: GET /api/billing/ping · GET /api/billing/plans · POST /api/billing/checkout/card · POST /api/billing/checkout/start · GET /api/billing/webhooks/asaas/health · POST /api/billing/webhooks/asaas · POST /api/jobs/billing-renewal-engine · POST /api/jobs/billing-consistency-check · POST /api/billing/renewals/:id/pay");
+console.log("[S7 API Router] boot — legal: POST /api/legal/document-acceptances");
+console.log("[S7 API Router] boot — signup: POST /api/signup/pending-birth · bind · abort · complete-birth");
 console.log("[S7 API Router] boot — notifications: POST /api/jobs/daily-sales-summary-automation");
 console.log("[S7 API Router] boot — competition: POST /api/jobs/competition-daily-snapshot");
 console.log("[S7 API Router] boot — pricing: POST /api/jobs/pricing-current-state-backfill");
@@ -329,6 +331,33 @@ export default async function handler(req, res) {
       }
       const mod = await import("../src/billing/routes/billingRoutes.js");
       return mod.handleBillingRoutes(req, res, billingPath);
+    }
+
+    // ------------------------------
+    // Legal — aceites de documentos (SignUp Termos de Uso)
+    // Mesmo handler em dev-server (api/index.js) e Vercel router único.
+    // ------------------------------
+    if (pathNorm.startsWith("/api/legal") || path.startsWith("/api/legal")) {
+      const legalPath =
+        String(pathNorm && pathNorm !== "/" ? pathNorm : path || "")
+          .replace(/\/+$/, "")
+          .replace(/\/{2,}/g, "/") || "/";
+      const mod = await import("../src/legal/routes/legalRoutes.js");
+      const handled = await mod.handleLegalRoutes(req, res, legalPath);
+      if (handled !== null && handled !== undefined) return handled;
+    }
+
+    // ------------------------------
+    // Signup two-phase — pending birth / bind / complete
+    // ------------------------------
+    if (pathNorm.startsWith("/api/signup") || path.startsWith("/api/signup")) {
+      const signupPath =
+        String(pathNorm && pathNorm !== "/" ? pathNorm : path || "")
+          .replace(/\/+$/, "")
+          .replace(/\/{2,}/g, "/") || "/";
+      const mod = await import("../src/signup/routes/signupRoutes.js");
+      const handled = await mod.handleSignupRoutes(req, res, signupPath);
+      if (handled !== null && handled !== undefined) return handled;
     }
 
     // ------------------------------
