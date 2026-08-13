@@ -5,15 +5,27 @@
  * - S7_APP_ENV: development | staging | production
  * - ASAAS_ENV: sandbox | production | prod (normalizado → production)
  *
+ * Identidade Supabase: S7_EXPECTED_SUPABASE_PROJECT_REF (declarado) === ref de SUPABASE_URL (real).
  * Sem fallback silencioso para sandbox/production/development.
  */
 
+import {
+  extractSupabaseProjectRef,
+  readExpectedSupabaseProjectRef,
+  resolveSupabaseRuntimeIdentity,
+  S7_KNOWN_SUPABASE_PROJECT_REF,
+  S7_LEGACY_SUPABASE_PROJECT_REF,
+} from "../../infra/supabaseRuntimeIdentityService.js";
+
 export const BILLING_RUNTIME_ENVIRONMENT_UNCONFIRMED = "BILLING_RUNTIME_ENVIRONMENT_UNCONFIRMED";
 
+/** Refs conhecidos — somente para guards explícitos (PROD, legado Vercel). Não definem “o que é DEV”. */
 export const S7_SUPABASE_PROJECT_REF = Object.freeze({
-  DEV: "ujznkyvgqhxagemdgmor",
-  PROD: "bazibzquasbdgjwdcwbz",
+  DEV: S7_LEGACY_SUPABASE_PROJECT_REF.DEV_V1,
+  PROD: S7_KNOWN_SUPABASE_PROJECT_REF.PROD,
 });
+
+export { extractSupabaseProjectRef, readExpectedSupabaseProjectRef, resolveSupabaseRuntimeIdentity };
 
 export const S7_VERCEL_PROJECT_ID = Object.freeze({
   DEV: "prj_TvAjlZFVkLOrgxW7bgGD5VIX7LK3",
@@ -22,15 +34,6 @@ export const S7_VERCEL_PROJECT_ID = Object.freeze({
 
 const S7_APP_ENV_ALLOWED = new Set(["development", "staging", "production"]);
 const ASAAS_ENV_ALLOWED = new Set(["sandbox", "production"]);
-
-/**
- * @param {NodeJS.ProcessEnv | Record<string, string | undefined>} [env]
- */
-export function extractSupabaseProjectRef(env = process.env) {
-  const url = String(env.SUPABASE_URL || "").trim();
-  const m = /^https?:\/\/([a-z0-9]+)\.supabase\.co/i.exec(url);
-  return m?.[1]?.toLowerCase() || null;
-}
 
 /**
  * @param {unknown} raw
@@ -79,17 +82,18 @@ export function resolveS7RuntimeEnvironment(env = process.env) {
   const s7AppEnv = normalizeS7AppEnv(rawApp);
   const asaasEnv = normalizeAsaasEnv(rawAsaas);
   const supabaseProjectRef = extractSupabaseProjectRef(env);
-  const expectedRef = String(env.S7_EXPECTED_SUPABASE_PROJECT_REF || "")
-    .trim()
-    .toLowerCase() || null;
+  const expectedRef = readExpectedSupabaseProjectRef(env);
+  const identity = resolveSupabaseRuntimeIdentity(env);
 
-  if (expectedRef && supabaseProjectRef && expectedRef !== supabaseProjectRef) {
-    reasons.push("SUPABASE_PROJECT_REF_MISMATCH_EXPECTED");
+  for (const reason of identity.reasons) {
+    if (!reasons.includes(reason)) reasons.push(reason);
   }
 
   if (s7AppEnv === "development" || s7AppEnv === "staging") {
     if (asaasEnv && asaasEnv !== "sandbox") reasons.push("DEV_APP_REQUIRES_ASAAS_SANDBOX");
-    if (supabaseProjectRef && supabaseProjectRef !== S7_SUPABASE_PROJECT_REF.DEV) {
+    if (!expectedRef) reasons.push("DEV_APP_REQUIRES_EXPECTED_SUPABASE_PROJECT_REF");
+    if (!supabaseProjectRef) reasons.push("DEV_APP_REQUIRES_SUPABASE_URL");
+    if (expectedRef && supabaseProjectRef && expectedRef !== supabaseProjectRef) {
       reasons.push("DEV_APP_REQUIRES_SUPABASE_DEV");
     }
     if (supabaseProjectRef === S7_SUPABASE_PROJECT_REF.PROD) {
@@ -99,6 +103,8 @@ export function resolveS7RuntimeEnvironment(env = process.env) {
 
   if (s7AppEnv === "production") {
     if (asaasEnv && asaasEnv !== "production") reasons.push("PROD_APP_REQUIRES_ASAAS_PRODUCTION");
+    if (!expectedRef) reasons.push("PROD_APP_REQUIRES_EXPECTED_SUPABASE_PROJECT_REF");
+    if (!supabaseProjectRef) reasons.push("PROD_APP_REQUIRES_SUPABASE_URL");
     if (supabaseProjectRef && supabaseProjectRef !== S7_SUPABASE_PROJECT_REF.PROD) {
       reasons.push("PROD_APP_REQUIRES_SUPABASE_PROD");
     }
@@ -113,7 +119,8 @@ export function resolveS7RuntimeEnvironment(env = process.env) {
 
   if (
     vercelProjectId === S7_VERCEL_PROJECT_ID.PROD &&
-    supabaseProjectRef === S7_SUPABASE_PROJECT_REF.DEV
+    supabaseProjectRef &&
+    supabaseProjectRef !== S7_SUPABASE_PROJECT_REF.PROD
   ) {
     reasons.push("VERCEL_PROD_PROJECT_WITH_SUPABASE_DEV");
   }
@@ -146,6 +153,7 @@ export function resolveS7RuntimeEnvironment(env = process.env) {
     vercelProjectId,
     supabaseProjectRef,
     expectedSupabaseProjectRef: expectedRef,
+    supabaseRuntimeIdentity: identity,
     financialMutationsAllowed,
     isPreview,
     reasons,
