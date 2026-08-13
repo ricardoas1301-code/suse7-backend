@@ -7,6 +7,7 @@ import { createClient } from "@supabase/supabase-js";
 import { config } from "../../infra/config.js";
 import { ok, fail, getTraceId } from "../../infra/http.js";
 import { runCompetitionDailySnapshotBatch } from "../../domain/competition/competitionDailySnapshotService.js";
+import { buildDevGlobalMaintenanceJobSkipResult } from "../../domain/dev/devGlobalMaintenanceMode.js";
 
 /**
  * @param {import("http").IncomingMessage} req
@@ -90,6 +91,19 @@ export async function handleJobsCompetitionDailySnapshot(req, res) {
 
   if (!config.supabaseUrl?.trim() || !config.supabaseServiceRoleKey?.trim()) {
     return fail(res, { code: "CONFIG_ERROR", message: "Configuração do banco indisponível" }, 503, traceId);
+  }
+
+  const maintenanceSkip = buildDevGlobalMaintenanceJobSkipResult({ jobType: "competition-daily-snapshot" });
+  if (maintenanceSkip) {
+    return ok(res, {
+      ok: true,
+      job: "competition-daily-snapshot",
+      maintenance_blocked: true,
+      reason: maintenanceSkip.reason,
+      outcome: maintenanceSkip.outcome,
+      processed: 0,
+      traceId,
+    });
   }
 
   const input = parseCompetitionDailySnapshotInput(req);

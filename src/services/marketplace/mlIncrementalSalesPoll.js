@@ -20,6 +20,7 @@ import {
   fetchMlTokenProbeForMlSeller,
   fetchMarketplaceAccountsWithActiveMlPipeline,
 } from "./marketplaceAccountConnectionHealth.js";
+import { evaluateDevGlobalMaintenanceGate } from "../../domain/dev/devGlobalMaintenanceMode.js";
 
 const ORDER_TIMEOUT_MS = Math.min(
   180000,
@@ -317,6 +318,16 @@ export async function runIncrementalMlSalesPollWave(supabase, opts = {}) {
     const accountId = acc?.id != null ? String(acc.id).trim() : "";
     const userId = acc?.user_id != null ? String(acc.user_id).trim() : "";
     if (!accountId || !userId) continue;
+
+    const maintenanceGate = evaluateDevGlobalMaintenanceGate({ scope: "incremental_poll" });
+    if (maintenanceGate.blocked) {
+      console.info("[sales-sync] incremental_poll_account_skipped_maintenance", {
+        marketplace_account_id: accountId,
+        external_seller_id: acc?.external_seller_id ?? null,
+        reason: maintenanceGate.reason,
+      });
+      continue;
+    }
 
     const extForProbe = acc?.external_seller_id != null ? String(acc.external_seller_id).trim() : "";
     const tokenProbe = extForProbe

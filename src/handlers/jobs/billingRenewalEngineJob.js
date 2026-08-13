@@ -9,6 +9,7 @@ import { evaluateBillingJobAuth } from "../../billing/middleware/evaluateBilling
 import { getBillingProvider } from "../../billing/providers/index.js";
 import { processBillingRenewalEngine } from "../../billing/services/billingRenewalEngine.js";
 import { readRequestJson } from "../../billing/utils/readRequestJson.js";
+import { buildDevGlobalMaintenanceJobSkipResult } from "../../domain/dev/devGlobalMaintenanceMode.js";
 
 export async function handleJobsBillingRenewalEngine(req, res) {
   const traceId = getTraceId(req);
@@ -29,6 +30,18 @@ export async function handleJobsBillingRenewalEngine(req, res) {
 
   if (!config.supabaseUrl?.trim() || !config.supabaseServiceRoleKey?.trim()) {
     return fail(res, { code: "CONFIG_ERROR", message: "Configuração do banco indisponível" }, 503, traceId);
+  }
+
+  const maintenanceSkip = buildDevGlobalMaintenanceJobSkipResult({ jobType: "billing-renewal-engine" });
+  if (maintenanceSkip) {
+    return ok(res, {
+      ok: true,
+      job: "billing-renewal-engine",
+      maintenance_blocked: true,
+      reason: maintenanceSkip.reason,
+      outcome: maintenanceSkip.outcome,
+      traceId,
+    });
   }
 
   let limit;

@@ -17,6 +17,7 @@ import {
   isMlWebhookTerminalIgnoredError,
 } from "./_helpers/mlWebhookOrderProcessorOutcome.js";
 import { ML_MARKETPLACE_SLUG } from "./_helpers/mlMarketplace.js";
+import { evaluateDevGlobalMaintenanceWebhookEvent } from "../../domain/dev/devGlobalMaintenanceMode.js";
 
 /**
  * @returns {import("@supabase/supabase-js").SupabaseClient}
@@ -252,6 +253,11 @@ function shouldIgnoreEvent(event) {
   }
   if (topic === "orders_v2" && !marketplaceAccountId && userId.toUpperCase() === "TEST") {
     return { ignore: true, reason: "MISSING_MARKETPLACE_ACCOUNT_FOR_TEST" };
+  }
+
+  const maintenanceFence = evaluateDevGlobalMaintenanceWebhookEvent(event);
+  if (maintenanceFence.ignore) {
+    return { ignore: true, reason: maintenanceFence.reason };
   }
 
   return { ignore: false, reason: null };
@@ -748,6 +754,8 @@ export async function runMlWebhookProcessor(input = {}) {
       const isAmbiguous = code === "WEBHOOK_ACCOUNT_AMBIGUOUS" || message.includes("WEBHOOK_ACCOUNT_AMBIGUOUS");
       const isTerminalIgnored = isMlWebhookTerminalIgnoredError(err) || isAmbiguous;
       const isEntitlementBlocked = code === "ML_WEBHOOK_ENTITLEMENT_BLOCKED" || message.startsWith("ENTITLEMENT_BLOCKED:");
+      const isMaintenanceBlocked =
+        code === "ML_WEBHOOK_MAINTENANCE_BLOCKED" || message.startsWith("MAINTENANCE_BLOCKED:");
       const nextStatus = isTerminalIgnored
         ? "ignored"
         : attempts >= maxAttempts
@@ -789,11 +797,13 @@ export async function runMlWebhookProcessor(input = {}) {
 
       const ignoredReason = isAmbiguous
         ? "account_ambiguous_multi_tenant"
-        : isEntitlementBlocked
-          ? `entitlement_blocked:${message.replace(/^ENTITLEMENT_BLOCKED:/, "")}`
-          : code === "ML_WEBHOOK_DEFINITIVE_SKIP"
-            ? message.replace(/^DEFINITIVE_SKIP:/, "")
-            : message;
+        : isMaintenanceBlocked
+          ? `maintenance_blocked:${message.replace(/^MAINTENANCE_BLOCKED:/, "")}`
+          : isEntitlementBlocked
+            ? `entitlement_blocked:${message.replace(/^ENTITLEMENT_BLOCKED:/, "")}`
+            : code === "ML_WEBHOOK_DEFINITIVE_SKIP"
+              ? message.replace(/^DEFINITIVE_SKIP:/, "")
+              : message;
 
       await updateWebhookEventRow(supabase, eventId, {
         status: nextStatus,
@@ -814,9 +824,11 @@ export async function runMlWebhookProcessor(input = {}) {
             ? String(/** @type {{ processor_outcome?: unknown }} */ (err).processor_outcome)
             : isAmbiguous
               ? "IGNORED_AMBIGUOUS_ACCOUNT"
-              : isEntitlementBlocked
-                ? "IGNORED_ENTITLEMENT_BLOCKED"
-                : null,
+              : isMaintenanceBlocked
+                ? "IGNORED_MAINTENANCE"
+                : isEntitlementBlocked
+                  ? "IGNORED_ENTITLEMENT_BLOCKED"
+                  : null,
       });
     }
   }

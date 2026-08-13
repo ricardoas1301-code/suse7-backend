@@ -935,6 +935,19 @@ export async function reconcileMarketplaceAccountFromMlTokensRow(supabase, userI
     return { ok: false, reason: "no_external_seller_id" };
   }
 
+  const { evaluateDevGlobalMaintenanceGate, DEV_GLOBAL_MAINTENANCE_REASON } = await import(
+    "../../../domain/dev/devGlobalMaintenanceMode.js"
+  );
+  const maintenanceGate = evaluateDevGlobalMaintenanceGate({ scope: "oauth_reconcile" });
+  if (maintenanceGate.blocked) {
+    console.info("[ml/callback] reconcile_skipped_maintenance", {
+      user_id: uid,
+      external_seller_id: externalSellerId,
+      reason: DEV_GLOBAL_MAINTENANCE_REASON,
+    });
+    return { ok: false, reason: DEV_GLOBAL_MAINTENANCE_REASON, maintenance_blocked: true };
+  }
+
   const mlNickname =
     meData?.nickname != null && String(meData.nickname).trim() !== ""
       ? String(meData.nickname).trim()

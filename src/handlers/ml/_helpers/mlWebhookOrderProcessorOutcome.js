@@ -1,6 +1,6 @@
 import { ML_MARKETPLACE_SLUG } from "./mlMarketplace.js";
 
-/** @typedef {'PERSISTED' | 'IDEMPOTENT_ALREADY_PRESENT' | 'IGNORED_ENTITLEMENT_BLOCKED' | 'RETRYABLE_FAILURE' | 'DEFINITIVE_SKIP'} MlWebhookOrderProcessorOutcome */
+/** @typedef {'PERSISTED' | 'IDEMPOTENT_ALREADY_PRESENT' | 'IGNORED_ENTITLEMENT_BLOCKED' | 'IGNORED_MAINTENANCE' | 'RETRYABLE_FAILURE' | 'DEFINITIVE_SKIP'} MlWebhookOrderProcessorOutcome */
 
 /**
  * Classifica resultado de applyMlOrderDetailToMarketplaceSales no contexto webhook orders_v2.
@@ -29,6 +29,15 @@ export function classifyMlWebhookApplyResult(applyResult) {
     return {
       outcome: /** @type {MlWebhookOrderProcessorOutcome} */ ("IGNORED_ENTITLEMENT_BLOCKED"),
       reason: applyResult.reason != null ? String(applyResult.reason) : "entitlement_blocked",
+      domain_code: applyResult.domain_code != null ? String(applyResult.domain_code) : null,
+      terminal: true,
+    };
+  }
+
+  if (applyResult.maintenance_blocked === true) {
+    return {
+      outcome: /** @type {MlWebhookOrderProcessorOutcome} */ ("IGNORED_MAINTENANCE"),
+      reason: applyResult.reason != null ? String(applyResult.reason) : "DEV_GLOBAL_MAINTENANCE",
       domain_code: applyResult.domain_code != null ? String(applyResult.domain_code) : null,
       terminal: true,
     };
@@ -87,6 +96,14 @@ export async function assertMlWebhookOrdersV2CanonicalOutcome(supabase, input) {
   if (classified.outcome === "IGNORED_ENTITLEMENT_BLOCKED") {
     const err = new Error(`ENTITLEMENT_BLOCKED:${classified.reason}`);
     /** @type {any} */ (err).code = "ML_WEBHOOK_ENTITLEMENT_BLOCKED";
+    /** @type {any} */ (err).processor_outcome = classified.outcome;
+    /** @type {any} */ (err).domain_code = classified.domain_code ?? null;
+    throw err;
+  }
+
+  if (classified.outcome === "IGNORED_MAINTENANCE") {
+    const err = new Error(`MAINTENANCE_BLOCKED:${classified.reason}`);
+    /** @type {any} */ (err).code = "ML_WEBHOOK_MAINTENANCE_BLOCKED";
     /** @type {any} */ (err).processor_outcome = classified.outcome;
     /** @type {any} */ (err).domain_code = classified.domain_code ?? null;
     throw err;
@@ -151,6 +168,7 @@ export function isMlWebhookTerminalIgnoredError(err) {
   return (
     code === "WEBHOOK_ACCOUNT_AMBIGUOUS" ||
     code === "ML_WEBHOOK_ENTITLEMENT_BLOCKED" ||
+    code === "ML_WEBHOOK_MAINTENANCE_BLOCKED" ||
     code === "ML_WEBHOOK_DEFINITIVE_SKIP"
   );
 }

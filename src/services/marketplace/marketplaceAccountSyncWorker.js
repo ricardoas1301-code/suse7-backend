@@ -36,6 +36,10 @@ import { runMlInitialFeesSyncTurn } from "./mlFeesSyncService.js";
 import { upsertMarketplaceSalesImportCoverage } from "./marketplaceSalesImportCoverageService.js";
 import { advanceMlSalesWatermark } from "./mlSalesAccountWatermark.js";
 import { runIncrementalMlSalesPollWave } from "./mlIncrementalSalesPoll.js";
+import {
+  evaluateDevGlobalMaintenanceGate,
+  DEV_GLOBAL_MAINTENANCE_REASON,
+} from "../../domain/dev/devGlobalMaintenanceMode.js";
 
 function resolveSalesSearchPageLimit() {
   return Math.min(
@@ -1708,6 +1712,25 @@ const MULTI_TURN_RESUMABLE_JOB_TYPES = new Set([
  */
 async function dispatchJobChunk(supabase, job, runtime) {
   const t = String(job.job_type || "");
+  const accountId = job.marketplace_account_id != null ? String(job.marketplace_account_id).trim() : "";
+  const externalSellerId =
+    job.external_seller_id != null ? String(job.external_seller_id).trim() : null;
+  const maintenanceGate = evaluateDevGlobalMaintenanceGate({ scope: `sync_job:${t}` });
+  if (maintenanceGate.blocked) {
+    console.info("[sales-sync] sync_job_skipped_maintenance", {
+      job_id: job.id ?? null,
+      marketplace_account_id: accountId || null,
+      job_type: t,
+      reason: maintenanceGate.reason,
+    });
+    await completeStubJob(supabase, job, {
+      skipped: true,
+      step: "dev_global_maintenance_mode",
+      reason: DEV_GLOBAL_MAINTENANCE_REASON,
+    });
+    return { stopped: true, done: true, processedInThisRun: 0, maintenance_skipped: true };
+  }
+
   console.info("[ML_ONBOARDING_SYNC_STEP_START]", {
     job_id: job.id ?? null,
     marketplace_account_id: job.marketplace_account_id ?? null,

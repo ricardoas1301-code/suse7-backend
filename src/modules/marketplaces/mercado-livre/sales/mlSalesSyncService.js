@@ -17,6 +17,7 @@ import {
 } from "../../../../billing/services/billingBillableSalePreflightService.js";
 import { BILLING_SNAPSHOT_ORIGIN } from "../../../../billing/billingConstants.js";
 import { normalizeBillingSnapshotOrigin } from "../../../../billing/services/billingQuotaEligibilityService.js";
+import { buildDevGlobalMaintenanceBlockedApplyResult } from "../../../../domain/dev/devGlobalMaintenanceMode.js";
 
 /**
  * Origem canônica única (S1.HF.6.9A.10). Ausência → unknown (nunca post_suse7_sale).
@@ -407,6 +408,19 @@ export async function applyMlOrderDetailToMarketplaceSales(
     summary.errors.push("missing_marketplace_account_id");
     summary.skipped_count += 1;
     return { ok: false, reason: "missing_marketplace_account_id" };
+  }
+
+  const maintenanceBlocked = buildDevGlobalMaintenanceBlockedApplyResult({
+    scope: "ml_sales_apply",
+  });
+  if (maintenanceBlocked) {
+    summary.skipped_count += 1;
+    summary.errors.push(`maintenance_${maintenanceBlocked.reason}`);
+    logStep("maintenance fence blocked", {
+      reason: maintenanceBlocked.reason,
+      domain_code: maintenanceBlocked.domain_code,
+    });
+    return maintenanceBlocked;
   }
 
   const existingQuery = supabase
