@@ -119,6 +119,8 @@ function createRes(res) {
       res.setHeader("Content-Type", "application/json; charset=utf-8");
       if (!res.statusCode || res.statusCode < 200) res.statusCode = 200;
       res.end(JSON.stringify(obj));
+      // Sinaliza handler concluído — ok()/fail() repassam este valor ao router (evita 404 fantasma local).
+      return true;
     },
     status(code) {
       res.statusCode = code;
@@ -132,6 +134,7 @@ function createRes(res) {
           Object.entries(headers).forEach(([k, v]) => res.setHeader(k, v));
           res.setHeader("Content-Type", "application/json");
           res.end(JSON.stringify(obj));
+          return true;
         },
         redirect(location) {
           const loc = String(location ?? "");
