@@ -1,11 +1,15 @@
 // ======================================================================
 // Termos de Uso — metadados canônicos (validação backend)
+// Derivado do catálogo SSOT — não duplicar version/hash manualmente aqui.
 // ======================================================================
 
-export const TERMOS_USO_TIPO_DOCUMENTO = "TERMS_OF_USE";
-/** Alinhado ao SSOT frontend — termosUsoDocumento.js (2026-08-13 provisório). */
-export const TERMOS_USO_VERSAO_ID = "2026-08-13-v2-provisional";
-export const TERMOS_USO_HASH_CONTEUDO = "92364df98d295ad434c5413b5288eb0457f691edebdd0c7cfde98e6f54efc63c";
+import {
+  TERMOS_USO_HASH_CONTEUDO,
+  TERMOS_USO_TIPO_DOCUMENTO,
+  TERMOS_USO_VERSAO_ID,
+} from "./catalogoDocumentosLegais.js";
+
+export { TERMOS_USO_HASH_CONTEUDO, TERMOS_USO_TIPO_DOCUMENTO, TERMOS_USO_VERSAO_ID };
 
 /** @type {Readonly<Record<string, { versionId: string; contentHash: string }>>} */
 export const DOCUMENTOS_LEGAIS_CANONICOS = {

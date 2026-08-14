@@ -19,7 +19,7 @@ const DEBUG_ML_LISTINGS_COVER_CONTEXT_PATH = "/api/debug/ml/listings-cover-conte
 console.log("[S7 API Router] boot — rotas diagnóstico ML:", DEBUG_ML_FIELD_MAP_PATH, DEBUG_ML_COVER_COMPARE_PATH, DEBUG_ML_LISTINGS_COVER_CONTEXT_PATH);
 console.log("[S7 API Router] boot — ML OAuth diag: GET /api/ml/oauth-config");
 console.log("[S7 API Router] boot — billing: GET /api/billing/ping · GET /api/billing/plans · POST /api/billing/checkout/card · POST /api/billing/checkout/start · GET /api/billing/webhooks/asaas/health · POST /api/billing/webhooks/asaas · POST /api/jobs/billing-renewal-engine · POST /api/jobs/billing-consistency-check · POST /api/billing/renewals/:id/pay");
-console.log("[S7 API Router] boot — legal: POST /api/legal/document-acceptances");
+console.log("[S7 API Router] boot — legal: GET /api/legal/documents/terms-of-use · POST /api/legal/document-acceptances");
 console.log("[S7 API Router] boot — signup: POST /api/signup/pending-birth · bind · abort · complete-birth");
 console.log("[S7 API Router] boot — notifications: POST /api/jobs/daily-sales-summary-automation");
 console.log("[S7 API Router] boot — competition: POST /api/jobs/competition-daily-snapshot");

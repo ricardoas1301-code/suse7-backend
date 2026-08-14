@@ -1,11 +1,25 @@
 // ======================================================================
-// Rotas HTTP — Aceites de documentos legais
+// Rotas HTTP — Documentos legais (catálogo SSOT + aceites)
 // ======================================================================
 
 import { ok, fail, getTraceId } from "../../infra/http.js";
 import { requireAuthUser } from "../../handlers/ml/_helpers/requireAuthUser.js";
 import { readRequestJson } from "../../billing/utils/readRequestJson.js";
 import { validarMetadadosDocumentoLegal } from "../domain/documentosLegaisCanonicos.js";
+import { obterCatalogoDocumentoLegal, listarTiposDocumentosLegaisPublicos } from "../domain/catalogoDocumentosLegais.js";
+
+const TERMS_CATALOG_PATH = "/api/legal/documents/terms-of-use";
+const LEGAL_DOCUMENT_PREFIX = "/api/legal/documents/";
+const TERMS_CATALOG_CACHE_SECONDS = 3600;
+
+function responderCatalogoPublico(res, catalog, traceId) {
+  res.setHeader("Cache-Control", `public, max-age=${TERMS_CATALOG_CACHE_SECONDS}, stale-while-revalidate=86400`);
+  return ok(res, {
+    ok: true,
+    catalog,
+    traceId,
+  });
+}
 
 /**
  * @param {import('http').IncomingMessage} req
@@ -16,6 +30,41 @@ export async function handleLegalRoutes(req, res, path) {
   const method = String(req.method || "GET").toUpperCase();
   const pathNorm = String(path || "").split("?")[0];
   const traceId = getTraceId(req);
+
+  if (pathNorm === TERMS_CATALOG_PATH || pathNorm.startsWith(LEGAL_DOCUMENT_PREFIX)) {
+    if (method !== "GET") {
+      return fail(res, { code: "METHOD_NOT_ALLOWED", message: "Use GET" }, 405, traceId);
+    }
+
+    const documentSlug = pathNorm.slice(LEGAL_DOCUMENT_PREFIX.length).replace(/\/+$/, "");
+    const documentType =
+      pathNorm === TERMS_CATALOG_PATH
+        ? "TERMS_OF_USE"
+        : documentSlug === "terms-of-use"
+          ? "TERMS_OF_USE"
+          : documentSlug === "privacy-policy"
+            ? "PRIVACY_POLICY"
+            : documentSlug.toUpperCase().replace(/-/g, "_");
+
+    const catalog = obterCatalogoDocumentoLegal(documentType);
+    if (!catalog) {
+      return fail(res, { code: "DOCUMENT_NOT_FOUND", message: "Documento legal não disponível." }, 404, traceId);
+    }
+
+    return responderCatalogoPublico(res, catalog, traceId);
+  }
+
+  if (pathNorm === "/api/legal/documents") {
+    if (method !== "GET") {
+      return fail(res, { code: "METHOD_NOT_ALLOWED", message: "Use GET" }, 405, traceId);
+    }
+    res.setHeader("Cache-Control", `public, max-age=${TERMS_CATALOG_CACHE_SECONDS}, stale-while-revalidate=86400`);
+    return ok(res, {
+      ok: true,
+      documents: listarTiposDocumentosLegaisPublicos(),
+      traceId,
+    });
+  }
 
   if (pathNorm === "/api/legal/document-acceptances") {
     if (method !== "POST") {

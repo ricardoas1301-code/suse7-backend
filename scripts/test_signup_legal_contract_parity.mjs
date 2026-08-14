@@ -1,28 +1,10 @@
 #!/usr/bin/env node
 /**
- * DEV.V2.SECOND-SIGNUP-LEGAL-CONTRACT-MISMATCH.22B
- * Garante paridade FE/BE do contrato jurídico usado no signup pending-birth.
+ * DEV.V2.SECOND-SIGNUP-LEGAL-CONTRACT-MISMATCH.22B (atualizado SSOT.01)
+ * Garante paridade via catálogo backend — sem duplicar version/hash no FE.
  */
-import { createHash } from "node:crypto";
-import { pathToFileURL } from "node:url";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { validatePendingBirthPayload } from "../src/signup/domain/signupPendingBirthValidation.js";
-import {
-  TERMOS_USO_HASH_CONTEUDO as BE_HASH,
-  TERMOS_USO_TIPO_DOCUMENTO as BE_TYPE,
-  TERMOS_USO_VERSAO_ID as BE_VERSION,
-} from "../src/legal/domain/documentosLegaisCanonicos.js";
-
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const FE_ROOT = join(__dirname, "../../suse7-frontend");
-
-const feMod = await import(
-  pathToFileURL(join(FE_ROOT, "src/domain/legal/termosUsoDocumento.js")).href
-);
-
-const fePayload = feMod.montarTermosUsoPayloadCanonico();
-const feComputedHash = createHash("sha256").update(JSON.stringify(fePayload)).digest("hex");
+import { obterCatalogoTermosUso } from "../src/legal/domain/catalogoDocumentosLegais.js";
 
 /** @type {string[]} */
 const failures = [];
@@ -31,10 +13,7 @@ function assert(name, cond) {
   if (!cond) failures.push(name);
 }
 
-assert("frontend hash constant matches canonical payload", feMod.TERMOS_USO_HASH_CONTEUDO === feComputedHash);
-assert("frontend/backend document_type match", feMod.TERMOS_USO_TIPO_DOCUMENTO === BE_TYPE);
-assert("frontend/backend document_version match", feMod.TERMOS_USO_VERSAO_ID === BE_VERSION);
-assert("frontend/backend document_hash match", feMod.TERMOS_USO_HASH_CONTEUDO === BE_HASH);
+const catalog = obterCatalogoTermosUso();
 
 const baseBody = {
   email: "contrato.parity@teste.local",
@@ -45,16 +24,16 @@ const baseBody = {
 };
 
 const validTerms = {
-  document_type: feMod.TERMOS_USO_TIPO_DOCUMENTO,
-  document_version: feMod.TERMOS_USO_VERSAO_ID,
-  document_hash: feMod.TERMOS_USO_HASH_CONTEUDO,
+  document_type: catalog.document_type,
+  document_version: catalog.document_version,
+  document_hash: catalog.document_hash,
   accepted_at: new Date().toISOString(),
   source: "SIGNUP",
   scrolled_to_end: true,
 };
 
 const valid = validatePendingBirthPayload({ ...baseBody, terms: validTerms });
-assert("valid frontend terms payload passes backend validation", valid.ok === true);
+assert("valid catalog terms payload passes backend validation", valid.ok === true);
 
 const wrongVersion = validatePendingBirthPayload({
   ...baseBody,
@@ -93,16 +72,10 @@ console.log(
     {
       pass: true,
       test: "signup_legal_contract_parity",
-      frontend: {
-        document_type: feMod.TERMOS_USO_TIPO_DOCUMENTO,
-        document_version: feMod.TERMOS_USO_VERSAO_ID,
-        document_hash: `${feMod.TERMOS_USO_HASH_CONTEUDO.slice(0, 8)}…${feMod.TERMOS_USO_HASH_CONTEUDO.slice(-8)}`,
-      },
-      backend: {
-        document_type: BE_TYPE,
-        document_version: BE_VERSION,
-        document_hash: `${BE_HASH.slice(0, 8)}…${BE_HASH.slice(-8)}`,
-      },
+      authority: "backend_catalog",
+      document_type: catalog.document_type,
+      document_version: catalog.document_version,
+      document_hash: `${catalog.document_hash.slice(0, 8)}…${catalog.document_hash.slice(-8)}`,
     },
     null,
     2
