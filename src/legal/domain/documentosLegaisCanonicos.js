@@ -3,8 +3,9 @@
 // ======================================================================
 
 export const TERMOS_USO_TIPO_DOCUMENTO = "TERMS_OF_USE";
-export const TERMOS_USO_VERSAO_ID = "2025-11-27-v1";
-export const TERMOS_USO_HASH_CONTEUDO = "4969d335da583efffd42bfa5b57915d1512a6b1b46d9396195b58a3329fe2a97";
+/** Alinhado ao SSOT frontend — termosUsoDocumento.js (2026-08-13 provisório). */
+export const TERMOS_USO_VERSAO_ID = "2026-08-13-v2-provisional";
+export const TERMOS_USO_HASH_CONTEUDO = "92364df98d295ad434c5413b5288eb0457f691edebdd0c7cfde98e6f54efc63c";
 
 /** @type {Readonly<Record<string, { versionId: string; contentHash: string }>>} */
 export const DOCUMENTOS_LEGAIS_CANONICOS = {
