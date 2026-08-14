@@ -5,6 +5,7 @@
 import { createHash } from "node:crypto";
 import { isValidCnpjInput, normalizeCnpjDigits } from "../../domain/taxIdBr/cnpjDigits.js";
 import { validarMetadadosDocumentoLegal } from "../../legal/domain/documentosLegaisCanonicos.js";
+import { TERMOS_USO_TIPO_DOCUMENTO } from "../../legal/domain/catalogoDocumentosLegais.js";
 
 const MAX_FIELD_LEN = 256;
 const MAX_PAYLOAD_BYTES = 16_384;
@@ -103,6 +104,14 @@ export function validatePendingBirthPayload(body) {
 
   if (!scrolledToEnd) {
     return { ok: false, code: "SCROLL_REQUIRED", message: "Aceite exige leitura até o final." };
+  }
+
+  if (documentType !== TERMOS_USO_TIPO_DOCUMENTO) {
+    return {
+      ok: false,
+      code: "SIGNUP_REQUIRES_TERMS_OF_USE",
+      message: "Aceite de signup exige Termos de Uso.",
+    };
   }
 
   const legalValidation = validarMetadadosDocumentoLegal(documentType, documentVersion, documentHash);

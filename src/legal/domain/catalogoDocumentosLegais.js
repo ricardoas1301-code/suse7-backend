@@ -5,12 +5,18 @@
 
 import { createHash } from "node:crypto";
 import { TERMOS_USO_BLOCOS_CANONICOS } from "./termosUsoBlocosCanonicos.js";
+import { POLITICA_PRIVACIDADE_BLOCOS_CANONICOS } from "./politicaPrivacidadeBlocosCanonicos.js";
 
 export const TERMOS_USO_TIPO_DOCUMENTO = "TERMS_OF_USE";
 export const TERMOS_USO_VERSAO_ID = "2026-08-13-v2-provisional";
 export const TERMOS_USO_DATA_PUBLICACAO_ROTULO = "13 de agosto de 2026";
 export const TERMOS_USO_TITULO_PAGINA = "Termos e Condições de Uso do SUSE7";
 export const TERMOS_USO_TITULO_MODAL = "Termos de Uso do SUSE7";
+
+export const POLITICA_PRIVACIDADE_TIPO_DOCUMENTO = "PRIVACY_POLICY";
+export const POLITICA_PRIVACIDADE_VERSAO_ID = "2026-08-13-v2-provisional";
+export const POLITICA_PRIVACIDADE_DATA_PUBLICACAO_ROTULO = "13 de agosto de 2026";
+export const POLITICA_PRIVACIDADE_TITULO_PAGINA = "Política de Privacidade";
 
 /**
  * Serializa blocos jurídicos para hash/auditoria.
@@ -94,6 +100,13 @@ const DEFINICOES_DOCUMENTOS_LEGAIS = {
     title_modal: TERMOS_USO_TITULO_MODAL,
     blocks: TERMOS_USO_BLOCOS_CANONICOS,
   },
+  [POLITICA_PRIVACIDADE_TIPO_DOCUMENTO]: {
+    document_type: POLITICA_PRIVACIDADE_TIPO_DOCUMENTO,
+    version_id: POLITICA_PRIVACIDADE_VERSAO_ID,
+    published_at_label: POLITICA_PRIVACIDADE_DATA_PUBLICACAO_ROTULO,
+    title_page: POLITICA_PRIVACIDADE_TITULO_PAGINA,
+    blocks: POLITICA_PRIVACIDADE_BLOCOS_CANONICOS,
+  },
 };
 
 /**
@@ -132,4 +145,18 @@ export const TERMOS_USO_HASH_CONTEUDO = computarHashDocumentoLegal(
 /** Compat — Termos de Uso */
 export function obterCatalogoTermosUso() {
   return obterCatalogoDocumentoLegal(TERMOS_USO_TIPO_DOCUMENTO);
+}
+
+/** Compat — Política de Privacidade */
+export function montarPoliticaPrivacidadePayloadCanonico() {
+  return montarPayloadCanonicoDocumentoLegal(DEFINICOES_DOCUMENTOS_LEGAIS[POLITICA_PRIVACIDADE_TIPO_DOCUMENTO]);
+}
+
+export const POLITICA_PRIVACIDADE_HASH_CONTEUDO = computarHashDocumentoLegal(
+  DEFINICOES_DOCUMENTOS_LEGAIS[POLITICA_PRIVACIDADE_TIPO_DOCUMENTO]
+);
+
+/** Compat — Política de Privacidade */
+export function obterCatalogoPoliticaPrivacidade() {
+  return obterCatalogoDocumentoLegal(POLITICA_PRIVACIDADE_TIPO_DOCUMENTO);
 }

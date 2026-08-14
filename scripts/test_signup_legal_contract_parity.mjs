@@ -54,7 +54,7 @@ const wrongType = validatePendingBirthPayload({
   ...baseBody,
   terms: { ...validTerms, document_type: "PRIVACY_POLICY" },
 });
-assert("wrong document type rejected", wrongType.ok === false && wrongType.code === "UNKNOWN_DOCUMENT");
+assert("wrong document type rejected", wrongType.ok === false && wrongType.code === "SIGNUP_REQUIRES_TERMS_OF_USE");
 
 const noScroll = validatePendingBirthPayload({
   ...baseBody,
