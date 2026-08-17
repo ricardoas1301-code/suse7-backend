@@ -65,14 +65,10 @@ export async function fetchMlTokenProbeForMlSeller(supabase, userId, marketplace
         .eq("marketplace_account_id", mac)
         .maybeSingle();
 
+      let macColumnUnavailable = false;
       if (byMac.error && isPostgrestMissingColumnError(byMac.error)) {
-        byMac = await supabase
-          .from("ml_tokens")
-          .select("expires_at, refresh_token, ml_user_id")
-          .eq("user_id", userId)
-          .eq("marketplace", mp)
-          .eq("marketplace_account_id", mac)
-          .maybeSingle();
+        macColumnUnavailable = true;
+        byMac = { data: null, error: null };
       }
 
       if (byMac.error && !isPostgrestMissingColumnError(byMac.error)) {
@@ -100,13 +96,17 @@ export async function fetchMlTokenProbeForMlSeller(supabase, userId, marketplace
         p.resolved_via = "marketplace_account_id";
         return p;
       }
+
+      if (macColumnUnavailable && !ext) {
+        return { ...absent };
+      }
     }
 
     if (!ext) {
       return { ...absent };
     }
 
-    const { data, error } = await supabase
+    let byMl = await supabase
       .from("ml_tokens")
       .select("expires_at, refresh_token, ml_user_id, marketplace_account_id")
       .eq("user_id", userId)
@@ -114,11 +114,23 @@ export async function fetchMlTokenProbeForMlSeller(supabase, userId, marketplace
       .eq("ml_user_id", ext)
       .maybeSingle();
 
-    if (error || !data) {
+    if (byMl.error && isPostgrestMissingColumnError(byMl.error)) {
+      byMl = await supabase
+        .from("ml_tokens")
+        .select("expires_at, refresh_token, ml_user_id")
+        .eq("user_id", userId)
+        .eq("marketplace", mp)
+        .eq("ml_user_id", ext)
+        .maybeSingle();
+    }
+
+    if (byMl.error || !byMl.data) {
       return { ...absent };
     }
 
-    if (mac) {
+    const data = byMl.data;
+
+    if (mac && data && "marketplace_account_id" in data) {
       const rowMac =
         data.marketplace_account_id != null && String(data.marketplace_account_id).trim() !== ""
           ? String(data.marketplace_account_id).trim()
