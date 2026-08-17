@@ -9,6 +9,8 @@ import {
   fetchMlTokenProbeForMlSeller,
   fetchMlTokenProbeForUser,
 } from "../../services/marketplace/marketplaceAccountConnectionHealth.js";
+import { buildMarketplaceIntegrationPresentation } from "../../services/marketplace/marketplaceIntegrationPresentation.js";
+import { resolveMlInitialSyncOperationalPhase } from "../../domain/dashboard/resolveMlInitialSyncOperationalPhase.js";
 
 function toArray(value) {
   return Array.isArray(value) ? value : [];
@@ -243,6 +245,18 @@ export default async function handleMarketplaceAccounts(req, res) {
     const accountIdsForPipeline = data.map((r) => String(r?.id || "").trim()).filter(Boolean);
     const pipelineSet = await fetchMarketplaceAccountsWithActiveMlPipeline(supabase, accountIdsForPipeline, mpSlug);
 
+    let mlSyncPhase = /** @type {{ phase: "none" | "awaiting_start" | "in_progress"; marketplace_account_id: string | null }} */ ({
+      phase: "none",
+      marketplace_account_id: null,
+    });
+    if (!filterMarketplace || filterMarketplace === ML_MARKETPLACE_SLUG) {
+      try {
+        mlSyncPhase = await resolveMlInitialSyncOperationalPhase(supabase, user.id);
+      } catch {
+        mlSyncPhase = { phase: "none", marketplace_account_id: null };
+      }
+    }
+
     const rows = await Promise.all(
       data.map(async (row) => {
         const coId = row?.seller_company_id != null ? String(row.seller_company_id).trim() : "";
@@ -275,14 +289,26 @@ export default async function handleMarketplaceAccounts(req, res) {
           ? await fetchMlTokenProbeForMlSeller(supabase, user.id, mpSlug, ext, String(row.id))
           : await fetchMlTokenProbeForUser(supabase, user.id, mpSlug);
         const pack = buildMlConnectionUiPack(rowEnriched, tokenProbe, pipelineSet.has(String(row.id)));
+        const accountPhase =
+          mlSyncPhase.marketplace_account_id != null &&
+          String(mlSyncPhase.marketplace_account_id) === String(row.id)
+            ? mlSyncPhase.phase
+            : "none";
+        const integrationPresentation = buildMarketplaceIntegrationPresentation({
+          connectionPack: pack,
+          mlInitialSyncPhase: accountPhase,
+          authResolved: true,
+        });
         return {
           ...base,
           connection_health: pack.connection_health,
-          connection_badge_label: pack.connection_badge_label,
-          connection_alert_message: pack.connection_alert_message,
-          show_reconnect_cta: pack.show_reconnect_cta,
-          monitoring_headline: pack.monitoring_headline,
+          connection_badge_label: integrationPresentation.integration_badge_label,
+          connection_alert_message: integrationPresentation.connection_alert_message ?? pack.connection_alert_message,
+          show_reconnect_cta: integrationPresentation.show_reconnect_cta,
+          monitoring_headline: integrationPresentation.monitoring_headline ?? pack.monitoring_headline,
           pipeline_active: pack.pipeline_active,
+          ml_initial_sync_phase: accountPhase,
+          integration_presentation_code: integrationPresentation.sync_presentation_code,
           /** Backend: sync automático de vendas só é confiável com token/conexão saudáveis. */
           sales_auto_sync_effective:
             String(row?.status || "").toLowerCase() === "active" && pack.connection_health === "connected",

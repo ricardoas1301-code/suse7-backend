@@ -7,7 +7,7 @@
 export const ML_OAUTH_CALLBACK_MODULE_REV = "20260605-oauth-env-coherence-v2";
 
 /** Bump quando alterar `src/handlers/ml/_helpers/mlOAuthConnectPersistence.js`. */
-export const ML_OAUTH_PERSISTENCE_MODULE_REV = "20260211-oauth-persistence-v2";
+export const ML_OAUTH_PERSISTENCE_MODULE_REV = "20260817-legacy-schema-fallthrough-v1";
 
 /** Bump quando alterar `src/services/marketplace/marketplaceAccountConnectionHealth.js`. */
 export const ML_MARKETPLACE_CONNECTION_HEALTH_REV = "20260211-connection-health-v2";

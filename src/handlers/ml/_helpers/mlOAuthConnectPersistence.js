@@ -6,6 +6,7 @@
 
 import { fetchMercadoLibreUserMe } from "./mercadoLibreOrdersApi.js";
 import { ML_MARKETPLACE_SLUG } from "./mlMarketplace.js";
+import { ML_ACCOUNT_LINKED_ELSEWHERE_MESSAGE } from "./mlOAuthBindingGuards.js";
 import { createMlInitialSyncJobsIfAbsent } from "../../../services/marketplace/createMlInitialSyncJobs.js";
 
 const UUID_REGEX_CB =
@@ -448,6 +449,17 @@ export async function upsertMercadoLivreMarketplaceAccount(supabase, ctx) {
 
     lastInsErr = insErr;
     if (insErr && String(insErr.code) === "23505") {
+      const constraintName = String(insErr.constraint ?? insErr.details ?? "").toLowerCase();
+      if (constraintName.includes("global_active_external") || constraintName.includes("global_ml_external")) {
+        return {
+          ok: false,
+          error: {
+            code: "ml_account_linked_elsewhere",
+            message: ML_ACCOUNT_LINKED_ELSEWHERE_MESSAGE,
+          },
+          accountId: null,
+        };
+      }
       const { data: dupRows, error: dupErr } = await supabase
         .from("marketplace_accounts")
         .select("id")
@@ -757,18 +769,11 @@ export async function persistMlTokens(supabase, row) {
       ml_user_id: mlUid,
       message: upsertTriple.error?.message,
       code: upsertTriple.error?.code,
-      hint: "Rode scripts/ml_tokens_multi_account_unique.sql no Supabase para índice único (user_id, marketplace, ml_user_id).",
+      hint: "Índice único (user_id, marketplace, ml_user_id) ausente — tentando insert/update legado.",
     });
-    const err = {
-      code: "ml_tokens_multi_account_unique_required",
-      message:
-        "Estrutura legada detectada em ml_tokens; aplique scripts/ml_tokens_multi_account_unique.sql e remova unique user_id+marketplace.",
-    };
-    logPersistTokensSupabaseError(rowForLog, "persist_tokens_legacy_unique_blocked", upsertTriple.error || err);
-    return { ok: false, error: err, marketplace_account_id: persistedMarketplaceAccountId };
+  } else if (upsertTriple.error) {
+    logPersistTokensSupabaseError(rowForLog, "persist_tokens_upsert_triple_failed", upsertTriple.error);
   }
-
-  logPersistTokensSupabaseError(rowForLog, "persist_tokens_upsert_triple_failed", upsertTriple.error);
 
   const { data: existingTriple, error: selTripleErr } = await supabase
     .from("ml_tokens")
@@ -1036,4 +1041,41 @@ export async function reconcileMarketplaceAccountFromMlTokensRow(supabase, userI
   });
 
   return { ok: true, accountId: accResult.accountId, external_seller_id: externalSellerId };
+}
+
+/**
+ * Fail-safe — evita marketplace_account active sem token persistido (estado incoerente).
+ * @param {import("@supabase/supabase-js").SupabaseClient} supabase
+ * @param {{ marketplaceAccountId: string; userId: string }} input
+ */
+export async function compensarContaMarketplaceFalhaPersistenciaToken(supabase, input) {
+  const accountId =
+    input.marketplaceAccountId != null ? String(input.marketplaceAccountId).trim() : "";
+  const userId = input.userId != null ? String(input.userId).trim() : "";
+  if (!accountId || !userId) {
+    return { ok: false, reason: "missing_ids" };
+  }
+
+  const { error } = await supabase
+    .from("marketplace_accounts")
+    .update({ status: "invalid", updated_at: new Date().toISOString() })
+    .eq("id", accountId)
+    .eq("user_id", userId);
+
+  if (error) {
+    console.error("[ml/callback] compensate_account_auth_incomplete_failed", {
+      marketplace_account_id: accountId,
+      user_id: userId,
+      message: error.message,
+      code: error.code ?? null,
+    });
+    return { ok: false, reason: "update_failed" };
+  }
+
+  console.warn("[ml/callback] compensate_account_auth_incomplete", {
+    marketplace_account_id: accountId,
+    user_id: userId,
+    new_status: "invalid",
+  });
+  return { ok: true };
 }

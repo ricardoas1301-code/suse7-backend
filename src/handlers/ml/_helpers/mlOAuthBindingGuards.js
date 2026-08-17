@@ -1,7 +1,20 @@
 // ======================================================================
 // Regras de vínculo OAuth ML: 1 empresa ↔ no máx. 1 conta ativa por marketplace;
 // 1 external_seller_id não pode saltar entre empresas do mesmo usuário.
+// Guard global cross-tenant: mesma conta ML não pode vincular a outra empresa SUSE7.
 // ======================================================================
+
+/** Copy aprovada — zero PII da outra empresa/tenant. */
+export const ML_ACCOUNT_LINKED_ELSEWHERE_MESSAGE =
+  "Esta conta do Mercado Livre já está vinculada a outra empresa. Verifique a conta autorizada no Mercado Livre e tente novamente.";
+
+/**
+ * @param {string | null | undefined} status
+ */
+export function marketplaceAccountBindingAtivo(status) {
+  const s = status != null ? String(status).trim().toLowerCase() : "";
+  return s !== "removed";
+}
 
 /**
  * @param {string | null | undefined} s
@@ -133,6 +146,57 @@ export async function assertMlBindingAllowedBeforeUpsert(
           "Esta empresa já possui outra conta Mercado Livre conectada. Cada CNPJ pode ter no máximo uma conta por marketplace.",
       };
     }
+  }
+
+  return { ok: true };
+}
+
+/**
+ * Impede vínculo global: mesma conta ML (external_seller_id) em outra empresa/tenant ativa.
+ * Reconnect same user+company → allow (idempotente).
+ * @param {import("@supabase/supabase-js").SupabaseClient} supabase
+ * @param {string} marketplace
+ * @param {string} externalSellerId
+ * @param {string} currentUserId
+ * @param {string} resolvedSellerCompanyId
+ * @returns {Promise<{ ok: true } | { ok: false; code: string; message: string }>}
+ */
+export async function assertMlGlobalAccountNotLinkedElsewhere(
+  supabase,
+  marketplace,
+  externalSellerId,
+  currentUserId,
+  resolvedSellerCompanyId,
+) {
+  const mp = String(marketplace || "").trim();
+  const ext = String(externalSellerId || "").trim();
+  const uid = String(currentUserId || "").trim();
+  const co = String(resolvedSellerCompanyId || "").trim();
+  if (!mp || !ext || !uid || !co) {
+    return { ok: false, code: "ml_global_guard_invalid_input", message: "Parâmetros de vínculo inválidos." };
+  }
+
+  const { data, error } = await supabase
+    .from("marketplace_accounts")
+    .select("id, user_id, seller_company_id, status")
+    .eq("marketplace", mp)
+    .eq("external_seller_id", ext)
+    .limit(20);
+
+  if (error) {
+    return { ok: false, code: "ml_global_guard_query", message: error.message ?? String(error) };
+  }
+
+  const rows = (Array.isArray(data) ? data : []).filter((r) => marketplaceAccountBindingAtivo(r?.status));
+  for (const r of rows) {
+    const rowUser = r?.user_id != null ? String(r.user_id).trim() : "";
+    const rowCo = r?.seller_company_id != null ? String(r.seller_company_id).trim() : "";
+    if (rowUser === uid && rowCo === co) continue;
+    return {
+      ok: false,
+      code: rowUser === uid ? "ml_seller_wrong_company" : "ml_account_linked_elsewhere",
+      message: ML_ACCOUNT_LINKED_ELSEWHERE_MESSAGE,
+    };
   }
 
   return { ok: true };

@@ -14,6 +14,10 @@ import {
   evaluateMlOAuthBackendEnvCoherence,
 } from "./_helpers/oauthConnect.js";
 import { config } from "../../infra/config.js";
+import {
+  ML_OAUTH_CALLBACK_MODULE_REV,
+  ML_OAUTH_PERSISTENCE_MODULE_REV,
+} from "./_helpers/mlOAuthBuildFingerprint.js";
 
 /**
  * @param {import("http").IncomingMessage} req
@@ -90,5 +94,10 @@ export default async function handleMlOAuthConfigProbe(req, res) {
     mlForbiddenClientIdsConfigured: Boolean(
       (process.env.ML_LOCAL_DEV_FORBIDDEN_CLIENT_IDS || "").trim()
     ),
+    buildFingerprint: {
+      ml_oauth_callback_module_rev: ML_OAUTH_CALLBACK_MODULE_REV,
+      ml_oauth_persistence_module_rev: ML_OAUTH_PERSISTENCE_MODULE_REV,
+      vercel_git_commit: process.env.VERCEL_GIT_COMMIT ?? null,
+    },
   });
 }

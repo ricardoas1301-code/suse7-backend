@@ -5,6 +5,7 @@
 import { createClient } from "@supabase/supabase-js";
 import { config } from "../../infra/config.js";
 import { ok, fail, getTraceId } from "../../infra/http.js";
+import { carregarLogoUrlEmpresaPrincipal } from "../../domain/seller/carregarLogoUrlEmpresaPrincipal.js";
 
 /**
  * @param {Record<string, unknown> | null | undefined} row
@@ -35,7 +36,7 @@ export async function handleUserProfileSummary(req, res) {
 
   try {
     if (!config.supabaseUrl?.trim() || !config.supabaseServiceRoleKey?.trim()) {
-      return ok(res, { ok: true, nome_loja: null, photo_url: null, display_name: null });
+      return ok(res, { ok: true, nome_loja: null, photo_url: null, logo_url: null, display_name: null });
     }
 
     const authHeader = req.headers.authorization;
@@ -62,6 +63,13 @@ export async function handleUserProfileSummary(req, res) {
       .eq("id", user.id)
       .maybeSingle();
 
+    let primaryCompanyLogoUrl = null;
+    try {
+      primaryCompanyLogoUrl = await carregarLogoUrlEmpresaPrincipal(supabase, user.id);
+    } catch {
+      primaryCompanyLogoUrl = null;
+    }
+
     if (error) {
       const msg = String(error.message ?? "").toLowerCase();
       if (msg.includes("column") || String(error.code ?? "") === "42703") {
@@ -75,13 +83,14 @@ export async function handleUserProfileSummary(req, res) {
             message: fbErr.message,
             code: fbErr.code,
           });
-          return ok(res, { ok: true, nome_loja: null, photo_url: null, display_name: null });
+          return ok(res, { ok: true, nome_loja: null, photo_url: null, logo_url: null, display_name: null });
         }
         const displayName = resolveDisplayName(fallback);
         return ok(res, {
           ok: true,
           nome_loja: fallback?.nome_loja ?? displayName,
           photo_url: fallback?.photo_url ?? null,
+          logo_url: primaryCompanyLogoUrl,
           display_name: displayName,
         });
       }
@@ -89,7 +98,7 @@ export async function handleUserProfileSummary(req, res) {
         message: error.message,
         code: error.code,
       });
-      return ok(res, { ok: true, nome_loja: null, photo_url: null, display_name: null });
+      return ok(res, { ok: true, nome_loja: null, photo_url: null, logo_url: null, display_name: null });
     }
 
     const displayName = resolveDisplayName(data);
@@ -102,12 +111,13 @@ export async function handleUserProfileSummary(req, res) {
       ok: true,
       nome_loja: nomeLoja,
       photo_url: data?.photo_url ?? null,
+      logo_url: primaryCompanyLogoUrl,
       display_name: displayName,
     });
   } catch (err) {
     console.error("[Suse7][API][user-profile-summary] failed", {
       message: err?.message ?? String(err),
     });
-    return ok(res, { ok: true, nome_loja: null, photo_url: null, display_name: null });
+    return ok(res, { ok: true, nome_loja: null, photo_url: null, logo_url: null, display_name: null });
   }
 }

@@ -25,6 +25,17 @@ import {
   fetchMlTokenProbeForMlSeller,
   syncStatusNeedsAttention,
 } from "../../services/marketplace/marketplaceAccountConnectionHealth.js";
+import { buildMarketplaceIntegrationPresentation } from "../../services/marketplace/marketplaceIntegrationPresentation.js";
+import { resolveMlInitialSyncOperationalPhase } from "../../domain/dashboard/resolveMlInitialSyncOperationalPhase.js";
+import {
+  countMlSyncStepBuckets,
+  resolveMlSellerSyncPresentationState,
+} from "../../services/marketplace/mlSyncPresentationState.js";
+import {
+  historicalBackfillNeedsTerminalization,
+  tryFinalizeEmptyHistoricalBackfillIfProven,
+} from "../../services/marketplace/mlHistoricalEmptyBackfillFinalize.js";
+import { getValidMLToken } from "../ml/_helpers/mlToken.js";
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const STALE_PROGRESS_MS = Math.min(
@@ -254,7 +265,49 @@ export default async function handleMarketplaceAccountSyncStatus(req, res, path)
       return res.status(500).json({ ok: false, error: "Erro ao carregar jobs." });
     }
 
-    const rows = jobRows ?? [];
+    let rows = jobRows ?? [];
+
+    if (
+      historicalBackfillNeedsTerminalization(rows) &&
+      String(account.status || "").toLowerCase() === "active"
+    ) {
+      const extSeller =
+        account.external_seller_id != null && String(account.external_seller_id).trim() !== ""
+          ? String(account.external_seller_id).trim()
+          : "";
+      if (extSeller) {
+        try {
+          const accessToken = await getValidMLToken(user.id, {
+            marketplaceAccountId: accountId,
+            mlUserId: extSeller,
+          });
+          const reconcileResult = await tryFinalizeEmptyHistoricalBackfillIfProven(supabase, {
+            accountId,
+            sellerId: extSeller,
+            accessToken,
+            allJobRows: rows,
+            reason: "sync_status_empty_history_reconcile",
+          });
+          if ((reconcileResult.finalized ?? 0) > 0) {
+            const { data: refreshedRows, error: refreshErr } = await supabase
+              .from("marketplace_account_sync_jobs")
+              .select("*")
+              .eq("marketplace_account_id", accountId)
+              .in("job_type", ML_ALL_ACCOUNT_SYNC_JOB_TYPES)
+              .order("created_at", { ascending: false })
+              .limit(400);
+            if (!refreshErr && Array.isArray(refreshedRows)) {
+              rows = refreshedRows;
+            }
+          }
+        } catch (reconcileErr) {
+          console.warn("[marketplace/sync-status] historical_empty_reconcile_warn", {
+            marketplace_account_id: accountId,
+            message: reconcileErr?.message ?? String(reconcileErr),
+          });
+        }
+      }
+    }
 
     const { checklist, historicalSalesAgg, hotAllDone, hasEngagedInitialSync } = buildMlAccountSyncChecklist(
       account,
@@ -410,21 +463,23 @@ export default async function handleMarketplaceAccountSyncStatus(req, res, path)
       }
     }
 
-    const title =
-      overall === "running"
-        ? "Sincronização em segundo plano"
-        : overall === "done" || overall === "completed_with_errors"
-          ? "Integração Mercado Livre"
-          : overall === "error"
-            ? "Sincronização com pendências"
-            : "Conta Mercado Livre conectada";
-
     const historicalBackfillActive = Boolean(
       (historicalSalesAgg &&
         ["pending", "running"].includes(String(historicalSalesAgg.status || "").toLowerCase())) ||
         (historicalCustomersAgg &&
           ["pending", "running"].includes(String(historicalCustomersAgg.status || "").toLowerCase()))
     );
+
+    const title =
+      overall === "running"
+        ? "Sincronização em segundo plano"
+        : overall === "done" || overall === "completed_with_errors"
+          ? historicalBackfillActive
+            ? "Importação histórica em andamento"
+            : "Integração Mercado Livre"
+          : overall === "error"
+            ? "Sincronização com pendências"
+            : "Conta Mercado Livre conectada";
 
     const mpSlug = String(account.marketplace || ML_MARKETPLACE_SLUG);
     const extForToken =
@@ -459,6 +514,26 @@ export default async function handleMarketplaceAccountSyncStatus(req, res, path)
       tokenProbe,
       activePipelineSet.has(String(accountId))
     );
+
+    let mlInitialSyncPhase = "none";
+    try {
+      const mlSyncPhase = await resolveMlInitialSyncOperationalPhase(supabase, user.id);
+      if (
+        mlSyncPhase.marketplace_account_id != null &&
+        String(mlSyncPhase.marketplace_account_id) === String(accountId)
+      ) {
+        mlInitialSyncPhase = mlSyncPhase.phase;
+      }
+    } catch {
+      mlInitialSyncPhase = "none";
+    }
+
+    const integrationPresentation = buildMarketplaceIntegrationPresentation({
+      connectionPack,
+      mlInitialSyncPhase,
+      syncOverall: overall,
+      authResolved: true,
+    });
 
     const tokenExpMs =
       account?.token_expires_at != null ? Date.parse(String(account.token_expires_at)) : NaN;
@@ -504,33 +579,37 @@ export default async function handleMarketplaceAccountSyncStatus(req, res, path)
       checklist: checklistWithUx,
     });
 
-    const histRunning =
-      (historicalSalesAgg &&
-        ["pending", "running"].includes(String(historicalSalesAgg.status || "").toLowerCase())) ||
-      (historicalCustomersAgg &&
-        ["pending", "running"].includes(String(historicalCustomersAgg.status || "").toLowerCase()));
-
     const description =
       overall === "running"
         ? "Importação em fila no servidor. Você pode fechar esta janela; o status continua nesta página em Integrações."
         : overall === "done"
-          ? histRunning
-            ? [
-                historicalUx?.processing_title || "Importando histórico disponível de vendas…",
-                historicalUx?.historical_total_period_line || null,
-                historicalUx?.current_window_period_line || null,
-                historicalUx?.processing_window_line || null,
-              ]
-                .filter((x) => x != null && String(x).trim() !== "")
-                .join(" ")
-            : typeof historicalUx?.modal_success_summary === "string" && historicalUx.modal_success_summary.trim() !== ""
-              ? String(historicalUx.modal_success_summary).trim()
-              : "Histórico disponível importado com sucesso. O Suse7 passará a armazenar suas vendas futuras de forma permanente."
+          ? historicalBackfillActive
+            ? "Dados recentes prontos. A importação histórica continua em segundo plano."
+            : historicalUx?.empty_history
+              ? "Histórico consultado — nenhum dado adicional encontrado. O Suse7 monitorará novas vendas automaticamente."
+              : typeof historicalUx?.modal_success_summary === "string" && historicalUx.modal_success_summary.trim() !== ""
+                ? String(historicalUx.modal_success_summary).trim()
+                : "Histórico disponível importado com sucesso. O Suse7 passará a armazenar suas vendas futuras de forma permanente."
           : overall === "completed_with_errors"
             ? "Sincronização concluída com alguns avisos — revise as etapas na lista."
             : overall === "error"
               ? "Uma etapa falhou. Você pode tentar de novo ou seguir usando o app enquanto corrigimos."
               : "Conta Mercado Livre conectada com sucesso. Inicie a sincronização quando estiver pronto.";
+
+    const stepCounts = countMlSyncStepBuckets(checklistWithUx);
+    const sync_presentation = resolveMlSellerSyncPresentationState({
+      overall,
+      historicalBackfillActive,
+      historicalSalesAgg,
+      historicalUx,
+      completedCount: stepCounts.completed,
+      pendingCount: stepCounts.pending,
+      errorCount: stepCounts.error,
+      runningCount: stepCounts.running,
+      runningStepLabel: stepCounts.runningStepLabel,
+    });
+
+    const sellerTitle = sync_presentation.seller_headline || title;
 
     return res.status(200).json({
       ok: true,
@@ -554,9 +633,11 @@ export default async function handleMarketplaceAccountSyncStatus(req, res, path)
       background_note,
       stalled_warning,
       pending_queue_warning,
-      title,
+      title: sellerTitle,
       description,
       checklist: checklistWithUx,
+      sync_presentation,
+      step_counts: stepCounts,
       ml_historical_sales_ux: historicalUx,
       ml_initial_recent_days: resolveMlInitialRecentDays(),
       historical_sales_sync:
@@ -566,12 +647,14 @@ export default async function handleMarketplaceAccountSyncStatus(req, res, path)
       historical_backfill_active: historicalBackfillActive,
       connection: {
         health: connectionPack.connection_health,
-        badge_label: connectionPack.connection_badge_label,
-        alert_message: connectionPack.connection_alert_message,
-        show_reconnect: connectionPack.show_reconnect_cta,
-        monitoring_headline: connectionPack.monitoring_headline,
+        badge_label: integrationPresentation.integration_badge_label,
+        alert_message: integrationPresentation.connection_alert_message ?? connectionPack.connection_alert_message,
+        show_reconnect: integrationPresentation.show_reconnect_cta,
+        monitoring_headline: integrationPresentation.monitoring_headline ?? connectionPack.monitoring_headline,
         pipeline_active: connectionPack.pipeline_active,
+        presentation_code: integrationPresentation.sync_presentation_code,
       },
+      ml_initial_sync_phase: mlInitialSyncPhase,
       sales_sync_engine,
       sync_attention_required,
     });

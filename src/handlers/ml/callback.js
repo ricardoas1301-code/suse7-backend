@@ -24,14 +24,18 @@ import { fetchMercadoLibreUserMe } from "./_helpers/mercadoLibreOrdersApi.js";
 import {
   assertMlBindingAllowedBeforeUpsert,
   assertMlDocumentMatchesSellerCompanyCnpj,
+  assertMlGlobalAccountNotLinkedElsewhere,
   extractMlMeTaxDigits,
   fetchSellerCompanyTaxDigits,
 } from "./_helpers/mlOAuthBindingGuards.js";
 import {
+  compensarContaMarketplaceFalhaPersistenciaToken,
   persistMlTokens,
   resolveSellerCompanyIdForMlCallback,
   upsertMercadoLivreMarketplaceAccount,
 } from "./_helpers/mlOAuthConnectPersistence.js";
+import { resolverRedirectOnboardingPosOAuth } from "./_helpers/resolverContextoFluxoMlOAuth.js";
+import { aplicarLatchesPosConexaoMarketplace } from "../../onboarding/services/registrarLatchesPosPrimeiraIntegracao.js";
 import { logMlOAuthBuildFingerprint } from "./_helpers/mlOAuthBuildFingerprint.js";
 import { revokeMercadoLibreAccessToken } from "./_helpers/mlOAuthRevoke.js";
 import { config } from "../../infra/config.js";
@@ -95,6 +99,11 @@ function resolveValidatedFrontendBaseUrl(raw) {
 
 function buildMlIntegrationRedirect(frontendBase, querySuffix) {
   const path = "/perfil/integracoes/mercado-livre";
+  return `${frontendBase}${path}?${querySuffix}`;
+}
+
+function buildMlOnboardingSuccessRedirect(frontendBase, querySuffix) {
+  const path = "/";
   return `${frontendBase}${path}?${querySuffix}`;
 }
 
@@ -200,6 +209,40 @@ function sendMlCallbackIntegrationRedirect(res, frontendBase, querySuffix, meta 
       ml_param: parsedEm.ml,
     });
     sendRedirect(res, emergencyUrl, 302);
+    return;
+  }
+
+  sendRedirect(res, redirectUrl, 302);
+}
+
+/**
+ * Redirect onboarding M6 — Dashboard com query de sucesso.
+ * @param {import("http").ServerResponse} res
+ * @param {string} frontendBase
+ * @param {string} querySuffix
+ * @param {Record<string, unknown>} [meta]
+ */
+function sendMlCallbackOnboardingRedirect(res, frontendBase, querySuffix, meta = {}) {
+  const redirectUrl = buildMlOnboardingSuccessRedirect(frontendBase, querySuffix);
+  const mid =
+    meta.marketplace_account_id != null && String(meta.marketplace_account_id).trim() !== ""
+      ? String(meta.marketplace_account_id).trim()
+      : null;
+
+  console.info("[ml/callback] onboarding_redirect_about_to_send", {
+    reason: meta.reason != null ? String(meta.reason) : "onboarding_oauth_success",
+    redirect_url: redirectUrl,
+    marketplace_account_id: mid,
+  });
+
+  if (!ML_CALLBACK_ACCOUNT_UUID_RE.test(String(mid || "").trim())) {
+    const emergencyQs = new URLSearchParams();
+    emergencyQs.set("ml_error", "missing_marketplace_account_id");
+    emergencyQs.set("ml_error_detail", "callback_guard");
+    sendMlCallbackIntegrationRedirect(res, frontendBase, emergencyQs.toString(), {
+      reason: "missing_marketplace_account_id_emergency",
+      is_success: false,
+    });
     return;
   }
 
@@ -386,10 +429,13 @@ async function handleMLCallback(req, res) {
     const hadExplicitStateSellerCompany =
       sellerCompanyIdFromOAuthState != null && String(sellerCompanyIdFromOAuthState).trim() !== "";
     const flowTypeFromState =
-      oauthCtx?.flow_type === "additional_account" || oauthCtx?.flow_type === "first_account"
+      oauthCtx?.flow_type === "additional_account" ||
+      oauthCtx?.flow_type === "first_account" ||
+      oauthCtx?.flow_type === "onboarding_first_connection"
         ? oauthCtx.flow_type
         : null;
-    const prohibitPrimarySellerFallback = flowTypeFromState === "additional_account" || hadExplicitStateSellerCompany;
+    const prohibitPrimarySellerFallback =
+      flowTypeFromState === "additional_account" || hadExplicitStateSellerCompany;
 
     if (!supabaseUserId) {
       const stateDiag = await diagnoseOAuthStateLookup(
@@ -752,6 +798,35 @@ async function handleMLCallback(req, res) {
       reason: docMatch.reason,
     });
 
+    const globalDup = await assertMlGlobalAccountNotLinkedElsewhere(
+      supabase,
+      ML_MARKETPLACE_SLUG,
+      externalSellerId,
+      supabaseUserId,
+      resolvedSellerCompanyId,
+    );
+    if (!globalDup.ok) {
+      logMlCallbackFailed({
+        errorId,
+        etapa: "ml_global_duplicate_guard",
+        error_code: globalDup.code,
+        error_message: globalDup.message,
+        user_id: supabaseUserId,
+        seller_company_id: resolvedSellerCompanyId,
+        external_seller_id: externalSellerId,
+      });
+      sendMlCallbackIntegrationRedirect(
+        res,
+        frontendBase,
+        new URLSearchParams({
+          ml_error: globalDup.code,
+          ml_error_detail: "global_duplicate",
+        }).toString(),
+        { reason: globalDup.code, is_success: false },
+      );
+      return;
+    }
+
     const bindingCheck = await assertMlBindingAllowedBeforeUpsert(
       supabase,
       supabaseUserId,
@@ -1009,6 +1084,10 @@ async function handleMLCallback(req, res) {
 
     if (!persistResult?.ok) {
       const per = persistResult.error && typeof persistResult.error === "object" ? persistResult.error : {};
+      await compensarContaMarketplaceFalhaPersistenciaToken(supabase, {
+        marketplaceAccountId: accResult.accountId,
+        userId: supabaseUserId,
+      });
       logMlCallbackFailed({
         errorId,
         etapa: "persist_ml_tokens",
@@ -1232,6 +1311,39 @@ async function handleMLCallback(req, res) {
     q.set("jobs_created", "0");
     q.set("ml_awaiting_sync", "1");
 
+    const { data: profileLatchRow } = await supabase
+      .from("profiles")
+      .select("initial_configuration_completed_at")
+      .eq("id", supabaseUserId)
+      .maybeSingle();
+    const profileInitialConfigCompleted =
+      profileLatchRow?.initial_configuration_completed_at != null &&
+      String(profileLatchRow.initial_configuration_completed_at).trim() !== "";
+
+    const useOnboardingRedirect = resolverRedirectOnboardingPosOAuth(
+      {
+        flow_type: flowTypeFromState,
+        onboarding_first_connection: flowTypeFromState === "onboarding_first_connection",
+      },
+      profileInitialConfigCompleted,
+    );
+
+    try {
+      const latchRes = await aplicarLatchesPosConexaoMarketplace(supabase, supabaseUserId, { maxAttempts: 2 });
+      console.info("[ml/callback] onboarding_latches_applied", {
+        errorId,
+        user_id: supabaseUserId,
+        first: latchRes.first?.reason ?? null,
+        completion: latchRes.completion?.reason ?? null,
+      });
+    } catch (latchErr) {
+      console.warn("[ml/callback] onboarding_latches_failed_non_fatal", {
+        errorId,
+        user_id: supabaseUserId,
+        message: latchErr?.message ?? String(latchErr),
+      });
+    }
+
     console.info("[ml/callback] final_redirect_payload", {
       errorId,
       marketplace_account_id: canonicalAccountId,
@@ -1260,6 +1372,17 @@ async function handleMLCallback(req, res) {
       status: "active",
       ml_awaiting_sync: true,
     });
+
+    if (useOnboardingRedirect) {
+      const onboardingQs = new URLSearchParams();
+      onboardingQs.set("ml_onboarding", "connected");
+      onboardingQs.set("marketplace_account_id", canonicalAccountId);
+      sendMlCallbackOnboardingRedirect(res, frontendBase, onboardingQs.toString(), {
+        reason: "onboarding_oauth_success",
+        marketplace_account_id: canonicalAccountId,
+      });
+      return;
+    }
 
     sendMlCallbackIntegrationRedirect(res, frontendBase, q.toString(), {
       reason: "oauth_success",

@@ -71,13 +71,38 @@ async function carregarProfileOnboarding(supabase, userId) {
  * @param {import("@supabase/supabase-js").SupabaseClient} supabase
  * @param {string} userId
  */
+async function carregarContasMarketplaceOnboarding(supabase, userId) {
+  const uid = String(userId || "").trim();
+  if (!uid) return [];
+
+  const selectVariants = [
+    "id, marketplace, status, seller_company_id, external_seller_id, user_id",
+    "id, marketplace, status, seller_company_id, user_id",
+    "id, marketplace, status, user_id",
+  ];
+
+  for (const sel of selectVariants) {
+    const { data, error } = await supabase.from("marketplace_accounts").select(sel).eq("user_id", uid);
+    if (!error) return Array.isArray(data) ? data : [];
+    const msg = String(error.message ?? "").toLowerCase();
+    if (String(error.code ?? "") === "42703" || msg.includes("column")) continue;
+    return [];
+  }
+
+  return [];
+}
+
+/**
+ * @param {import("@supabase/supabase-js").SupabaseClient} supabase
+ * @param {string} userId
+ */
 export async function carregarContextoConfiguracaoInicial(supabase, userId) {
   const uid = String(userId || "").trim();
   if (!uid) {
     return { ok: false, code: "INVALID_USER", profile: null, companies: [], legalAcceptance: null };
   }
 
-  const [profileRes, companiesRes, legalRes] = await Promise.all([
+  const [profileRes, companiesRes, legalRes, marketplaceAccountsRes] = await Promise.all([
     carregarProfileOnboarding(supabase, uid),
     supabase.from("seller_companies").select(COMPANY_ONBOARDING_SELECT).eq("user_id", uid),
     supabase
@@ -88,6 +113,7 @@ export async function carregarContextoConfiguracaoInicial(supabase, userId) {
       .order("accepted_at", { ascending: false })
       .limit(1)
       .maybeSingle(),
+    carregarContasMarketplaceOnboarding(supabase, uid),
   ]);
 
   if (profileRes.error) {
@@ -128,6 +154,7 @@ export async function carregarContextoConfiguracaoInicial(supabase, userId) {
     profile: profileRes.data ?? null,
     companies: companiesRes.data ?? [],
     legalAcceptance: legalRes.data ?? null,
+    marketplaceAccounts: marketplaceAccountsRes ?? [],
     latch_columns_available: profileRes.latch_columns_available === true,
   };
 }
