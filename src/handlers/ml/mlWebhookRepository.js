@@ -155,3 +155,82 @@ export async function saveMlWebhookEvent(payload, opts) {
   timing.db_done_ms = Date.now();
   throw new Error("ML_WEBHOOK_INSERT_UNEXPECTED_EMPTY");
 }
+
+/**
+ * Persistência de auditoria para webhook órfão — status terminal ignored, sem fila operacional.
+ *
+ * @param {unknown} payload
+ * @param {{ ip: string | null; marketplace?: string; reason: string }} opts
+ */
+export async function saveMlWebhookEventIgnored(payload, opts) {
+  const timing = { db_start_ms: Date.now() };
+  const supabase = getSupabaseAdmin();
+  const marketplace = opts.marketplace || "mercado_livre";
+  const meta = extractMlWebhookMeta(payload);
+  const dedupeKey = buildMlWebhookDedupeKey(payload);
+  const reason = String(opts.reason || "ignored_orphan_account");
+
+  const row = {
+    marketplace,
+    topic: meta.topic,
+    resource: meta.resource,
+    user_id: meta.marketplaceUserId,
+    marketplace_user_id: meta.marketplaceUserId,
+    application_id: meta.applicationId,
+    payload,
+    raw_payload: payload,
+    source_ip: opts.ip,
+    dedupe_key: dedupeKey,
+    external_event_id: meta.externalEventId,
+    status: "ignored",
+    marketplace_account_id: null,
+    error_message: reason,
+    processed_at: new Date().toISOString(),
+    completed_at: new Date().toISOString(),
+  };
+
+  const { data: inserted, error } = await supabase
+    .from("ml_webhook_events")
+    .insert(row)
+    .select("id, status")
+    .maybeSingle();
+  timing.dedupe_done_ms = Date.now();
+
+  if (!error && inserted?.id) {
+    timing.db_done_ms = timing.dedupe_done_ms;
+    return {
+      saved: true,
+      duplicate: false,
+      id: String(inserted.id),
+      status: "ignored",
+      topic: meta.topic,
+      resource: meta.resource,
+      user_id: meta.marketplaceUserId,
+      reason,
+      timing,
+    };
+  }
+
+  if (error && String(error.code) === "23505") {
+    const { data: existing } = await supabase
+      .from("ml_webhook_events")
+      .select("id, status")
+      .eq("dedupe_key", dedupeKey)
+      .maybeSingle();
+    timing.db_done_ms = Date.now();
+    return {
+      saved: true,
+      duplicate: true,
+      id: existing?.id != null ? String(existing.id) : null,
+      status: String(existing?.status || "ignored"),
+      topic: meta.topic,
+      resource: meta.resource,
+      user_id: meta.marketplaceUserId,
+      reason,
+      timing,
+    };
+  }
+
+  if (error) throw error;
+  throw new Error("ML_WEBHOOK_IGNORED_INSERT_UNEXPECTED_EMPTY");
+}

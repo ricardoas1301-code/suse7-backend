@@ -167,6 +167,7 @@ export function isMlWebhookTerminalIgnoredError(err) {
     err && typeof err === "object" && "code" in err && err.code != null ? String(err.code) : "";
   return (
     code === "WEBHOOK_ACCOUNT_AMBIGUOUS" ||
+    code === "WEBHOOK_ACCOUNT_CONTEXT_NOT_FOUND" ||
     code === "ML_WEBHOOK_ENTITLEMENT_BLOCKED" ||
     code === "ML_WEBHOOK_MAINTENANCE_BLOCKED" ||
     code === "ML_WEBHOOK_DEFINITIVE_SKIP"

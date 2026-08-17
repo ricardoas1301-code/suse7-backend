@@ -12,6 +12,15 @@ export async function completeSignupBirthOnce(supabase, authUserId) {
   const { data, error } = await rpcCompleteSignupBirthOnce(supabase, authUserId);
 
   if (error) {
+    const code = String(error.code ?? "");
+    if (code === "PGRST202") {
+      return {
+        ok: false,
+        code: "RPC_NOT_AVAILABLE",
+        message: "Conclusão atômica de cadastro indisponível neste ambiente.",
+        details: error,
+      };
+    }
     return {
       ok: false,
       code: "RPC_ERROR",

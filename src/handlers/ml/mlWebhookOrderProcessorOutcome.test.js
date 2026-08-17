@@ -37,6 +37,13 @@ describe("mlWebhookOrderProcessorOutcome — classificação apply", () => {
     assert.equal(r.outcome, "DEFINITIVE_SKIP");
     assert.equal(r.terminal, true);
   });
+
+  it("WEBHOOK_ACCOUNT_CONTEXT_NOT_FOUND é terminal ignored", () => {
+    assert.equal(
+      isMlWebhookTerminalIgnoredError({ code: "WEBHOOK_ACCOUNT_CONTEXT_NOT_FOUND" }),
+      true,
+    );
+  });
 });
 
 function mockSupabaseWithSalesOrder(id) {
@@ -118,9 +125,10 @@ describe("mlWebhookOrderProcessorOutcome — assert canonical", () => {
 });
 
 describe("mlWebhookOrderProcessorOutcome — terminal ignored", () => {
-  it("reconhece entitlement e ambiguous", () => {
+  it("reconhece entitlement, ambiguous e orphan context", () => {
     assert.equal(isMlWebhookTerminalIgnoredError({ code: "ML_WEBHOOK_ENTITLEMENT_BLOCKED" }), true);
     assert.equal(isMlWebhookTerminalIgnoredError({ code: "WEBHOOK_ACCOUNT_AMBIGUOUS" }), true);
+    assert.equal(isMlWebhookTerminalIgnoredError({ code: "WEBHOOK_ACCOUNT_CONTEXT_NOT_FOUND" }), true);
     assert.equal(isMlWebhookTerminalIgnoredError({ code: "ML_WEBHOOK_APPLY_RETRYABLE" }), false);
   });
 });

@@ -1,5 +1,35 @@
 import { asMlWebhookObject } from "./_helpers/mlWebhookPayload.js";
-import { saveMlWebhookEvent } from "./mlWebhookRepository.js";
+import { saveMlWebhookEvent, saveMlWebhookEventIgnored } from "./mlWebhookRepository.js";
+import { createClient } from "@supabase/supabase-js";
+import { config } from "../../infra/config.js";
+
+/**
+ * @returns {import("@supabase/supabase-js").SupabaseClient}
+ */
+function getSupabaseAdmin() {
+  return createClient(config.supabaseUrl, config.supabaseServiceRoleKey, {
+    auth: { autoRefreshToken: false, persistSession: false },
+  });
+}
+
+/**
+ * @param {string | null | undefined} marketplaceUserId
+ */
+async function isOrphanMarketplaceSeller(marketplaceUserId) {
+  const sellerId = marketplaceUserId != null ? String(marketplaceUserId).trim() : "";
+  if (!sellerId || sellerId.toUpperCase() === "TEST") return false;
+
+  const supabase = getSupabaseAdmin();
+  const { count, error } = await supabase
+    .from("marketplace_accounts")
+    .select("id", { count: "exact", head: true })
+    .eq("marketplace", "mercado_livre")
+    .eq("external_seller_id", sellerId)
+    .neq("status", "removed");
+
+  if (error) throw error;
+  return (count ?? 0) === 0;
+}
 
 /**
  * @param {import("http").IncomingMessage} req
@@ -82,7 +112,31 @@ export async function receiveMlWebhook(input) {
     });
   }
 
+  const marketplaceUserId =
+    payloadObj.user_id != null
+      ? String(payloadObj.user_id).trim()
+      : payloadObj.userId != null
+        ? String(payloadObj.userId).trim()
+        : null;
   const ip = extractRequestIp(input.req);
+
+  if (receivedTopic === "orders_v2" && marketplaceUserId) {
+    const orphan = await isOrphanMarketplaceSeller(marketplaceUserId);
+    if (orphan) {
+      console.warn("[ML_WEBHOOK_ORPHAN_ACCOUNT]", {
+        reason: "ignored_orphan_account",
+        topic: receivedTopic,
+        marketplace_user_id: marketplaceUserId,
+        resource: payloadObj.resource != null ? String(payloadObj.resource) : null,
+      });
+      return saveMlWebhookEventIgnored(input.payload, {
+        ip,
+        marketplace: input.marketplace || "mercado_livre",
+        reason: "ignored_orphan_account",
+      });
+    }
+  }
+
   return saveMlWebhookEvent(input.payload, {
     ip,
     marketplace: input.marketplace || "mercado_livre",
