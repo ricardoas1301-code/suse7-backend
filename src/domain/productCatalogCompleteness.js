@@ -55,6 +55,24 @@ export function hasRequiredProductCosts(costPrice, packagingCost, operationalCos
 }
 
 /**
+ * Projeção PostgREST da negação de `hasRequiredProductCosts`.
+ * As comparações são executadas pelo PostgreSQL sobre colunas numeric,
+ * sem conversão para float no runtime Node.
+ *
+ * @returns {string}
+ */
+export function buildMissingRequiredProductCostsPostgrestOrFilter() {
+  return [
+    "cost_price.is.null",
+    "cost_price.lte.0",
+    "packaging_cost.is.null",
+    "packaging_cost.lt.0",
+    "operational_cost.is.null",
+    "operational_cost.lt.0",
+  ].join(",");
+}
+
+/**
  * Resolve próximo catalog_completeness após salvar custos.
  * @param {{ cost_price?: unknown; packaging_cost?: unknown; operational_cost?: unknown }} costs
  * @param {{ catalog_source?: string | null }} ctx

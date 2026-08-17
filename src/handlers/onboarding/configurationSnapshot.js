@@ -37,6 +37,7 @@ export async function handleOnboardingConfigurationSnapshot(req, res) {
         profile: ctx.profile ?? null,
         companies: ctx.companies ?? [],
         legalAcceptance: ctx.legalAcceptance ?? null,
+        marketplaceAccounts: ctx.marketplaceAccounts ?? [],
       });
       return ok(res, { ok: true, ...snapshot, traceId, warning: ctx.code }, 200);
     }
@@ -45,6 +46,7 @@ export async function handleOnboardingConfigurationSnapshot(req, res) {
       profile: ctx.profile,
       companies: ctx.companies,
       legalAcceptance: ctx.legalAcceptance,
+      marketplaceAccounts: ctx.marketplaceAccounts ?? [],
     });
 
     console.info(`${LOG_PREFIX} ok`, {
