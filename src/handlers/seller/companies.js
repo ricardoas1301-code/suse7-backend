@@ -1,5 +1,17 @@
 import { requireAuthUser } from "../ml/_helpers/requireAuthUser.js";
 import { isValidCnpjInput, normalizeCnpjDigits } from "../../domain/taxIdBr/cnpjDigits.js";
+import {
+  buildSellerCompanyWritableFields,
+  isSupabaseMissingColumnError,
+  normalizeSellerCompanyPercentDecimal,
+  resolveAuthenticatedContactEmail,
+  validateSellerCompanyConfigurationOnboardingCreateBody,
+  validateSellerCompanyCreateBody,
+} from "../../domain/seller/sellerCompanyRecord.js";
+import {
+  ensurePrimaryCompanyDefaultRecipient,
+  syncPrimaryCompanyRecipientContactsFromCompany,
+} from "../../domain/notifications/central/recipients/primaryCompanyDefaultRecipientService.js";
 
 function trimStr(v) {
   if (v == null) return "";
@@ -50,6 +62,30 @@ function companyNamesFromProfile(prof) {
   const company_name = loja || nome || nameCol || email || null;
   const trade_name = loja || company_name;
   return { company_name, trade_name };
+}
+
+/**
+ * @param {import("@supabase/supabase-js").SupabaseClient} supabase
+ * @param {string} userId
+ * @param {Record<string, unknown> | null | undefined} companyRow
+ * @param {{ bootstrap?: boolean }} [options]
+ */
+async function maybeEnsureDefaultRecipientForPrimaryCompany(supabase, userId, companyRow, options = {}) {
+  if (!companyRow || typeof companyRow !== "object") return;
+  const isPrimary = companyRow.is_primary === true || companyRow.is_primary === "true";
+  if (!isPrimary) return;
+  try {
+    if (options.bootstrap === false) {
+      await syncPrimaryCompanyRecipientContactsFromCompany(supabase, userId);
+    } else {
+      await ensurePrimaryCompanyDefaultRecipient(supabase, userId);
+    }
+  } catch (err) {
+    console.warn("[Suse7][API][seller-companies] default_recipient_sync_failed", {
+      user_id: userId,
+      message: err?.message,
+    });
+  }
 }
 
 /**
@@ -191,6 +227,8 @@ export default async function handleSellerCompanies(req, res) {
           });
           return res.status(200).json(emptyCompanies());
         }
+        const primaryAfterBootstrap = (data ?? []).find((c) => c.is_primary === true) ?? data?.[0] ?? null;
+        await maybeEnsureDefaultRecipientForPrimaryCompany(supabase, user.id, primaryAfterBootstrap);
       }
       return res.status(200).json({ ok: true, companies: (data ?? []).map(shapeCompany) });
     }
@@ -208,6 +246,18 @@ export default async function handleSellerCompanies(req, res) {
 
     if (req.method === "POST") {
       const body = req.body && typeof req.body === "object" ? req.body : {};
+      const configurationOnboarding = body.configuration_onboarding === true;
+
+      const createValidation = configurationOnboarding
+        ? validateSellerCompanyConfigurationOnboardingCreateBody(body)
+        : validateSellerCompanyCreateBody(body);
+      if (!createValidation.ok) {
+        return res.status(400).json({
+          ok: false,
+          error: createValidation.errors[0] ?? "Dados inválidos para cadastro de empresa.",
+        });
+      }
+
       const companyName = pickCompanyLegalName(body);
       const documentCnpj = pickDocumentCnpj14(body);
       if (!companyName || !documentCnpj) {
@@ -228,6 +278,44 @@ export default async function handleSellerCompanies(req, res) {
         });
       }
 
+      const { count: existingCount, error: countErr } = await supabase
+        .from("seller_companies")
+        .select("id", { count: "exact", head: true })
+        .eq("user_id", user.id);
+
+      const willBePrimary = !countErr && Number(existingCount) === 0 && body.is_primary !== false;
+      const writablePreview = buildSellerCompanyWritableFields(body);
+      /** @type {{ ok: boolean; email?: string; error?: string; code?: string }} */
+      let emailResolution;
+      if (configurationOnboarding || willBePrimary) {
+        emailResolution = resolveAuthenticatedContactEmail(user.email, body.contact_email);
+      } else if (writablePreview.contact_email) {
+        emailResolution = { ok: true, email: String(writablePreview.contact_email) };
+      } else {
+        emailResolution = {
+          ok: false,
+          code: "CONTACT_EMAIL_INVALID",
+          error: "E-mail da empresa é obrigatório.",
+        };
+      }
+
+      if (!emailResolution.ok) {
+        return res.status(400).json({
+          ok: false,
+          error: emailResolution.error,
+          code: emailResolution.code,
+        });
+      }
+
+      if (configurationOnboarding && !countErr && Number(existingCount) > 0) {
+        let { data: existingCompanies } = await loadCompanies(supabase, user.id);
+        const primary =
+          (existingCompanies ?? []).find((row) => row.is_primary === true) ?? existingCompanies?.[0] ?? null;
+        if (primary?.id) {
+          return res.status(200).json({ ok: true, company: primary, idempotent: true });
+        }
+      }
+
       const { data: dupPre } = await supabase
         .from("seller_companies")
         .select("id")
@@ -241,19 +329,18 @@ export default async function handleSellerCompanies(req, res) {
 
       const tradeRaw =
         body.trade_name != null && String(body.trade_name).trim() !== "" ? String(body.trade_name).trim() : null;
+      const writable = buildSellerCompanyWritableFields(body);
       const payload = {
         user_id: user.id,
         company_name: companyName,
         trade_name: tradeRaw ?? companyName,
         document_cnpj: docNorm,
         active: body.active !== false,
+        contact_email: emailResolution.email,
+        ...writable,
       };
 
-      const { count, error: countErr } = await supabase
-        .from("seller_companies")
-        .select("id", { count: "exact", head: true })
-        .eq("user_id", user.id);
-      if (!countErr && Number(count) === 0) {
+      if (!countErr && Number(existingCount) === 0) {
         payload.is_primary = body.is_primary !== false;
       }
 
@@ -283,8 +370,15 @@ export default async function handleSellerCompanies(req, res) {
           code: error?.code,
           details: error?.details,
         });
+        if (isSupabaseMissingColumnError(error)) {
+          return res.status(500).json({
+            ok: false,
+            error: "Não foi possível salvar a empresa. Schema incompleto no ambiente.",
+          });
+        }
         return res.status(500).json({ ok: false, error: "Erro ao criar empresa" });
       }
+      await maybeEnsureDefaultRecipientForPrimaryCompany(supabase, user.id, data);
       return res.status(201).json({ ok: true, company: data });
     }
 
@@ -293,29 +387,54 @@ export default async function handleSellerCompanies(req, res) {
       if (body.name != null && trimStr(body.name) !== "" && !Object.prototype.hasOwnProperty.call(body, "company_name")) {
         body = { ...body, company_name: trimStr(body.name) };
       }
-      const patch = {};
-      const fields = [
-        "company_name",
-        "trade_name",
-        "tax_regime",
-        "default_tax_rate",
-        "operational_cost_rate",
-        "internal_notes",
-        "phone",
-        "whatsapp",
-        "cep",
-        "address_street",
-        "address_number",
-        "address_complement",
-        "address_district",
-        "address_city",
-        "address_state",
-        "logo_url",
-        "active",
-      ];
-      for (const key of fields) {
-        if (Object.prototype.hasOwnProperty.call(body, key)) patch[key] = body[key];
+
+      const { data: existing, error: existingErr } = await supabase
+        .from("seller_companies")
+        .select("id, is_primary, contact_email")
+        .eq("id", companyId)
+        .eq("user_id", user.id)
+        .maybeSingle();
+      if (existingErr) {
+        console.error("[Suse7][API][seller-companies] patch lookup failed", {
+          message: existingErr?.message,
+          code: existingErr?.code,
+        });
+        return res.status(500).json({ ok: false, error: "Erro ao atualizar empresa" });
       }
+      if (!existing?.id) {
+        return res.status(404).json({ ok: false, error: "Empresa não encontrada" });
+      }
+
+      const patch = buildSellerCompanyWritableFields(body);
+      const isPrimaryCompany = existing.is_primary === true || existing.is_primary === "true";
+      if (isPrimaryCompany && Object.prototype.hasOwnProperty.call(body, "contact_email")) {
+        const emailResolution = resolveAuthenticatedContactEmail(user.email, body.contact_email);
+        if (!emailResolution.ok) {
+          return res.status(400).json({
+            ok: false,
+            error: emailResolution.error,
+            code: emailResolution.code,
+          });
+        }
+        patch.contact_email = emailResolution.email;
+      }
+      if (Object.prototype.hasOwnProperty.call(body, "default_tax_rate")) {
+        const tax = normalizeSellerCompanyPercentDecimal(body.default_tax_rate);
+        if (body.default_tax_rate != null && String(body.default_tax_rate).trim() !== "" && tax == null) {
+          return res.status(400).json({ ok: false, error: "Alíquota de imposto inválida." });
+        }
+      }
+      if (Object.prototype.hasOwnProperty.call(body, "operational_cost_rate")) {
+        const op = normalizeSellerCompanyPercentDecimal(body.operational_cost_rate);
+        if (
+          body.operational_cost_rate != null &&
+          String(body.operational_cost_rate).trim() !== "" &&
+          op == null
+        ) {
+          return res.status(400).json({ ok: false, error: "Custo operacional inválido." });
+        }
+      }
+
       const { data, error } = await supabase
         .from("seller_companies")
         .update(patch)
@@ -323,7 +442,27 @@ export default async function handleSellerCompanies(req, res) {
         .eq("user_id", user.id)
         .select("*")
         .maybeSingle();
-      if (error || !data) return res.status(404).json({ ok: false, error: "Empresa não encontrada" });
+
+      if (error) {
+        console.error("[Suse7][API][seller-companies] patch failed", {
+          message: error?.message,
+          code: error?.code,
+          details: error?.details,
+          company_id: companyId,
+          user_id: user.id,
+        });
+        if (isSupabaseMissingColumnError(error)) {
+          return res.status(500).json({
+            ok: false,
+            error: "Não foi possível salvar as alterações. Tente novamente.",
+          });
+        }
+        return res.status(500).json({ ok: false, error: "Erro ao atualizar empresa" });
+      }
+      if (!data) {
+        return res.status(404).json({ ok: false, error: "Empresa não encontrada" });
+      }
+      await maybeEnsureDefaultRecipientForPrimaryCompany(supabase, user.id, data, { bootstrap: false });
       return res.status(200).json({ ok: true, company: data });
     }
 
