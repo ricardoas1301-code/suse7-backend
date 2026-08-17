@@ -143,7 +143,7 @@ export default async function handleMlWebhookRoute(req, res) {
     let tTriggerStartMs = null;
     let tTriggerDoneMs = null;
 
-    if (result.saved) {
+    if (result.saved && String(result.status || "").toLowerCase() !== "ignored") {
       const host = req.headers?.host != null ? String(req.headers.host) : "";
       const protoHeader = req.headers?.["x-forwarded-proto"] != null ? String(req.headers["x-forwarded-proto"]) : "";
       const proto = protoHeader.includes("https") ? "https" : "http";

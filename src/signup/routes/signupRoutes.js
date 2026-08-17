@@ -20,6 +20,7 @@ import {
   rpcAbortPendingBirth,
 } from "../services/signupPendingBirthRepository.js";
 import { completeSignupBirthOnce } from "../services/completeSignupBirthService.js";
+import { bootstrapSocialSessionOnce } from "../services/bootstrapSocialSessionService.js";
 import { checkSignupRateLimit, resolveSignupRateLimitKey } from "../infra/signupRateLimit.js";
 
 function createServiceSupabase() {
@@ -173,6 +174,35 @@ export async function handleSignupRoutes(req, res, path) {
     return ok(res, { ok: true, code: "ABORTED", traceId });
   }
 
+  if (pathNorm === "/api/signup/bootstrap-social-session") {
+    if (method !== "POST") {
+      return fail(res, { code: "METHOD_NOT_ALLOWED", message: "Use POST" }, 405, traceId);
+    }
+
+    const auth = await requireAuthUser(req);
+    if (auth.error) {
+      return fail(res, { code: "UNAUTHORIZED", message: auth.error.message }, auth.error.status, traceId);
+    }
+
+    const bootstrap = await bootstrapSocialSessionOnce(auth.supabase, auth.user);
+    if (!bootstrap.ok) {
+      const status =
+        bootstrap.code === "NOT_SOCIAL_PROVIDER"
+          ? 400
+          : bootstrap.code === "EMAIL_REQUIRED"
+            ? 422
+            : 500;
+      return fail(
+        res,
+        { code: bootstrap.code ?? "BOOTSTRAP_FAILED", message: bootstrap.message ?? "Falha no bootstrap social." },
+        status,
+        traceId,
+      );
+    }
+
+    return ok(res, { ...bootstrap, traceId });
+  }
+
   if (pathNorm === "/api/signup/complete-birth") {
     if (method !== "POST") {
       return fail(res, { code: "METHOD_NOT_ALLOWED", message: "Use POST" }, 405, traceId);
@@ -190,7 +220,9 @@ export async function handleSignupRoutes(req, res, path) {
           ? 403
           : completion.code === "PENDING_NOT_FOUND"
             ? 404
-            : 500;
+            : completion.code === "RPC_NOT_AVAILABLE"
+              ? 503
+              : 500;
       return fail(
         res,
         { code: completion.code ?? "COMPLETION_FAILED", message: completion.message ?? "Falha na conclusão." },
