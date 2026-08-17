@@ -1,0 +1,518 @@
+// ======================================================
+// Dev Center — rotas admin (dashboard, sellers, finance, clientes global)
+// Service role: payloads minimizados (LGPD) — e-mail/telefone mascarados em listas.
+// ======================================================
+
+import { ok, fail } from "../../infra/http.js";
+import { executarOperacaoAssinaturaSellerDevCenter } from "./devCenterSellerSubscriptionOpsService.js";
+import { executarOperacaoFeatureFlagSellerDevCenter } from "./devCenterSellerFeatureFlagOpsService.js";
+import { executarOperacaoIntegracaoSellerDevCenter } from "./devCenterSellerIntegrationOpsService.js";
+import {
+  listarHistoricoAdministrativoSellerDevCenter,
+  listarTimelineOperacionalSellerDevCenter,
+} from "./devCenterToolboxOperationalTimelineService.js";
+import { buildDevCenterSellerDetail, buildDevCenterSellersList } from "./devCenterSellersService.js";
+import {
+  buildDevCenterSubscriptionDetail,
+  buildDevCenterSubscriptionsList,
+} from "./devCenterSubscriptionsService.js";
+import { buildDevCenterFinanceDetail, buildDevCenterFinanceList } from "./devCenterFinanceService.js";
+import { getCentralNotificationEngineSummary } from "../../domain/notifications/central/index.js";
+import { buildDevCenterCustomersGlobalSummary } from "./devCenterCustomersGlobalOpsSummaryService.js";
+import { buildDevCenterCustomersGlobalDetail } from "./devCenterCustomersGlobalDetailService.js";
+import {
+  normalizeCustomersGlobalSearchQuery,
+  isValidGlobalCustomerId,
+  buildFallbackAdminGlobalSummary,
+} from "./devCenterCustomersGlobalInput.js";
+
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+/**
+ * @param {import("http").ServerResponse} res
+ * @param {string} traceId
+ * @param {{
+ *   ok: boolean;
+ *   status?: string;
+ *   operationId?: string;
+ *   subscriptionId?: string | null;
+ *   marketplaceAccountId?: string | null;
+ *   result?: Record<string, unknown>;
+ *   auditId?: string | null;
+ *   error?: { code?: string; message?: string };
+ * }} outcome
+ * @param {{ notFoundCodes?: string[]; badRequestCodes?: string[] }} [opts]
+ */
+function respondToolboxOperation(res, traceId, outcome, opts = {}) {
+  if (!outcome.ok) {
+    const code = outcome.error?.code ?? "OPERATION_FAILED";
+    const notFound = opts.notFoundCodes ?? ["SUBSCRIPTION_NOT_FOUND", "ACCOUNT_NOT_FOUND"];
+    const badRequest = opts.badRequestCodes ?? [
+      "INVALID_ACTION",
+      "INVALID_REASON",
+      "INVALID_FLAG_KEY",
+      "ACCOUNT_ID_REQUIRED",
+      "ALREADY_ENABLED",
+      "ALREADY_DISABLED",
+    ];
+    const statusCode = notFound.includes(code) ? 404 : badRequest.includes(code) ? 400 : 500;
+    fail(
+      res,
+      {
+        code,
+        message: outcome.error?.message ?? "Falha na operação",
+        auditId: outcome.auditId ?? null,
+      },
+      statusCode,
+      traceId,
+    );
+    return true;
+  }
+
+  ok(res, {
+    ok: true,
+    operationId: outcome.operationId,
+    status: outcome.status,
+    subscriptionId: outcome.subscriptionId ?? null,
+    marketplaceAccountId: outcome.marketplaceAccountId ?? null,
+    result: outcome.result,
+    auditId: outcome.auditId,
+  });
+  return true;
+}
+
+/** @param {string | null | undefined} email */
+function maskEmailForApi(email) {
+  const s = String(email ?? "").trim().toLowerCase();
+  if (!s || !s.includes("@")) return null;
+  const [box, dom] = s.split("@");
+  if (!dom) return "•••";
+  const ob = box.length <= 2 ? `${box.slice(0, 1)}•` : `${box.slice(0, 2)}•••${box.slice(-1)}`;
+  return `${ob}@${dom}`;
+}
+
+/** @param {string | null | undefined} phone */
+function maskPhoneForApi(phone) {
+  const d = String(phone ?? "").replace(/\D/g, "");
+  if (d.length <= 4) return d ? "****" : null;
+  return `${d.slice(0, 2)}••••${d.slice(-2)}`;
+}
+
+/** @param {string | null | undefined} doc — dígitos normalizados; lista/detalhe admin (LGPD). */
+function maskDocumentForApi(doc) {
+  const d = String(doc ?? "").replace(/\D/g, "");
+  if (d.length < 4) return d ? "****" : null;
+  return `••••${d.slice(-4)}`;
+}
+
+/**
+ * @param {import("@supabase/supabase-js").SupabaseClient} supabase
+ * @param {string} traceId
+ */
+async function safeCount(supabase, table, traceId) {
+  const { count, error } = await supabase.from(table).select("id", { count: "exact", head: true });
+  if (error) {
+    console.warn("[dev-center-admin] count_failed", { table, message: error.message, traceId });
+    return 0;
+  }
+  return typeof count === "number" && Number.isFinite(count) ? count : 0;
+}
+
+/**
+ * @param {import("http").IncomingMessage} req
+ * @param {import("http").ServerResponse} res
+ * @param {string} path
+ * @param {string} method
+ * @param {import("@supabase/supabase-js").SupabaseClient} supabase
+ * @param {string} traceId
+ * @param {{ user?: { id: string; email?: string | null }; body?: Record<string, unknown> }} [context]
+ * @returns {Promise<boolean>} true se respondeu
+ */
+export async function handleDevCenterAdminRoutes(req, res, path, method, supabase, traceId, context = {}) {
+  try {
+    const subscriptionOp = path.match(/^\/api\/dev-center\/sellers\/([^/]+)\/subscription\/operations$/);
+    if (subscriptionOp && method === "POST" && UUID_RE.test(subscriptionOp[1])) {
+      const sellerId = subscriptionOp[1];
+      const operator = context.user;
+      if (!operator?.id) {
+        fail(res, { code: "UNAUTHORIZED", message: "Operador não identificado" }, 401, traceId);
+        return true;
+      }
+
+      const body = context.body && typeof context.body === "object" ? context.body : {};
+      const actionId = body.actionId != null ? String(body.actionId).trim() : "";
+      const reason = body.reason != null ? String(body.reason).trim() : "";
+
+      const outcome = await executarOperacaoAssinaturaSellerDevCenter(supabase, sellerId, {
+        actionId,
+        reason,
+        operatorUserId: operator.id,
+        operatorEmail: operator.email ?? null,
+        metadata: body.metadata && typeof body.metadata === "object" ? body.metadata : null,
+      });
+      respondToolboxOperation(res, traceId, outcome);
+      return true;
+    }
+
+    const featureFlagOp = path.match(/^\/api\/dev-center\/sellers\/([^/]+)\/feature-flags\/operations$/);
+    if (featureFlagOp && method === "POST" && UUID_RE.test(featureFlagOp[1])) {
+      const sellerId = featureFlagOp[1];
+      const operator = context.user;
+      if (!operator?.id) {
+        fail(res, { code: "UNAUTHORIZED", message: "Operador não identificado" }, 401, traceId);
+        return true;
+      }
+
+      const body = context.body && typeof context.body === "object" ? context.body : {};
+      const outcome = await executarOperacaoFeatureFlagSellerDevCenter(supabase, sellerId, {
+        actionId: body.actionId != null ? String(body.actionId).trim() : "",
+        reason: body.reason != null ? String(body.reason).trim() : "",
+        operatorUserId: operator.id,
+        operatorEmail: operator.email ?? null,
+        metadata: body.metadata && typeof body.metadata === "object" ? body.metadata : null,
+      });
+      respondToolboxOperation(res, traceId, outcome);
+      return true;
+    }
+
+    const integrationOp = path.match(/^\/api\/dev-center\/sellers\/([^/]+)\/integrations\/operations$/);
+    if (integrationOp && method === "POST" && UUID_RE.test(integrationOp[1])) {
+      const sellerId = integrationOp[1];
+      const operator = context.user;
+      if (!operator?.id) {
+        fail(res, { code: "UNAUTHORIZED", message: "Operador não identificado" }, 401, traceId);
+        return true;
+      }
+
+      const body = context.body && typeof context.body === "object" ? context.body : {};
+      const outcome = await executarOperacaoIntegracaoSellerDevCenter(supabase, sellerId, {
+        actionId: body.actionId != null ? String(body.actionId).trim() : "",
+        reason: body.reason != null ? String(body.reason).trim() : "",
+        operatorUserId: operator.id,
+        operatorEmail: operator.email ?? null,
+        metadata: body.metadata && typeof body.metadata === "object" ? body.metadata : null,
+      });
+      respondToolboxOperation(res, traceId, outcome, {
+        notFoundCodes: ["ACCOUNT_NOT_FOUND"],
+        badRequestCodes: ["INVALID_ACTION", "INVALID_REASON", "ACCOUNT_ID_REQUIRED"],
+      });
+      return true;
+    }
+
+    const operationalTimeline = path.match(/^\/api\/dev-center\/sellers\/([^/]+)\/operational-timeline$/);
+    if (operationalTimeline && method === "GET" && UUID_RE.test(operationalTimeline[1])) {
+      const sellerId = operationalTimeline[1];
+      const url = new URL(req.url || "", `http://${req.headers?.host || "localhost"}`);
+      const limit = Number.parseInt(url.searchParams.get("limit") || "50", 10);
+      const timeline = await listarTimelineOperacionalSellerDevCenter(supabase, sellerId, {
+        limit: Number.isFinite(limit) ? limit : 50,
+      });
+      ok(res, { ok: true, timeline });
+      return true;
+    }
+
+    const operationalHistory = path.match(/^\/api\/dev-center\/sellers\/([^/]+)\/operational-history$/);
+    if (operationalHistory && method === "GET" && UUID_RE.test(operationalHistory[1])) {
+      const sellerId = operationalHistory[1];
+      const url = new URL(req.url || "", `http://${req.headers?.host || "localhost"}`);
+      const limit = Number.parseInt(url.searchParams.get("limit") || "50", 10);
+      const history = await listarHistoricoAdministrativoSellerDevCenter(supabase, sellerId, {
+        limit: Number.isFinite(limit) ? limit : 50,
+      });
+      ok(res, { ok: true, history });
+      return true;
+    }
+
+    if (method !== "GET") return false;
+    if (path === "/api/dev-center/dashboard") {
+      const totalSellers = await safeCount(supabase, "profiles", traceId);
+      let integracoesMlAtivas = 0;
+      let distinctSellerUsers = 0;
+      const { data: accRows, error: accErr } = await supabase.from("marketplace_accounts").select("user_id, status");
+      if (!accErr && Array.isArray(accRows)) {
+        const u = new Set();
+        for (const r of accRows) {
+          const st = String(r.status ?? "").toLowerCase();
+          if (st === "active" || st === "connected" || st === "ok" || st === "") {
+            integracoesMlAtivas += 1;
+          }
+          if (r.user_id) u.add(String(r.user_id));
+        }
+        distinctSellerUsers = u.size;
+      }
+
+      const totalClientesGlobal = await safeCount(supabase, "s7_global_customers", traceId);
+      const totalPedidosProcessados = await safeCount(supabase, "sales_orders", traceId);
+
+      const sellersInativos = Math.max(0, totalSellers - distinctSellerUsers);
+      const sellersAtivos = distinctSellerUsers;
+
+      ok(res, {
+        ok: true,
+        summary: {
+          totalSellers,
+          sellersAtivos,
+          sellersInativos,
+          mrr: "—",
+          receitaTotal: "—",
+          totalClientesGlobal,
+          totalPedidosProcessados,
+          integracoesMlAtivas,
+        },
+      });
+      return true;
+    }
+
+    const sellerDetail = path.match(/^\/api\/dev-center\/sellers\/([^/]+)$/);
+    if (sellerDetail && UUID_RE.test(sellerDetail[1])) {
+      const detail = await buildDevCenterSellerDetail(supabase, sellerDetail[1], traceId);
+      if (!detail) {
+        fail(res, { code: "NOT_FOUND", message: "Seller não encontrado" }, 404, traceId);
+        return true;
+      }
+      ok(res, { ok: true, ...detail });
+      return true;
+    }
+
+    if (path === "/api/dev-center/sellers") {
+      try {
+        const sellers = await buildDevCenterSellersList(supabase, traceId);
+        ok(res, { ok: true, sellers });
+      } catch (e) {
+        console.error("[dev-center-admin] sellers", { message: e?.message, traceId });
+        ok(res, { ok: true, sellers: [] });
+      }
+      return true;
+    }
+
+    const subscriptionDetail = path.match(/^\/api\/dev-center\/subscriptions\/([^/]+)$/);
+    if (subscriptionDetail && UUID_RE.test(subscriptionDetail[1])) {
+      const detail = await buildDevCenterSubscriptionDetail(supabase, subscriptionDetail[1], traceId);
+      if (!detail) {
+        fail(res, { code: "NOT_FOUND", message: "Assinatura não encontrada" }, 404, traceId);
+        return true;
+      }
+      ok(res, { ok: true, ...detail });
+      return true;
+    }
+
+    if (path === "/api/dev-center/subscriptions") {
+      try {
+        const payload = await buildDevCenterSubscriptionsList(supabase, traceId);
+        ok(res, { ok: true, ...payload });
+      } catch (e) {
+        console.error("[dev-center-admin] subscriptions", { message: e?.message, traceId });
+        ok(res, {
+          ok: true,
+          summary: {
+            active_subscriptions: 0,
+            grace_period: 0,
+            past_due: 0,
+            trials_active: 0,
+            mrr_brl: "—",
+            arr_brl: "—",
+            churn_risk: 0,
+            renewals_upcoming: 0,
+          },
+          subscriptions: [],
+        });
+      }
+      return true;
+    }
+
+    const financeDetail = path.match(/^\/api\/dev-center\/finance\/([^/]+)$/);
+    if (financeDetail && UUID_RE.test(financeDetail[1])) {
+      const detail = await buildDevCenterFinanceDetail(supabase, financeDetail[1], traceId);
+      if (!detail) {
+        fail(res, { code: "NOT_FOUND", message: "Registro financeiro não encontrado" }, 404, traceId);
+        return true;
+      }
+      ok(res, { ok: true, ...detail });
+      return true;
+    }
+
+    if (path === "/api/dev-center/finance") {
+      try {
+        const payload = await buildDevCenterFinanceList(supabase, traceId);
+        ok(res, { ok: true, ...payload });
+      } catch (e) {
+        console.error("[dev-center-admin] finance", { message: e?.message, traceId });
+        ok(res, {
+          ok: true,
+          summary: {
+            mrr_brl: "—",
+            arr_brl: "—",
+            receita_mes_atual_brl: "—",
+            receita_recebida_brl: "—",
+            receita_pendente_brl: "—",
+            receita_grace_brl: "—",
+            receita_risco_brl: "—",
+            receita_cancelada_count: 0,
+            inadimplencia: 0,
+            churn_risco: 0,
+            sellers_pagantes: 0,
+            trials_ativos: 0,
+            renovacoes_proximas: 0,
+            ticket_medio_brl: "—",
+            assinaturas_ativas: 0,
+          },
+          observability: {},
+          rows: [],
+        });
+      }
+      return true;
+    }
+
+    // Contrato admin global: customers[] + summary (scope admin_global). Ver customersDomainBoundary.
+    // S_4.8.2 — escopo admin_global intencional: s7_global_customers é cross-seller (sem filtro user_id).
+    // Isolamento seller ↔ seller permanece em /api/customers (JWT + marketplace_customers.user_id).
+    if (path === "/api/dev-center/customers-global") {
+      const qRaw = normalizeCustomersGlobalSearchQuery(req.query?.q);
+      const { data: rows, error } = await supabase
+        .from("s7_global_customers")
+        .select(
+          "id, name, document_normalized, email_normalized, phone_normalized, total_orders_global, total_spent_global, total_sellers_related, last_purchase_global"
+        )
+        .order("last_purchase_global", { ascending: false, nullsFirst: false })
+        .limit(500);
+      if (error) {
+        if (String(error.code ?? "") === "42P01" || String(error.message ?? "").includes("does not exist")) {
+          const summary = await buildDevCenterCustomersGlobalSummary(supabase, { listedCount: 0, traceId });
+          ok(res, { ok: true, customers: [], summary });
+          return true;
+        }
+        console.error("[dev-center-admin] customers-global", { message: error.message, traceId });
+        fail(res, { code: "DB_ERROR", message: "Erro ao listar clientes globais" }, 500, traceId);
+        return true;
+      }
+
+      let filtered = rows ?? [];
+      if (qRaw) {
+        filtered = filtered.filter((r) => {
+          const blob = [
+            r.name,
+            r.document_normalized,
+            r.email_normalized,
+            r.phone_normalized,
+          ]
+            .filter(Boolean)
+            .join(" ")
+            .toLowerCase();
+          return blob.includes(qRaw);
+        });
+      }
+      filtered = filtered.slice(0, 200);
+
+      const customers = filtered.map((r) => ({
+        id: String(r.id),
+        name: r.name ?? null,
+        document: r.document_normalized ? maskDocumentForApi(r.document_normalized) : null,
+        email: r.email_normalized ? maskEmailForApi(r.email_normalized) : null,
+        phone: r.phone_normalized ? maskPhoneForApi(r.phone_normalized) : null,
+        city: null,
+        state: null,
+        total_orders_global: r.total_orders_global ?? 0,
+        total_spent_global: r.total_spent_global != null ? String(r.total_spent_global) : "0.00",
+        total_sellers_related: r.total_sellers_related ?? 0,
+        last_purchase_global: r.last_purchase_global ?? null,
+      }));
+
+      // Summary operacional admin global (cross-seller); não mistura escopo seller.
+      let summary;
+      try {
+        summary = await buildDevCenterCustomersGlobalSummary(supabase, {
+          listedCount: customers.length,
+          traceId,
+        });
+      } catch (summaryErr) {
+        console.warn("[dev-center-admin] customers_global_summary_fallback", {
+          message: summaryErr?.message,
+          traceId,
+        });
+        summary = buildFallbackAdminGlobalSummary(customers.length);
+      }
+
+      ok(res, { ok: true, customers, summary });
+      return true;
+    }
+
+    if (path === "/api/dev-center/notifications/engine/summary") {
+      const url = new URL(req.url || "", `http://${req.headers?.host || "localhost"}`);
+      const sellerId = url.searchParams.get("seller_id");
+      const hours = Number.parseInt(url.searchParams.get("hours") || "24", 10);
+      let summary;
+      try {
+        summary = await getCentralNotificationEngineSummary(supabase, {
+          sellerId: sellerId && UUID_RE.test(sellerId) ? sellerId : null,
+          hours: Number.isFinite(hours) ? hours : 24,
+        });
+      } catch (summaryErr) {
+        const msg = summaryErr?.message ?? String(summaryErr);
+        if (msg.includes("s7_notification") || msg.includes("does not exist")) {
+          ok(res, {
+            ok: true,
+            engine: "s7_central_notification_engine",
+            phase: "3.1",
+            migration_pending: true,
+            summary: null,
+          });
+          return true;
+        }
+        throw summaryErr;
+      }
+      ok(res, { ok: true, summary });
+      return true;
+    }
+
+    const detail = path.match(/^\/api\/dev-center\/customers-global\/([^/]+)$/);
+    if (detail) {
+      const id = detail[1];
+      if (!isValidGlobalCustomerId(id)) {
+        fail(res, { code: "NOT_FOUND", message: "Cliente global não encontrado" }, 404, traceId);
+        return true;
+      }
+
+      const { data: row, error } = await supabase
+        .from("s7_global_customers")
+        .select(
+          "id, name, document_normalized, email_normalized, phone_normalized, dedupe_key, total_orders_global, total_spent_global, total_sellers_related, first_purchase_global, last_purchase_global, related_sellers, created_at, updated_at"
+        )
+        .eq("id", id)
+        .maybeSingle();
+
+      if (error) {
+        console.error("[dev-center-admin] customers-global-detail", { message: error.message, traceId });
+        fail(res, { code: "DB_ERROR", message: "Erro ao carregar cliente global" }, 500, traceId);
+        return true;
+      }
+
+      if (!row) {
+        fail(res, { code: "NOT_FOUND", message: "Cliente global não encontrado" }, 404, traceId);
+        return true;
+      }
+
+      try {
+        const payload = buildDevCenterCustomersGlobalDetail(row, {
+          maskDocumentForApi,
+          maskEmailForApi,
+          maskPhoneForApi,
+        });
+        ok(res, { ok: true, ...payload });
+      } catch (buildErr) {
+        console.error("[dev-center-admin] customers-global-detail_build", {
+          message: buildErr?.message,
+          traceId,
+        });
+        fail(res, { code: "INTERNAL", message: "Erro ao montar detalhe do cliente global" }, 500, traceId);
+      }
+      return true;
+    }
+  } catch (e) {
+    console.error("[dev-center-admin] fatal", { message: e?.message, traceId });
+    fail(res, { code: "INTERNAL", message: "Erro interno" }, 500, traceId);
+    return true;
+  }
+
+  return false;
+}

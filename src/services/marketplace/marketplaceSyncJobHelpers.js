@@ -3,6 +3,22 @@
 // ======================================================================
 
 /**
+ * Garante progress_current <= progress_total quando ambos existem (API ML pode divergir do total).
+ * @param {Record<string, unknown>} patch
+ */
+function clampProgressPatch(patch) {
+  const next = { ...patch };
+  if (next.progress_current != null && next.progress_total != null) {
+    const pc = Number(next.progress_current);
+    const pt = Number(next.progress_total);
+    if (Number.isFinite(pc) && Number.isFinite(pt) && pt >= 0 && pc > pt) {
+      next.progress_current = pt;
+    }
+  }
+  return next;
+}
+
+/**
  * @param {import("@supabase/supabase-js").SupabaseClient} supabase
  * @param {Record<string, unknown>} job
  */
@@ -41,10 +57,11 @@ export async function ensureMarketplaceSyncJobRunning(supabase, job) {
  */
 export async function patchMarketplaceSyncJob(supabase, jobId, patch) {
   const nowIso = new Date().toISOString();
+  const safe = clampProgressPatch(patch);
   const { error } = await supabase
     .from("marketplace_account_sync_jobs")
     .update({
-      ...patch,
+      ...safe,
       updated_at: nowIso,
     })
     .eq("id", jobId);
@@ -59,6 +76,7 @@ export async function patchMarketplaceSyncJob(supabase, jobId, patch) {
  */
 export async function completeMarketplaceSyncJob(supabase, jobId, patch) {
   const nowIso = new Date().toISOString();
+  const safe = clampProgressPatch(patch);
   const { error } = await supabase
     .from("marketplace_account_sync_jobs")
     .update({
@@ -66,7 +84,7 @@ export async function completeMarketplaceSyncJob(supabase, jobId, patch) {
       finished_at: nowIso,
       updated_at: nowIso,
       error_message: null,
-      ...patch,
+      ...safe,
     })
     .eq("id", jobId);
 

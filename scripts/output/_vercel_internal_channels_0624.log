@@ -1,0 +1,383 @@
+﻿node.exe : Retrieving projectÔÇª
+No C:\nvm4w\nodejs\vercel.ps1:16 caractere:5
++     & "$basedir/node$exe"  "$basedir/node_modules/vercel/dist/vc.js"  ...
++     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (Retrieving projectÔÇª:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+Resolving deployment "suse7-backend-dev.vercel.app"
+Streaming logs for deployment dpl_E2pYK47aP14Ku3EAFYCp4hTSCbSP starting from 06:25:53.11
+
+waiting for new logs...
+06:26:05.64  Ôä╣´©Å  POST  ---  suse7-backend-dev.vercel.app  ãÆ  /api/jobs/daily-sales-summary-automation
+-----------------------------------------------------------------------------------------------------
+[S7 API Router] resolved path {
+  path: '/api/jobs/daily-sales-summary-automation',
+  pathNorm: '/api/jobs/daily-sales-summary-automation',
+  rawUrl: '/api/jobs/daily-sales-summary-automation?__path=jobs%2Fdaily-sales-summary-automation&path=jobs%2Fdaily-sale
+s-summary-automation',
+  method: 'POST',
+  router_version: 'ml-webhook-job-top-route-v1'
+}
+
+waiting for new logs...
+06:26:05.77  Ôä╣´©Å  POST  ---  suse7-backend-dev.vercel.app  ãÆ  /api/jobs/daily-sales-summary-automation
+-----------------------------------------------------------------------------------------------------
+[S7_NOTIFICATION]_DAILY_SALES_SUMMARY_MOTOR_RULES { active_rules: 2, scanning: 2 }
+
+waiting for new logs...
+06:26:05.77  Ôä╣´©Å  POST  ---  suse7-backend-dev.vercel.app  ãÆ  /api/jobs/daily-sales-summary-automation
+-----------------------------------------------------------------------------------------------------
+[S7_NOTIFICATION]_DAILY_SALES_SUMMARY_DUE_SLOTS {
+  seller_id: 'c8a62ec6-cfbe-4ad9-98ea-49fadebeda50',
+  lower_bound_utc: '2026-06-20T08:05:01.000Z',
+  due_slots: [],
+  slot_probe_reason: null
+}
+
+waiting for new logs...
+06:26:18.46  Ôä╣´©Å  POST  ---  suse7-backend-dev.vercel.app  ãÆ  /api/ml/webhook
+----------------------------------------------------------------------------
+[ml/webhook] route_matched {
+  pathNorm: '/api/ml/webhook',
+  pathResolved: '/api/ml/webhook',
+  rawUrl: '/api/ml/webhook?__path=ml%2Fwebhook&path=ml%2Fwebhook',
+  method: 'POST'
+}
+
+waiting for new logs...
+06:26:18.97  Ôä╣´©Å  POST  ---  suse7-backend-dev.vercel.app  ãÆ  /api/ml/webhook
+----------------------------------------------------------------------------
+[ML_WEBHOOK_RECEIVED] {
+  topic: 'price_suggestion',
+  resource: '/marketplace/benchmarks/items/MLB6410437600/details',
+  user_id: '2350765542',
+  timestamp: '2026-06-20T09:26:18.976Z'
+}
+
+waiting for new logs...
+06:26:20.89  Ôä╣´©Å  POST  ---  suse7-backend-dev.vercel.app  ãÆ  /api/jobs/marketplace-account-sync
+-----------------------------------------------------------------------------------------------
+[marketplace-account-sync-job] CHECKPOINT_1 {
+  checkpoint: 1,
+  vercel_env: 'production',
+  node_env: 'production',
+  supabase_host: 'ujznkyvgqhxagemdgmor.supabase.co',
+  job_secret_configured: true,
+  dev_job_secret_configured: false,
+  stage: 'handler_entry',
+  method: 'POST'
+}
+
+waiting for new logs...
+06:26:21.01  Ôä╣´©Å  POST  ---  suse7-backend-dev.vercel.app  ãÆ  /api/jobs/marketplace-account-sync
+-----------------------------------------------------------------------------------------------
+[ML_ONBOARDING_SYNC_WORKER_QUERY] {
+  table: 'marketplace_account_sync_jobs',
+  status_filter: [ 'pending', 'running' ],
+  marketplace_filter: 'mercado_livre',
+  order_by: 'created_at asc',
+  limit: 400
+}
+
+waiting for new logs...
+06:26:21.19  Ôä╣´©Å  POST  ---  suse7-backend-dev.vercel.app  ãÆ  /api/jobs/marketplace-account-sync
+-----------------------------------------------------------------------------------------------
+[ML_ONBOARDING_SYNC_WORKER_ENTRY] {
+  wave: 0,
+  pending_pool_total: 45,
+  running_pool_total: 0,
+  counts_by_type: {
+    ml_initial_listings_current: { pending: 3, running: 0, done: 0, error: 0, other: 0, total: 3 },
+    ml_initial_fees: { pending: 4, running: 0, done: 0, error: 0, other: 0, total: 4 },
+    ml_enable_webhook_monitoring: { pending: 4, running: 0, done: 0, error: 0, other: 0, total: 4 },
+    ml_initial_products: { pending: 4, running: 0, done: 0, error: 0, other: 0, total: 4 },
+    ml_initial_customers_recent: { pending: 4, running: 0, done: 0, error: 0, other: 0, total: 4 },
+    ml_historical_sales_backfill: { pending: 26, running: 0, done: 0, error: 0, other: 0, total: 26 }
+  },
+  marketplace_account_ids: [
+    '9d1fc827-b7a2-4241-9adc-4040141efb07',
+    '234b633b-4726-429c-8ba5-45ac32c419ed',
+    '6d6a8486-5152-4d2d-9859-12917fae9f20',
+    'be36ef3e-cd3b-4b94-b071-4eb583ee4fce'
+  ]
+}
+
+waiting for new logs...
+06:26:21.73  Ôä╣´©Å  POST  ---  suse7-backend-dev.vercel.app  ãÆ  /api/jobs/marketplace-account-sync
+-----------------------------------------------------------------------------------------------
+[sales-sync] accounts_skipped {
+  wave: 0,
+  marketplace_account_id: '9d1fc827-b7a2-4241-9adc-4040141efb07',
+  job_id: '5efbfd3c-5f6a-4b84-947f-fe7847acd8e1',
+  job_type: 'ml_initial_customers_recent',
+  job_status: 'pending',
+  skip_reason: 'blocked_until_ml_sales_hot_done',
+  active_chunks_pending_running: 31
+}
+
+waiting for new logs...
+06:26:21.73  Ôä╣´©Å  POST  ---  suse7-backend-dev.vercel.app  ãÆ  /api/jobs/marketplace-account-sync
+-----------------------------------------------------------------------------------------------
+[sales-sync] accounts_skipped {
+  wave: 0,
+  marketplace_account_id: '9d1fc827-b7a2-4241-9adc-4040141efb07',
+  job_id: 'ed046801-7c5a-4484-9bf2-159fd6359e9b',
+  job_type: 'ml_historical_sales_backfill',
+  job_status: 'pending',
+  skip_reason: 'blocked_until_ml_sales_hot_done',
+  active_chunks_pending_running: 31
+}
+
+waiting for new logs...
+06:26:21.73  Ôä╣´©Å  POST  ---  suse7-backend-dev.vercel.app  ãÆ  /api/jobs/marketplace-account-sync
+-----------------------------------------------------------------------------------------------
+[sales-sync] accounts_skipped {
+  wave: 0,
+  marketplace_account_id: '9d1fc827-b7a2-4241-9adc-4040141efb07',
+  job_id: 'c1c06de4-355c-452a-bab7-6dbc605c8d91',
+  job_type: 'ml_historical_sales_backfill',
+  job_status: 'pending',
+  skip_reason: 'blocked_until_ml_sales_hot_done',
+  active_chunks_pending_running: 31
+}
+
+waiting for new logs...
+06:26:22.49  Ôä╣´©Å  POST  ---  suse7-backend-dev.vercel.app  ãÆ  /api/jobs/marketplace-account-sync
+-----------------------------------------------------------------------------------------------
+[sales-sync] incremental_poll_account_eval {
+  marketplace_account_id: '234b633b-4726-429c-8ba5-45ac32c419ed',
+  user_id: 'c8a62ec6-cfbe-4ad9-98ea-49fadebeda50',
+  connection_health: 'connected',
+  sales_auto_sync_effective: true,
+  ml_token_expires_at: '2026-06-20T12:01:01.568+00:00',
+  ml_token_present: true,
+  ml_has_refresh: true,
+  account_token_expires_at: '2026-06-20T11:32:31.814+00:00',
+  active_chunks_pending_running: 4,
+  pipeline_active: true
+}
+
+waiting for new logs...
+06:26:22.60  ÔÜá´©Å  POST  ---  suse7-backend-dev.vercel.app  ãÆ  /api/jobs/marketplace-account-sync
+-----------------------------------------------------------------------------------------------
+[ML_AUTH] token_pick_ambiguous_multi_accounts {
+  user_id: 'c8a62ec6-cfbe-4ad9-98ea-49fadebeda50',
+  ml_tokens_rows: 3,
+  hint: 'Passe marketplaceAccountId ou mlUserId em getValidMLToken.'
+}
+
+waiting for new logs...
+06:26:22.72  Ôä╣´©Å  POST  ---  suse7-backend-dev.vercel.app  ãÆ  /api/jobs/marketplace-account-sync
+-----------------------------------------------------------------------------------------------
+[ML_AUTH] token_status: valid {
+  user_id: 'c8a62ec6-cfbe-4ad9-98ea-49fadebeda50',
+  ml_user_id: '2649629037',
+  marketplace_account_id: null,
+  expires_at: '2026-06-20T12:01:01.568+00:00'
+}
+
+waiting for new logs...
+06:26:22.76  Ôä╣´©Å  POST  ---  suse7-backend-dev.vercel.app  ãÆ  /api/jobs/marketplace-account-sync
+-----------------------------------------------------------------------------------------------
+[sales-sync] fetch_orders_start {
+  phase: 'incremental_poll',
+  marketplace: 'mercado_livre',
+  marketplace_account_id: '234b633b-4726-429c-8ba5-45ac32c419ed',
+  seller_company_id: '7d81e056-c2ac-4945-ad2e-74b0cd780464',
+  user_id: 'c8a62ec6-cfbe-4ad9-98ea-49fadebeda50',
+  external_seller_id: '2649629037',
+  window_start: '2026-06-20T03:26:21.735Z',
+  window_end: '2026-06-20T09:26:21.735Z'
+}
+
+waiting for new logs...
+06:26:22.76  Ôä╣´©Å  POST  ---  suse7-backend-dev.vercel.app  ãÆ  /api/jobs/marketplace-account-sync
+-----------------------------------------------------------------------------------------------
+[ml/orders] request {
+  path: 'https://api.mercadolibre.com/orders/search',
+  offset: 0,
+  limit: 50,
+  sort: 'date_asc',
+  date_from: '2026-06-20T03:26:21.735Z',
+  date_to: '2026-06-20T09:26:21.735Z'
+}
+
+waiting for new logs...
+06:26:22.80  Ôä╣´©Å  POST  ---  suse7-backend-dev.vercel.app  ãÆ  /api/jobs/marketplace-account-sync
+-----------------------------------------------------------------------------------------------
+[ml/orders] total_results_hint=0
+
+waiting for new logs...
+06:26:22.90  ÔÜá´©Å  POST  ---  suse7-backend-dev.vercel.app  ãÆ  /api/jobs/marketplace-account-sync
+-----------------------------------------------------------------------------------------------
+[ML_AUTH] token_pick_ambiguous_multi_accounts {
+  user_id: 'c8a62ec6-cfbe-4ad9-98ea-49fadebeda50',
+  ml_tokens_rows: 3,
+  hint: 'Passe marketplaceAccountId ou mlUserId em getValidMLToken.'
+}
+
+waiting for new logs...
+06:26:23.01  Ôä╣´©Å  POST  ---  suse7-backend-dev.vercel.app  ãÆ  /api/jobs/marketplace-account-sync
+-----------------------------------------------------------------------------------------------
+[ML_AUTH] token_status: valid {
+  user_id: 'c8a62ec6-cfbe-4ad9-98ea-49fadebeda50',
+  ml_user_id: '2649629037',
+  marketplace_account_id: null,
+  expires_at: '2026-06-20T12:01:01.568+00:00'
+}
+
+waiting for new logs...
+06:26:23.04  Ôä╣´©Å  POST  ---  suse7-backend-dev.vercel.app  ãÆ  /api/jobs/marketplace-account-sync
+-----------------------------------------------------------------------------------------------
+[sales-sync] fetch_orders_start {
+  phase: 'incremental_poll',
+  marketplace: 'mercado_livre',
+  marketplace_account_id: '9d1fc827-b7a2-4241-9adc-4040141efb07',
+  seller_company_id: '295426f7-8ee6-4ab8-a17d-9a3310db2c73',
+  user_id: 'c8a62ec6-cfbe-4ad9-98ea-49fadebeda50',
+  external_seller_id: '2649629037',
+  window_start: '2026-06-20T03:26:21.735Z',
+  window_end: '2026-06-20T09:26:21.735Z'
+}
+
+waiting for new logs...
+06:26:23.07  Ôä╣´©Å  POST  ---  suse7-backend-dev.vercel.app  ãÆ  /api/jobs/marketplace-account-sync
+-----------------------------------------------------------------------------------------------
+[sales-sync] fetch_orders_ok {
+  phase: 'incremental_poll',
+  marketplace_account_id: '9d1fc827-b7a2-4241-9adc-4040141efb07',
+  offset: 0,
+  batch_count: 0,
+  duration_ms: 33
+}
+
+waiting for new logs...
+06:26:23.31  Ôä╣´©Å  POST  ---  suse7-backend-dev.vercel.app  ãÆ  /api/jobs/marketplace-account-sync
+-----------------------------------------------------------------------------------------------
+[ML_AUTH] token_status: valid {
+  user_id: '7f351439-ea13-44de-8a9c-a2413713f6e4',
+  ml_user_id: '677620487',
+  marketplace_account_id: null,
+  expires_at: '2026-06-20T11:32:33.216+00:00'
+}
+
+waiting for new logs...
+06:26:23.34  Ôä╣´©Å  POST  ---  suse7-backend-dev.vercel.app  ãÆ  /api/jobs/marketplace-account-sync
+-----------------------------------------------------------------------------------------------
+[sales-sync] fetch_orders_start {
+  phase: 'incremental_poll',
+  marketplace: 'mercado_livre',
+  marketplace_account_id: '6d6a8486-5152-4d2d-9859-12917fae9f20',
+  seller_company_id: '002130e4-e1f1-4265-b5fe-f47dd4599f17',
+  user_id: '7f351439-ea13-44de-8a9c-a2413713f6e4',
+  external_seller_id: '677620487',
+  window_start: '2026-06-20T03:26:21.735Z',
+  window_end: '2026-06-20T09:26:21.735Z'
+}
+
+waiting for new logs...
+06:26:23.37  Ôä╣´©Å  POST  ---  suse7-backend-dev.vercel.app  ãÆ  /api/jobs/marketplace-account-sync
+-----------------------------------------------------------------------------------------------
+[sales-sync] fetch_orders_ok {
+  phase: 'incremental_poll',
+  marketplace_account_id: '6d6a8486-5152-4d2d-9859-12917fae9f20',
+  offset: 0,
+  batch_count: 1,
+  duration_ms: 30
+}
+
+waiting for new logs...
+06:26:23.55  Ôä╣´©Å  POST  ---  suse7-backend-dev.vercel.app  ãÆ  /api/jobs/marketplace-account-sync
+-----------------------------------------------------------------------------------------------
+[S7][ml-sales-sync-order-step] {
+  syncRunId: 'incremental:6d6a8486-5152-4d2d-9859-12917fae9f20',
+  marketplaceAccountId: '6d6a8486-5152-4d2d-9859-12917fae9f20',
+  sellerCompanyId: '002130e4-e1f1-4265-b5fe-f47dd4599f17',
+  externalOrderId: '2000017028346140',
+  index: null,
+  total: null,
+  step: 'enrich buyer thumbnail'
+}
+
+waiting for new logs...
+06:26:23.58  Ôä╣´©Å  POST  ---  suse7-backend-dev.vercel.app  ãÆ  /api/jobs/marketplace-account-sync
+-----------------------------------------------------------------------------------------------
+[S7][ml-sales-sync-order-step] {
+  syncRunId: 'incremental:6d6a8486-5152-4d2d-9859-12917fae9f20',
+  marketplaceAccountId: '6d6a8486-5152-4d2d-9859-12917fae9f20',
+  sellerCompanyId: '002130e4-e1f1-4265-b5fe-f47dd4599f17',
+  externalOrderId: '2000017028346140',
+  index: null,
+  total: null,
+  step: 'persist order'
+}
+
+waiting for new logs...
+06:26:23.58  Ôä╣´©Å  POST  ---  suse7-backend-dev.vercel.app  ãÆ  /api/jobs/marketplace-account-sync
+-----------------------------------------------------------------------------------------------
+[S7][ml-sales-sync-order-step] {
+  syncRunId: 'incremental:6d6a8486-5152-4d2d-9859-12917fae9f20',
+  marketplaceAccountId: '6d6a8486-5152-4d2d-9859-12917fae9f20',
+  sellerCompanyId: '002130e4-e1f1-4265-b5fe-f47dd4599f17',
+  externalOrderId: '2000017028346140',
+  index: null,
+  total: null,
+  step: 'prefetch order'
+}
+
+waiting for new logs...
+06:26:23.86  Ôä╣´©Å  POST  ---  suse7-backend-dev.vercel.app  ãÆ  /api/jobs/marketplace-account-sync
+-----------------------------------------------------------------------------------------------
+[S7][ml-sales-sync-order-step] {
+  syncRunId: 'incremental:6d6a8486-5152-4d2d-9859-12917fae9f20',
+  marketplaceAccountId: '6d6a8486-5152-4d2d-9859-12917fae9f20',
+  sellerCompanyId: '002130e4-e1f1-4265-b5fe-f47dd4599f17',
+  externalOrderId: '2000017028346140',
+  index: null,
+  total: null,
+  step: 'persist order'
+}
+
+waiting for new logs...
+06:26:24.08  Ôä╣´©Å  POST  ---  suse7-backend-dev.vercel.app  ãÆ  /api/jobs/marketplace-account-sync
+-----------------------------------------------------------------------------------------------
+[S7][ml-sales-sync-order-step] {
+  syncRunId: 'incremental:6d6a8486-5152-4d2d-9859-12917fae9f20',
+  marketplaceAccountId: '6d6a8486-5152-4d2d-9859-12917fae9f20',
+  sellerCompanyId: '002130e4-e1f1-4265-b5fe-f47dd4599f17',
+  externalOrderId: '2000017028346140',
+  index: null,
+  total: null,
+  step: 'persist items'
+}
+
+waiting for new logs...
+06:26:24.42  Ôä╣´©Å  POST  ---  suse7-backend-dev.vercel.app  ãÆ  /api/jobs/marketplace-account-sync
+-----------------------------------------------------------------------------------------------
+[S7][ml-sales-sync-order-step] {
+  syncRunId: 'incremental:6d6a8486-5152-4d2d-9859-12917fae9f20',
+  marketplaceAccountId: '6d6a8486-5152-4d2d-9859-12917fae9f20',
+  sellerCompanyId: '002130e4-e1f1-4265-b5fe-f47dd4599f17',
+  externalOrderId: '2000017028346140',
+  index: null,
+  total: null,
+  step: 'snapshot'
+}
+
+waiting for new logs...
+06:26:24.58  Ôä╣´©Å  POST  ---  suse7-backend-dev.vercel.app  ãÆ  /api/jobs/marketplace-account-sync
+-----------------------------------------------------------------------------------------------
+[S7][ml-sales-sync-order-step] {
+  syncRunId: 'incremental:6d6a8486-5152-4d2d-9859-12917fae9f20',
+  marketplaceAccountId: '6d6a8486-5152-4d2d-9859-12917fae9f20',
+  sellerCompanyId: '002130e4-e1f1-4265-b5fe-f47dd4599f17',
+  externalOrderId: '2000017028346140',
+  index: null,
+  total: null,
+  step: 'global_customer'
+}
+
+waiting for new logs...
+WARN! Command automatically interrupted after 5 minutes.
+

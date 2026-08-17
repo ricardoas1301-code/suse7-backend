@@ -15,11 +15,13 @@ import {
   searchSellerOrdersPage,
   fetchOrderById,
   nextOrdersSearchOffset,
+  resolveMlOrdersSearchSort,
 } from "./_helpers/mercadoLibreOrdersApi.js";
 import {
-  persistMercadoLibreOrder,
   rebuildListingSalesMetricsForUser,
 } from "./_helpers/mlSalesPersist.js";
+import { enrichMlOrderBuyerThumbnailIfNeeded } from "../../modules/marketplaces/mercado-livre/sales/mlSalesSyncService.js";
+import { applyMlOrderDetailToMarketplaceSales } from "../../modules/marketplaces/mercado-livre/sales/mlSalesSyncService.js";
 import { createListingSnapshotsForUserMarketplace } from "./_helpers/listingSnapshots.js";
 
 /** Máximo de pedidos por execução de POST /api/ml/sync-sales (teto e default). */
@@ -33,12 +35,6 @@ const MAX_ORDERS = Math.min(
 const BATCH_CONCURRENCY = Math.min(
   10,
   Math.max(1, parseInt(process.env.ML_SYNC_SALES_BATCH_CONCURRENCY || "4", 10) || 4)
-);
-
-/** Amostra de log por pedido (unit/gross/net). Defina ML_SALES_DEBUG_SAMPLE=5 no ambiente; default 0. */
-const PRICING_DEBUG_ORDERS = Math.min(
-  5,
-  Math.max(0, parseInt(process.env.ML_SALES_DEBUG_SAMPLE || "0", 10) || 0)
 );
 
 export default async function handleMlSalesSync(req, res) {
@@ -58,40 +54,90 @@ export default async function handleMlSalesSync(req, res) {
 
   try {
     // ------------------------------
-    // Seller id (OAuth)
+    // Conta + token (multi-conta: preferir marketplace_account_id no body)
     // ------------------------------
-    const { data: tokRow, error: tokErr } = await supabase
-      .from("ml_tokens")
-      .select("ml_user_id")
-      .eq("user_id", userId)
-      .eq("marketplace", ML_MARKETPLACE_SLUG)
-      .maybeSingle();
+    const body = req.body && typeof req.body === "object" ? req.body : {};
+    const requestedAccountId =
+      body.marketplace_account_id != null && String(body.marketplace_account_id).trim() !== ""
+        ? String(body.marketplace_account_id).trim()
+        : null;
 
-    if (tokErr || !tokRow?.ml_user_id) {
-      console.error(logPrefix, "no_ml_tokens", { tokErr, userId });
-      return res.status(400).json({
-        ok: false,
-        error:
-          "Conta Mercado Livre não conectada. Conclua o OAuth em Perfil → Integrações antes de sincronizar vendas.",
-      });
+    /** @type {{ id?: string; external_seller_id?: string | null; seller_company_id?: string | null } | null} */
+    let accountRow = null;
+
+    if (requestedAccountId) {
+      const { data: acc, error: accErr } = await supabase
+        .from("marketplace_accounts")
+        .select("id, external_seller_id, seller_company_id")
+        .eq("user_id", userId)
+        .eq("marketplace", ML_MARKETPLACE_SLUG)
+        .eq("id", requestedAccountId)
+        .maybeSingle();
+      if (accErr || !acc?.id) {
+        console.error(logPrefix, "invalid_marketplace_account_id", { userId, requestedAccountId, accErr });
+        return res.status(400).json({
+          ok: false,
+          error: "marketplace_account_id inválido ou não pertence ao usuário.",
+        });
+      }
+      accountRow = acc;
+    } else {
+      const { data: tokRows, error: tokErr } = await supabase
+        .from("ml_tokens")
+        .select("ml_user_id")
+        .eq("user_id", userId)
+        .eq("marketplace", ML_MARKETPLACE_SLUG)
+        .order("updated_at", { ascending: false })
+        .limit(1);
+      const tokRow = Array.isArray(tokRows) ? tokRows[0] : null;
+      if (tokErr || !tokRow?.ml_user_id) {
+        console.error(logPrefix, "no_ml_tokens", { tokErr, userId });
+        return res.status(400).json({
+          ok: false,
+          error:
+            "Conta Mercado Livre não conectada. Conclua o OAuth em Perfil → Integrações. Se você tem várias contas ML, envie marketplace_account_id no corpo da requisição.",
+        });
+      }
+      const extFromTok = String(tokRow.ml_user_id).trim();
+      const { data: acc, error: accErr2 } = await supabase
+        .from("marketplace_accounts")
+        .select("id, external_seller_id, seller_company_id")
+        .eq("user_id", userId)
+        .eq("marketplace", ML_MARKETPLACE_SLUG)
+        .eq("external_seller_id", extFromTok)
+        .maybeSingle();
+      if (accErr2 || !acc?.id) {
+        console.error(logPrefix, "no_marketplace_account_for_token", { userId, extFromTok, accErr2 });
+        return res.status(400).json({
+          ok: false,
+          error:
+            "Token ML encontrado, mas não há marketplace_accounts correspondente. Reconecte em Integrações ou informe marketplace_account_id.",
+        });
+      }
+      accountRow = acc;
     }
+
+    const marketplaceAccountId = accountRow?.id ? String(accountRow.id) : null;
+    const sellerCompanyId = accountRow?.seller_company_id ? String(accountRow.seller_company_id) : null;
+    const mlUserIdFromDb =
+      accountRow?.external_seller_id != null && String(accountRow.external_seller_id).trim() !== ""
+        ? String(accountRow.external_seller_id).trim()
+        : "";
 
     let accessToken;
     try {
-      accessToken = await getValidMLToken(userId);
+      accessToken = await getValidMLToken(userId, { marketplaceAccountId: marketplaceAccountId ?? undefined });
     } catch (e) {
-      console.error(logPrefix, "token_error", { message: e?.message, userId });
+      console.error(logPrefix, "token_error", { message: e?.message, userId, marketplace_account_id: marketplaceAccountId });
       return res.status(401).json({
         ok: false,
         error: "Não foi possível obter token válido do Mercado Livre. Reconecte a integração.",
       });
     }
 
-    const mlUserIdFromDb = String(tokRow.ml_user_id).trim();
-
     let sellerId = mlUserIdFromDb;
     try {
-      const me = await fetchMercadoLibreUserMe(accessToken);
+      const me = await fetchMercadoLibreUserMe(accessToken, { marketplaceAccountId });
       const meId = me?.id != null ? String(me.id).trim() : null;
       if (meId) {
         if (meId !== mlUserIdFromDb) {
@@ -104,7 +150,8 @@ export default async function handleMlSalesSync(req, res) {
             .from("ml_tokens")
             .update({ ml_user_id: meId, updated_at: new Date().toISOString() })
             .eq("user_id", userId)
-            .eq("marketplace", ML_MARKETPLACE_SLUG);
+            .eq("marketplace", ML_MARKETPLACE_SLUG)
+            .eq("ml_user_id", mlUserIdFromDb);
           if (fixErr) {
             console.error(logPrefix, "failed_to_persist_me_id", fixErr);
           }
@@ -122,29 +169,17 @@ export default async function handleMlSalesSync(req, res) {
       userId,
       sellerId,
       ml_user_id_from_db: mlUserIdFromDb,
+      marketplace_account_id: marketplaceAccountId,
       maxOrders: MAX_ORDERS,
       batch: BATCH_CONCURRENCY,
     });
 
-    const { data: accountRow, error: accErr } = await supabase
-      .from("marketplace_accounts")
-      .select("id, seller_company_id")
-      .eq("user_id", userId)
-      .eq("marketplace", ML_MARKETPLACE_SLUG)
-      .eq("external_seller_id", sellerId)
-      .maybeSingle();
-    if (accErr) {
-      console.warn(logPrefix, "marketplace_account_lookup_failed", {
-        message: accErr?.message,
-        code: accErr?.code,
-      });
-    }
-    const marketplaceAccountId = accountRow?.id ? String(accountRow.id) : null;
-    const sellerCompanyId = accountRow?.seller_company_id ? String(accountRow.seller_company_id) : null;
     if (!marketplaceAccountId) {
-      console.warn(logPrefix, "missing_marketplace_account_scope", {
-        userId,
-        sellerId,
+      console.warn(logPrefix, "missing_marketplace_account_scope", { userId, sellerId });
+      return res.status(400).json({
+        ok: false,
+        error:
+          "Não foi possível identificar a conta Mercado Livre (marketplace_accounts) para este vendedor. Conecte a conta em Integrações.",
       });
     }
 
@@ -156,7 +191,10 @@ export default async function handleMlSalesSync(req, res) {
     let marketplaceTotalHint = null;
 
     while (allIds.length < MAX_ORDERS) {
-      const page = await searchSellerOrdersPage(accessToken, sellerId, offset, PAGE_LIMIT);
+      const page = await searchSellerOrdersPage(accessToken, sellerId, offset, PAGE_LIMIT, {
+        marketplaceAccountId,
+        sort: resolveMlOrdersSearchSort(),
+      });
       if (marketplaceTotalHint == null && page.paging?.total != null) {
         marketplaceTotalHint = Number(page.paging.total);
       }
@@ -188,23 +226,38 @@ export default async function handleMlSalesSync(req, res) {
     const started = Date.now();
     let processed = 0;
 
-    const pricingDebug = PRICING_DEBUG_ORDERS > 0 ? { remaining: PRICING_DEBUG_ORDERS } : null;
-
     /**
      * Um pedido: GET /orders/:id → persistência isolada (falha não aborta os outros).
      */
     async function processOneOrder(orderId) {
       let syncStage = "fetch_order";
       try {
-        const detail = await fetchOrderById(accessToken, orderId);
-        syncStage = "persist_order";
-        await persistMercadoLibreOrder(supabase, userId, detail, {
-          marketplace: ML_MARKETPLACE_SLUG,
+        const detail = await fetchOrderById(accessToken, orderId, { marketplaceAccountId });
+        syncStage = "enrich_buyer_thumb";
+        const detailForPersist = await enrichMlOrderBuyerThumbnailIfNeeded(detail, accessToken, {
+          marketplaceAccountId,
+        });
+        syncStage = "persist_order_with_snapshot";
+        const summaryStub = {
+          synced_count: 0,
+          created_count: 0,
+          updated_count: 0,
+          skipped_count: 0,
+          skipped_cancelled_or_unavailable_count: 0,
+          errors: [],
+        };
+        await applyMlOrderDetailToMarketplaceSales(
+          supabase,
+          userId,
           marketplaceAccountId,
           sellerCompanyId,
-          log: (msg, extra) => console.log(logPrefix, msg, { orderId, ...extra }),
-          pricingDebug: pricingDebug || undefined,
-        });
+          detailForPersist,
+          new Date().toISOString(),
+          summaryStub,
+          accessToken,
+          { syncRunId: "manual-sales-sync", orderIndex: null, total: null, syncType: "ml_manual_sales_sync" },
+          { syncType: "ml_manual_sales_sync" }
+        );
       } catch (err) {
         err.syncStage = syncStage;
         throw err;

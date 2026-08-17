@@ -79,9 +79,29 @@ export function resolveMercadoLivreScenarioShipping(p) {
     return raw != null && String(raw).trim() !== "" ? String(raw).trim() : "net_proceeds";
   };
 
-  // 1) Frete já preenchido pelo calculador para este preço
+  // Não reutilizar frete persistido quando o preço do cenário diverge do preço efetivo do np.
+  const npSale = dMoney(npRec.sale_price_effective ?? npRec.sale_price);
+  const priceMismatch =
+    npSale != null &&
+    scenarioSaleDec != null &&
+    scenarioSaleDec.isFinite() &&
+    npSale.gt(0) &&
+    !npSale.minus(scenarioSaleDec).abs().lte(new Decimal("0.02"));
+
+  const npShipSource = String(
+    npRec.shipping_cost_source ?? npRec.ml_shipping_cost_source ?? "",
+  ).trim().toLowerCase();
+  const stalePersistedSource =
+    npShipSource === "health_column" ||
+    npShipSource === "persisted_health_shipping_cost" ||
+    npShipSource.includes("auxiliary") ||
+    npShipSource.includes("simulation");
+
+  // 1) Frete já preenchido pelo calculador para este preço (somente se coerente com o preço da aba)
   const fromNpRaw =
-    npRec.shipping_cost_amount_brl ?? npRec.shipping_cost_amount ?? npRec.ml_shipping_cost_amount_brl ?? null;
+    !priceMismatch && !stalePersistedSource
+      ? npRec.shipping_cost_amount_brl ?? npRec.shipping_cost_amount ?? npRec.ml_shipping_cost_amount_brl ?? null
+      : null;
   if (fromNpRaw != null && String(fromNpRaw).trim() !== "") {
     const n = dMoney(fromNpRaw);
     if (n != null && n.isFinite() && !isPlaceholderShippingAmount(n)) {

@@ -65,14 +65,31 @@ export async function handleProductsListings(req, res) {
       return fail(res, { code: "PRODUCT_NOT_FOUND", message: "Produto não encontrado" }, 404, traceId);
     }
 
-    const { data: rows, error: qErr } = await supabase
+    const selectWithAccount =
+      "id, marketplace, marketplace_account_id, external_listing_id, title, seller_sku, seller_custom_field, status, price, original_price, base_price, permalink, api_last_seen_at, marketplace_accounts(account_alias, ml_nickname, external_seller_id, logo_url, avatar_url)";
+    const selectFallback =
+      "id, marketplace, marketplace_account_id, external_listing_id, title, seller_sku, seller_custom_field, status, price, original_price, base_price, permalink, api_last_seen_at";
+
+    let { data: rows, error: qErr } = await supabase
       .from("marketplace_listings")
-      .select(
-        "id, marketplace, external_listing_id, title, seller_sku, seller_custom_field, status, price, original_price, base_price, permalink, api_last_seen_at",
-      )
+      .select(selectWithAccount)
       .eq("user_id", user.id)
       .eq("product_id", productId)
       .order("api_last_seen_at", { ascending: false });
+
+    if (qErr) {
+      const qMsg = String(qErr?.message ?? "").toLowerCase();
+      const canFallback =
+        qMsg.includes("marketplace_accounts") || String(qErr?.code ?? "") === "PGRST200";
+      if (canFallback) {
+        ({ data: rows, error: qErr } = await supabase
+          .from("marketplace_listings")
+          .select(selectFallback)
+          .eq("user_id", user.id)
+          .eq("product_id", productId)
+          .order("api_last_seen_at", { ascending: false }));
+      }
+    }
 
     if (qErr) {
       console.error("[products/listings] select", qErr);
@@ -119,10 +136,34 @@ export async function handleProductsListings(req, res) {
           : r.seller_sku != null && String(r.seller_sku).trim() !== ""
             ? String(r.seller_sku).trim()
             : null;
+      const accountJoin =
+        r.marketplace_accounts && typeof r.marketplace_accounts === "object"
+          ? r.marketplace_accounts
+          : null;
+      const accountLabel =
+        accountJoin?.ml_nickname != null && String(accountJoin.ml_nickname).trim() !== ""
+          ? String(accountJoin.ml_nickname).trim()
+          : accountJoin?.account_alias != null && String(accountJoin.account_alias).trim() !== ""
+            ? String(accountJoin.account_alias).trim()
+            : accountJoin?.external_seller_id != null &&
+                String(accountJoin.external_seller_id).trim() !== ""
+              ? String(accountJoin.external_seller_id).trim()
+              : null;
+      const accountLogoUrl =
+        accountJoin?.logo_url != null && String(accountJoin.logo_url).trim() !== ""
+          ? String(accountJoin.logo_url).trim()
+          : accountJoin?.avatar_url != null && String(accountJoin.avatar_url).trim() !== ""
+            ? String(accountJoin.avatar_url).trim()
+            : null;
 
       return {
         id: r.id != null ? String(r.id) : null,
         marketplace: r.marketplace != null ? String(r.marketplace) : null,
+        marketplace_account_id:
+          r.marketplace_account_id != null ? String(r.marketplace_account_id) : null,
+        account_label: accountLabel,
+        account_alias: accountLabel,
+        account_logo_url: accountLogoUrl,
         external_listing_id:
           r.external_listing_id != null ? String(r.external_listing_id) : null,
         title: r.title != null ? String(r.title) : null,

@@ -1,0 +1,6 @@
+📣 Suse7
+
+Alteração de frete no Mercado Livre.
+
+Abra:
+http://localhost:5173/perfil/integracoes/mercado-livre

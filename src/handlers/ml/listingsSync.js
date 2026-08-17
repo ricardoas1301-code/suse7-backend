@@ -104,37 +104,106 @@ export default async function handleMlListingsSync(req, res) {
     : null;
 
   try {
-    // ------------------------------
-    // Vendedor ML (ml_user_id salvo no OAuth)
-    // ------------------------------
-    const { data: tokRow, error: tokErr } = await supabase
-      .from("ml_tokens")
-      .select("ml_user_id")
-      .eq("user_id", userId)
-      .eq("marketplace", ML_MARKETPLACE_SLUG)
-      .maybeSingle();
+    const requestedAccountId =
+      body.marketplace_account_id != null && String(body.marketplace_account_id).trim() !== ""
+        ? String(body.marketplace_account_id).trim()
+        : null;
 
-    if (tokErr || !tokRow?.ml_user_id) {
-      console.error(logPrefix, "no_ml_tokens", { tokErr, userId });
+    let sellerId = /** @type {string | null} */ (null);
+    let marketplaceAccountId = requestedAccountId;
+    let sellerCompanyId = null;
+
+    if (requestedAccountId) {
+      const { data: acc, error: accErr } = await supabase
+        .from("marketplace_accounts")
+        .select("id, external_seller_id, seller_company_id, status, marketplace")
+        .eq("id", requestedAccountId)
+        .eq("user_id", userId)
+        .maybeSingle();
+      if (accErr) {
+        console.error(logPrefix, "account_lookup_failed", {
+          message: accErr?.message,
+          code: accErr?.code,
+        });
+      } else if (acc?.id && String(acc.status || "").toLowerCase() === "active") {
+        marketplaceAccountId = String(acc.id);
+        sellerCompanyId =
+          acc.seller_company_id != null && String(acc.seller_company_id).trim() !== ""
+            ? String(acc.seller_company_id).trim()
+            : null;
+        if (acc.external_seller_id != null && String(acc.external_seller_id).trim() !== "") {
+          sellerId = String(acc.external_seller_id).trim();
+        }
+      }
+    }
+
+    if (requestedAccountId && !sellerId) {
+      console.error(logPrefix, "account_missing_external_seller_or_inactive", { requestedAccountId, userId });
       return res.status(400).json({
         ok: false,
         error:
-          "Conta Mercado Livre não conectada. Conclua o OAuth em Perfil → Integrações antes de importar.",
+          "Conta Mercado Livre inválida, inativa ou sem vinculação ao vendedor ML. Verifique Integrações ou reconecte.",
       });
+    }
+
+    if (!sellerId) {
+      const { data: tokRows, error: tokErr } = await supabase
+        .from("ml_tokens")
+        .select("ml_user_id")
+        .eq("user_id", userId)
+        .eq("marketplace", ML_MARKETPLACE_SLUG)
+        .limit(2);
+
+      if (tokErr) {
+        console.error(logPrefix, "ml_tokens_list_error", { tokErr, userId });
+        return res.status(400).json({
+          ok: false,
+          error:
+            "Conta Mercado Livre não conectada. Conclua o OAuth em Perfil → Integrações antes de importar.",
+        });
+      }
+      const rows = Array.isArray(tokRows) ? tokRows : [];
+      if (rows.length === 0) {
+        console.error(logPrefix, "no_ml_tokens", { userId });
+        return res.status(400).json({
+          ok: false,
+          error:
+            "Conta Mercado Livre não conectada. Conclua o OAuth em Perfil → Integrações antes de importar.",
+        });
+      }
+      if (rows.length > 1 && !requestedAccountId) {
+        console.warn(logPrefix, "multi_account_requires_marketplace_account_id", { userId, rows: rows.length });
+        return res.status(400).json({
+          ok: false,
+          error:
+            "Várias contas Mercado Livre conectadas. Na importação, envie marketplace_account_id no body para escolher qual conta sincronizar.",
+        });
+      }
+      const pick = rows[0];
+      if (!pick?.ml_user_id) {
+        console.error(logPrefix, "ml_tokens_row_missing_ml_user_id", { userId });
+        return res.status(400).json({
+          ok: false,
+          error:
+            "Conta Mercado Livre não conectada. Conclua o OAuth em Perfil → Integrações antes de importar.",
+        });
+      }
+      sellerId = String(pick.ml_user_id).trim();
     }
 
     let accessToken;
     try {
-      accessToken = await getValidMLToken(userId);
+      accessToken = await getValidMLToken(userId, {
+        mlUserId: sellerId,
+        marketplaceAccountId: marketplaceAccountId ?? undefined,
+      });
     } catch (e) {
-      console.error(logPrefix, "token_error", { message: e?.message, userId });
+      console.error(logPrefix, "token_error", { message: e?.message, userId, sellerId, marketplaceAccountId });
       return res.status(401).json({
         ok: false,
         error: "Não foi possível obter token válido do Mercado Livre. Reconecte a integração.",
       });
     }
-
-    const sellerId = String(tokRow.ml_user_id);
     console.log(logPrefix, "start", { userId, sellerId, maxItems: MAX_ITEMS, batch: BATCH_CONCURRENCY });
 
     resetHealthSyncMetrics();
@@ -237,6 +306,8 @@ export default async function handleMlListingsSync(req, res) {
           accessToken,
           syncReason: "manual_import",
           skipProductLink: true,
+          marketplaceAccountId,
+          sellerCompanyId,
           trace: productLinkTrace ?? undefined,
         });
       } catch (err) {

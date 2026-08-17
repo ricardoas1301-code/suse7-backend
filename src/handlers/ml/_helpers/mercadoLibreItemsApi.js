@@ -192,17 +192,42 @@ export function shippingOptionsFreeForHealthPersist(payload) {
 }
 
 /**
+ * Resolve seller_id via GET /users/me quando ausente no item (token = vendedor conectado).
+ * @param {string} accessToken
+ */
+async function resolverSellerIdViaUsersMe(accessToken) {
+  try {
+    const res = await fetch(`${ML_API}/users/me`, {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        Accept: "application/json",
+      },
+    });
+    const json = await res.json().catch(() => null);
+    if (!res.ok || !json || typeof json !== "object" || Array.isArray(json)) return null;
+    const id = /** @type {Record<string, unknown>} */ (json).id;
+    return id != null && String(id).trim() !== "" ? String(id).trim() : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Endpoint oficial de custo de envio do seller (base do "A pagar R$ xx,xx" do painel ML).
  * @param {string} accessToken
  * @param {Record<string, unknown>} item
- * @returns {Promise<{ payload: Record<string, unknown> | null; amount: number | null; source_field: string | null }>}
+ * @param {{ freeShippingOverride?: boolean | null; requestUrlOut?: { url?: string; status?: number | null } }} [opts]
+ * @returns {Promise<{ payload: Record<string, unknown> | null; amount: number | null; source_field: string | null; request_url?: string | null; http_status?: number | null }>}
  */
-export async function fetchSellerShippingOptionsFree(accessToken, item) {
+export async function fetchSellerShippingOptionsFree(accessToken, item, opts = {}) {
   const listingId = item?.id != null ? String(item.id) : null;
-  const sellerId =
+  let sellerId =
     item?.seller_id != null && String(item.seller_id).trim() !== ""
       ? String(item.seller_id).trim()
       : null;
+  if (!sellerId) {
+    sellerId = await resolverSellerIdViaUsersMe(accessToken);
+  }
   const itemPrice = toFiniteNumber(item?.price);
   const listingTypeId =
     item?.listing_type_id != null && String(item.listing_type_id).trim() !== ""
@@ -215,14 +240,22 @@ export async function fetchSellerShippingOptionsFree(accessToken, item) {
       : null;
   const mode =
     sh?.mode != null && String(sh.mode).trim() !== "" ? String(sh.mode).trim() : null;
-  const freeShipping = sh?.free_shipping === true ? "true" : "false";
+  const freeShippingOverride = opts.freeShippingOverride;
+  const freeShipping =
+    freeShippingOverride === true
+      ? "true"
+      : freeShippingOverride === false
+        ? "false"
+        : sh?.free_shipping === true
+          ? "true"
+          : "false";
   const condition =
     item?.condition != null && String(item.condition).trim() !== ""
       ? String(item.condition).trim()
       : "new";
 
   if (!sellerId || itemPrice == null || itemPrice <= 0) {
-    return { payload: null, amount: null, source_field: null };
+    return { payload: null, amount: null, source_field: null, request_url: null, http_status: null };
   }
 
   const params = new URLSearchParams();
@@ -236,6 +269,9 @@ export async function fetchSellerShippingOptionsFree(accessToken, item) {
   params.set("verbose", "true");
 
   const url = `${ML_API}/users/${encodeURIComponent(sellerId)}/shipping_options/free?${params.toString()}`;
+  if (opts.requestUrlOut && typeof opts.requestUrlOut === "object") {
+    opts.requestUrlOut.url = url;
+  }
   logPricingEvent(PRICING_LOG_LEVEL.INFO, PRICING_EVENT_CODE.SHIPPING_OPTIONS_FREE_FETCH_STARTED, {
     marketplace: "mercado_livre",
     listing_id: listingId,
@@ -257,6 +293,9 @@ export async function fetchSellerShippingOptionsFree(accessToken, item) {
       },
     });
     json = await res.json().catch(() => null);
+    if (opts.requestUrlOut && typeof opts.requestUrlOut === "object") {
+      opts.requestUrlOut.status = res.status;
+    }
     if (!res.ok || !json || typeof json !== "object" || Array.isArray(json)) {
       logPricingEvent(PRICING_LOG_LEVEL.WARN, PRICING_EVENT_CODE.SHIPPING_OPTIONS_FREE_FETCH_FAILED, {
         marketplace: "mercado_livre",
@@ -270,7 +309,7 @@ export async function fetchSellerShippingOptionsFree(accessToken, item) {
         free_shipping: sh?.free_shipping ?? null,
         source: "ml_shipping_options_free",
       });
-      return { payload: null, amount: null, source_field: null };
+      return { payload: null, amount: null, source_field: null, request_url: url, http_status: res.status };
     }
   } catch (e) {
     logPricingEvent(PRICING_LOG_LEVEL.WARN, PRICING_EVENT_CODE.SHIPPING_OPTIONS_FREE_FETCH_FAILED, {
@@ -285,11 +324,12 @@ export async function fetchSellerShippingOptionsFree(accessToken, item) {
       source: "ml_shipping_options_free",
       error: e instanceof Error ? e.message : String(e),
     });
-    return { payload: null, amount: null, source_field: null };
+    return { payload: null, amount: null, source_field: null, request_url: url, http_status: null };
   }
 
   const persisted = shippingOptionsFreeForHealthPersist(/** @type {Record<string, unknown>} */ (json));
   const selected = toFiniteNumber(persisted?.payable_cost);
+  const listCostRaw = toFiniteNumber(persisted?.list_cost);
   logPricingEvent(PRICING_LOG_LEVEL.INFO, PRICING_EVENT_CODE.SHIPPING_OPTIONS_FREE_FETCH_SUCCESS, {
     marketplace: "mercado_livre",
     listing_id: listingId,
@@ -316,6 +356,9 @@ export async function fetchSellerShippingOptionsFree(accessToken, item) {
       payload: persisted,
       amount: selected,
       source_field: "coverage.all_country.list_cost/discount.promoted_amount",
+      request_url: url,
+      http_status: 200,
+      list_cost: listCostRaw,
     };
   }
   logPricingEvent(PRICING_LOG_LEVEL.WARN, PRICING_EVENT_CODE.SHIPPING_OPTIONS_FREE_VALUE_MISSING, {
@@ -327,7 +370,54 @@ export async function fetchSellerShippingOptionsFree(accessToken, item) {
     selected_value: null,
     source: "ml_shipping_options_free",
   });
-  return { payload: persisted, amount: null, source_field: "coverage.all_country.list_cost" };
+  return {
+    payload: persisted,
+    amount: null,
+    source_field: "coverage.all_country.list_cost",
+    request_url: url,
+    http_status: 200,
+    list_cost: listCostRaw,
+  };
+}
+
+/**
+ * Consulta shipping_options/free com free_shipping=true e false (PI / simulador ML).
+ * @param {string} accessToken
+ * @param {Record<string, unknown>} item — id, price, listing_type_id, shipping, seller_id
+ * @returns {Promise<{
+ *   free_true: { request_url: string | null; http_status: number | null; amount: number | null; list_cost: number | null };
+ *   free_false: { request_url: string | null; http_status: number | null; amount: number | null; list_cost: number | null };
+ * }>}
+ */
+export async function fetchSellerShippingOptionsFreeDual(accessToken, item) {
+  /** @type {{ url?: string; status?: number | null }} */
+  const metaTrue = {};
+  /** @type {{ url?: string; status?: number | null }} */
+  const metaFalse = {};
+  const [rTrue, rFalse] = await Promise.all([
+    fetchSellerShippingOptionsFree(accessToken, item, {
+      freeShippingOverride: true,
+      requestUrlOut: metaTrue,
+    }),
+    fetchSellerShippingOptionsFree(accessToken, item, {
+      freeShippingOverride: false,
+      requestUrlOut: metaFalse,
+    }),
+  ]);
+  return {
+    free_true: {
+      request_url: rTrue.request_url ?? metaTrue.url ?? null,
+      http_status: rTrue.http_status ?? metaTrue.status ?? null,
+      amount: rTrue.amount,
+      list_cost: rTrue.list_cost ?? null,
+    },
+    free_false: {
+      request_url: rFalse.request_url ?? metaFalse.url ?? null,
+      http_status: rFalse.http_status ?? metaFalse.status ?? null,
+      amount: rFalse.amount,
+      list_cost: rFalse.list_cost ?? null,
+    },
+  };
 }
 
 /**
@@ -344,7 +434,7 @@ function isDirectListingPricesRowObject(o) {
 }
 
 /** @param {unknown} json */
-function listingPricesArrayFromResponseJson(json) {
+export function listingPricesArrayFromResponseJson(json) {
   if (Array.isArray(json)) return json;
   if (json && typeof json === "object" && !Array.isArray(json)) {
     const o = /** @type {Record<string, unknown>} */ (json);
@@ -357,6 +447,15 @@ function listingPricesArrayFromResponseJson(json) {
     }
   }
   return [];
+}
+
+/**
+ * Escolhe linha de listing_prices para tarifa oficial (exportado para re-parse do corpo HTTP).
+ * @param {Record<string, unknown>} item
+ * @param {unknown[]} arr
+ */
+export function escolherLinhaListingPricesParaTarifa(item, arr) {
+  return pickBestListingPricesRow(item, arr);
 }
 
 /** @param {unknown[]} vals */
@@ -394,11 +493,21 @@ function listingPricesRowSynthForExtract(item, pr) {
 function pickBestListingPricesRow(item, arr) {
   const wantLt = item.listing_type_id != null ? String(item.listing_type_id).trim() : "";
   /** @param {Record<string, unknown>} pr */
+  const rowListingTypeId = (pr) =>
+    String(pr.listing_type_id ?? pr.mapping ?? pr.listing_type ?? "").trim();
+  /** Resposta filtrada por `listing_type_id` na query pode omitir o campo no corpo. */
+  const allRowsSemTipoExplicito =
+    wantLt !== "" &&
+    arr.some((x) => x && typeof x === "object") &&
+    arr
+      .filter((x) => x && typeof x === "object")
+      .every((x) => rowListingTypeId(/** @type {Record<string, unknown>} */ (x)) === "");
+  /** @param {Record<string, unknown>} pr */
   const rowMatchesLt = (pr) => {
     if (!wantLt) return true;
-    return (
-      String(pr.listing_type_id ?? "") === wantLt || String(pr.mapping ?? "") === wantLt
-    );
+    const lt = rowListingTypeId(pr);
+    if (lt !== "") return lt === wantLt;
+    return allRowsSemTipoExplicito;
   };
   /** Não retornar a primeira linha do tipo: pode ser só o bruto; o loop escolhe a menor tarifa efetiva. */
   const distinctListingTypes = new Set(
@@ -446,17 +555,23 @@ function pickBestListingPricesRow(item, arr) {
     if (minAcrossEligible && bestKeyMin !== Number.POSITIVE_INFINITY && bestKeyMin > 0) return best;
     if (!minAcrossEligible && bestKeyMax > 0) return best;
   }
+  /** Fallbacks só entre linhas do `listing_type_id` pedido — nunca arr[0] de outro tipo (ex.: classic 14% em simulação premium). */
   const withDetails = arr.find(
     (r) =>
       r &&
       typeof r === "object" &&
+      rowMatchesLt(/** @type {Record<string, unknown>} */ (r)) &&
       /** @type {Record<string, unknown>} */ (r).sale_fee_details &&
       (/** @type {Record<string, unknown>} */ (r).sale_fee_amount != null ||
         /** @type {Record<string, unknown>} */ (r).sale_fee_details)
   );
   if (withDetails && typeof withDetails === "object") return /** @type {Record<string, unknown>} */ (withDetails);
-  const first = arr[0];
-  return first && typeof first === "object" ? /** @type {Record<string, unknown>} */ (first) : null;
+  const firstMatching = arr.find(
+    (r) => r && typeof r === "object" && rowMatchesLt(/** @type {Record<string, unknown>} */ (r))
+  );
+  return firstMatching && typeof firstMatching === "object"
+    ? /** @type {Record<string, unknown>} */ (firstMatching)
+    : null;
 }
 
 /** @param {unknown} v @param {number} [max] */
@@ -520,6 +635,88 @@ export async function fetchItem(accessToken, itemId) {
 
   logMlItemDebug(/** @type {Record<string, unknown>} */ (json), "GET /items/:id");
   return json;
+}
+
+/**
+ * Detalhe completo do item para o Raio-X. Não lança erro para não derrubar o modal.
+ * @param {{ accessToken: string; itemId: string }} params
+ * @returns {Promise<{ ok: boolean; status: number | null; data: Record<string, unknown> | null; error_code: string | null }>}
+ */
+export async function fetchMercadoLivreItemFullDetail({ accessToken, itemId }) {
+  const url = `${ML_API}/items/${encodeURIComponent(itemId)}?include_attributes=all`;
+  try {
+    const res = await fetch(url, {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        Accept: "application/json",
+      },
+    });
+    const json = await res.json().catch(() => null);
+    if (!res.ok || !json || typeof json !== "object" || Array.isArray(json)) {
+      return {
+        ok: false,
+        status: res.status,
+        data: null,
+        error_code: String(json?.error ?? json?.message ?? `http_${res.status}`),
+      };
+    }
+    return {
+      ok: true,
+      status: res.status,
+      data: /** @type {Record<string, unknown>} */ (json),
+      error_code: null,
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      status: null,
+      data: null,
+      error_code: err instanceof Error ? err.message : "fetch_error",
+    };
+  }
+}
+
+/**
+ * Preços oficiais do item com todas as faixas. Usado apenas no detalhe/Raio-X.
+ * @param {{ accessToken: string; itemId: string }} params
+ * @returns {Promise<{ ok: boolean; status: number | null; data: Record<string, unknown> | null; error_code: string | null; show_all_prices_sent: true }>}
+ */
+export async function fetchMercadoLivreItemPricesShowAll({ accessToken, itemId }) {
+  const url = `${ML_API}/items/${encodeURIComponent(itemId)}/prices`;
+  try {
+    const res = await fetch(url, {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        Accept: "application/json",
+        "show-all-prices": "TRUE",
+      },
+    });
+    const json = await res.json().catch(() => null);
+    if (!res.ok || !json || typeof json !== "object" || Array.isArray(json)) {
+      return {
+        ok: false,
+        status: res.status,
+        data: null,
+        error_code: String(json?.error ?? json?.message ?? `http_${res.status}`),
+        show_all_prices_sent: true,
+      };
+    }
+    return {
+      ok: true,
+      status: res.status,
+      data: /** @type {Record<string, unknown>} */ (json),
+      error_code: null,
+      show_all_prices_sent: true,
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      status: null,
+      data: null,
+      error_code: err instanceof Error ? err.message : "fetch_error",
+      show_all_prices_sent: true,
+    };
+  }
 }
 
 /** Máx. de IDs por requisição no multiget público do ML (documentação ~20). */
@@ -695,14 +892,18 @@ export async function fetchItemVisitsTotal(accessToken, itemId) {
 }
 
 /**
- * Qualidade / experiência: /performance (preferencial) e fallback /health.
+ * Qualidade: /performance (preferencial) e fallback legado /health.
  * @param {string} accessToken
  * @param {string} itemId
+ * @returns {Promise<{ payload: Record<string, unknown> | null; source: string | null; httpStatus: number | null }>}
  */
 export async function fetchItemListingPerformance(accessToken, itemId) {
   const id = encodeURIComponent(itemId);
-  const paths = [`/items/${id}/performance`, `/item/${id}/performance`, `/items/${id}/health`];
-  for (const p of paths) {
+  const performancePaths = [`/items/${id}/performance`, `/item/${id}/performance`];
+  let lastHttpStatus = null;
+  let sawPerformance404 = false;
+
+  for (const p of performancePaths) {
     const url = `${ML_API}${p}`;
     const res = await fetch(url, {
       headers: {
@@ -710,12 +911,74 @@ export async function fetchItemListingPerformance(accessToken, itemId) {
         Accept: "application/json",
       },
     });
+    lastHttpStatus = res.status;
     const json = await res.json().catch(() => ({}));
     if (res.ok && json && typeof json === "object" && !Array.isArray(json)) {
-      return json;
+      return {
+        payload: /** @type {Record<string, unknown>} */ (json),
+        source: "mercado_livre_performance",
+        httpStatus: res.status,
+      };
+    }
+    if (res.status === 404) sawPerformance404 = true;
+  }
+
+  if (sawPerformance404) {
+    return { payload: null, source: null, httpStatus: lastHttpStatus ?? 404 };
+  }
+
+  const healthUrl = `${ML_API}/items/${id}/health`;
+  const healthRes = await fetch(healthUrl, {
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      Accept: "application/json",
+    },
+  });
+  const healthJson = await healthRes.json().catch(() => ({}));
+  if (healthRes.ok && healthJson && typeof healthJson === "object" && !Array.isArray(healthJson)) {
+    return {
+      payload: /** @type {Record<string, unknown>} */ (healthJson),
+      source: "mercado_livre_health",
+      httpStatus: healthRes.status,
+    };
+  }
+  return { payload: null, source: null, httpStatus: healthRes.status ?? lastHttpStatus };
+}
+
+/**
+ * Experiência de compra oficial por item — GET /reputation/items/:id/purchase_experience/integrators
+ * @param {string} accessToken
+ * @param {string} itemId
+ * @returns {Promise<{ payload: Record<string, unknown> | null; httpStatus: number | null }>}
+ */
+export async function fetchItemPurchaseExperienceIntegrators(accessToken, itemId, opts = {}) {
+  const id = encodeURIComponent(itemId);
+  const locale = opts.locale != null && String(opts.locale).trim() !== "" ? String(opts.locale).trim() : "pt_BR";
+  const urls = [
+    `${ML_API}/reputation/items/${id}/purchase_experience/integrators?locale=${encodeURIComponent(locale)}`,
+    `${ML_API}/reputation/items/${id}/purchase_experience/integrators`,
+  ];
+  let lastStatus = null;
+  for (const url of urls) {
+    const res = await fetch(url, {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        Accept: "application/json",
+      },
+    });
+    lastStatus = res.status;
+    const json = await res.json().catch(() => ({}));
+    if (res.ok && json && typeof json === "object" && !Array.isArray(json)) {
+      return {
+        payload: /** @type {Record<string, unknown>} */ (json),
+        httpStatus: res.status,
+      };
+    }
+    if (res.status === 404) {
+      return { payload: null, httpStatus: res.status };
     }
   }
-  return null;
+  return { payload: null, httpStatus: lastStatus };
 }
 
 /**
@@ -1126,19 +1389,30 @@ export async function fetchSellerPromotionDetails(accessToken, promotionId, prom
 }
 
 /**
- * Lista promoções de um item — GET /seller-promotions/items/:id?app_version=v2
- * (retorna campanhas ativas, programadas e candidatas no contexto do item).
+ * Itens de uma promoção filtrados por anúncio — GET /seller-promotions/promotions/:id/items
  *
  * @param {string} accessToken
+ * @param {string} promotionId
+ * @param {string} promotionType
  * @param {string} itemId
  * @returns {Promise<Record<string, unknown>[]>}
  */
-export async function fetchSellerPromotionsByItem(accessToken, itemId) {
+export async function fetchSellerPromotionItemsForListing(
+  accessToken,
+  promotionId,
+  promotionType,
+  itemId
+) {
+  const pid = promotionId != null ? String(promotionId).trim() : "";
+  const ptype = promotionType != null ? String(promotionType).trim() : "";
   const iid = itemId != null ? String(itemId).trim() : "";
-  if (!iid || !accessToken) return [];
+  if (!pid || !ptype || !iid || !accessToken) return [];
+
   const params = new URLSearchParams();
+  params.set("promotion_type", ptype);
+  params.set("item_id", iid);
   params.set("app_version", "v2");
-  const url = `${ML_API}/seller-promotions/items/${encodeURIComponent(iid)}?${params.toString()}`;
+  const url = `${ML_API}/seller-promotions/promotions/${encodeURIComponent(pid)}/items?${params.toString()}`;
   const res = await fetch(url, {
     headers: {
       Authorization: `Bearer ${accessToken}`,
@@ -1146,9 +1420,11 @@ export async function fetchSellerPromotionsByItem(accessToken, itemId) {
     },
   });
   const json = await res.json().catch(() => null);
-  if (!res.ok || !Array.isArray(json)) {
+  if (!res.ok || json == null) {
     if (mlFeeValidateLogsEnabled()) {
-      console.info("[ML_SALE_PRICE_PROMOTION][fetch_item_promotions_failed]", {
+      console.info("[ML_SALE_PRICE_PROMOTION][fetch_promotion_items_failed]", {
+        promotion_id: pid,
+        promotion_type: ptype,
         item_id: iid,
         http_status: res.status,
         body_snippet: jsonSnippet(json, 600),
@@ -1156,16 +1432,238 @@ export async function fetchSellerPromotionsByItem(accessToken, itemId) {
     }
     return [];
   }
-  return /** @type {Record<string, unknown>[]} */ (json);
+  if (Array.isArray(json)) {
+    return /** @type {Record<string, unknown>[]} */ (json);
+  }
+  if (typeof json === "object" && Array.isArray(/** @type {Record<string, unknown>} */ (json).results)) {
+    return /** @type {Record<string, unknown>[]} */ (/** @type {Record<string, unknown>} */ (json).results);
+  }
+  return [];
+}
+
+/**
+ * Lista promoções de um item — GET /seller-promotions/items/:id?app_version=v2
+ * (retorna campanhas ativas, programadas e candidatas no contexto do item).
+ *
+ * @param {string} accessToken
+ * @param {string} itemId
+ * @returns {Promise<{
+ *   rows: Record<string, unknown>[];
+ *   httpStatus: number | null;
+ *   ok: boolean;
+ *   error: string | null;
+ *   responseKeys: string[] | null;
+ * }>}
+ */
+/**
+ * Extrai linhas de promoção de respostas heterogêneas do GET /seller-promotions/items/:id.
+ *
+ * @param {unknown} json
+ * @returns {{ rows: Record<string, unknown>[]; paging: Record<string, unknown> | null; responseKeys: string[] | null }}
+ */
+export function extractSellerPromotionRowsFromItemPromotionsJson(json) {
+  /** @type {Record<string, unknown>[]} */
+  const rows = [];
+  /** @type {Record<string, unknown> | null} */
+  let paging = null;
+  /** @type {string[] | null} */
+  let responseKeys = null;
+
+  const pushRow = (row) => {
+    if (!row || typeof row !== "object") return;
+    const rec = /** @type {Record<string, unknown>} */ (row);
+    const hasIdentity =
+      rec.id != null ||
+      rec.promotion_id != null ||
+      rec.type != null ||
+      rec.promotion_type != null ||
+      rec.sub_type != null ||
+      rec.name != null ||
+      rec.promotion_name != null;
+    if (!hasIdentity) return;
+    rows.push(rec);
+  };
+
+  if (Array.isArray(json)) {
+    for (const row of json) pushRow(row);
+    return { rows, paging: null, responseKeys: rows.length > 0 ? Object.keys(rows[0]) : [] };
+  }
+
+  if (json == null || typeof json !== "object") {
+    return { rows, paging: null, responseKeys: null };
+  }
+
+  const root = /** @type {Record<string, unknown>} */ (json);
+  responseKeys = Object.keys(root);
+  if (root.paging != null && typeof root.paging === "object") {
+    paging = /** @type {Record<string, unknown>} */ (root.paging);
+  }
+
+  if (Array.isArray(root.results)) {
+    for (const row of root.results) pushRow(row);
+  }
+
+  const nestedKeys = [
+    "promotions",
+    "available_promotions",
+    "candidate_promotions",
+    "started_promotions",
+    "pending_promotions",
+    "items",
+    "data",
+  ];
+  for (const key of nestedKeys) {
+    const nested = root[key];
+    if (Array.isArray(nested)) {
+      for (const row of nested) pushRow(row);
+    } else if (nested != null && typeof nested === "object") {
+      const obj = /** @type {Record<string, unknown>} */ (nested);
+      for (const subKey of ["results", "candidates", "available", "started", "pending", "items"]) {
+        if (Array.isArray(obj[subKey])) {
+          for (const row of obj[subKey]) pushRow(row);
+        }
+      }
+    }
+  }
+
+  return { rows, paging, responseKeys };
+}
+
+/** @param {Record<string, unknown>[]} rows */
+function dedupeSellerPromotionRowsByStrongKey(rows) {
+  /** @type {Map<string, Record<string, unknown>>} */
+  const byKey = new Map();
+  for (const row of rows) {
+    const pid = row.id ?? row.promotion_id ?? "";
+    const offerId = row.ref_id ?? row.offer_id ?? "";
+    const ptype = row.type ?? row.promotion_type ?? "";
+    const subType = row.sub_type ?? "";
+    const name = row.name ?? row.promotion_name ?? "";
+    const key = [pid, offerId, ptype, subType, name].map((v) => (v != null ? String(v).trim() : "")).join("|");
+    if (key.replace(/\|/g, "") === "") continue;
+    if (!byKey.has(key)) byKey.set(key, row);
+  }
+  return Array.from(byKey.values());
+}
+
+export async function fetchSellerPromotionsByItemDetailed(accessToken, itemId) {
+  const iid = itemId != null ? String(itemId).trim() : "";
+  if (!iid || !accessToken) {
+    return {
+      rows: [],
+      httpStatus: null,
+      ok: false,
+      error: !accessToken ? "missing_access_token" : "missing_item_id",
+      responseKeys: null,
+    };
+  }
+
+  /** @type {Record<string, unknown>[]} */
+  const collected = [];
+  /** @type {string[] | null} */
+  let responseKeys = null;
+  let httpStatus = null;
+  let offset = 0;
+  const pageLimit = 50;
+  let expectedTotal = null;
+  let pageGuard = 0;
+
+  while (pageGuard < 20) {
+    pageGuard += 1;
+    const params = new URLSearchParams();
+    params.set("app_version", "v2");
+    params.set("offset", String(offset));
+    params.set("limit", String(pageLimit));
+    const url = `${ML_API}/seller-promotions/items/${encodeURIComponent(iid)}?${params.toString()}`;
+    const res = await fetch(url, {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        Accept: "application/json",
+      },
+    });
+    httpStatus = res.status;
+    const json = await res.json().catch(() => null);
+    if (!res.ok) {
+      const errMsg =
+        json && typeof json === "object" && /** @type {Record<string, unknown>} */ (json).message != null
+          ? String(/** @type {Record<string, unknown>} */ (json).message)
+          : json && typeof json === "object" && /** @type {Record<string, unknown>} */ (json).error != null
+            ? String(/** @type {Record<string, unknown>} */ (json).error)
+            : `HTTP ${res.status}`;
+      if (mlFeeValidateLogsEnabled()) {
+        console.info("[ML_SALE_PRICE_PROMOTION][fetch_item_promotions_failed]", {
+          item_id: iid,
+          http_status: res.status,
+          body_snippet: jsonSnippet(json, 600),
+        });
+      }
+      return {
+        rows: dedupeSellerPromotionRowsByStrongKey(collected),
+        httpStatus: res.status,
+        ok: false,
+        error: errMsg,
+        responseKeys: json && typeof json === "object" ? Object.keys(/** @type {Record<string, unknown>} */ (json)) : null,
+      };
+    }
+
+    const parsed = extractSellerPromotionRowsFromItemPromotionsJson(json);
+    if (responseKeys == null) responseKeys = parsed.responseKeys;
+    if (parsed.rows.length > 0) {
+      collected.push(...parsed.rows);
+    }
+
+    const paging = parsed.paging;
+    const totalRaw = paging?.total ?? paging?.total_count ?? null;
+    const totalNum = totalRaw != null ? Number(String(totalRaw)) : NaN;
+    if (Number.isFinite(totalNum) && totalNum >= 0) {
+      expectedTotal = totalNum;
+    }
+
+    const pageRowCount = parsed.rows.length;
+    if (pageRowCount === 0) break;
+
+    if (expectedTotal != null && collected.length >= expectedTotal) break;
+
+    offset += pageRowCount;
+  }
+
+  const rows = dedupeSellerPromotionRowsByStrongKey(collected);
+  if (mlFeeValidateLogsEnabled()) {
+    console.info("[ML_SALE_PRICE_PROMOTION][fetch_item_promotions_paged]", {
+      item_id: iid,
+      collected_total: rows.length,
+      expected_total: expectedTotal,
+      pages_fetched: pageGuard,
+    });
+  }
+
+  return {
+    rows,
+    httpStatus,
+    ok: true,
+    error: null,
+    responseKeys,
+  };
+}
+
+/**
+ * @param {string} accessToken
+ * @param {string} itemId
+ * @returns {Promise<Record<string, unknown>[]>}
+ */
+export async function fetchSellerPromotionsByItem(accessToken, itemId) {
+  const detailed = await fetchSellerPromotionsByItemDetailed(accessToken, itemId);
+  return detailed.rows;
 }
 
 /**
  * Injeta sale_fee_* do listing_prices e, se necessário, original_price via sale_price.
  * @param {string} accessToken
  * @param {Record<string, unknown>} item
- * @param {{ healthSync?: boolean }} [opts] — `healthSync: true` força GET listing_prices mesmo quando o item já tem tarifa superficial (garante fonte oficial no persist de health).
+ * @param {{ healthSync?: boolean; preservarPrecoCenarioSimulacao?: boolean }} [opts] — `healthSync: true` força GET listing_prices mesmo quando o item já tem tarifa superficial (garante fonte oficial no persist de health). `preservarPrecoCenarioSimulacao: true` usa `item.price` do cenário simulado sem reescrever via original_price/sale_price do anúncio.
  */
 export async function enrichItemWithListingPricesFees(accessToken, item, opts = {}) {
+  const preservarPrecoCenario = opts.preservarPrecoCenarioSimulacao === true;
   if (!item || typeof item !== "object") return item;
   if (!accessToken) {
     const out = {
@@ -1202,7 +1700,7 @@ export async function enrichItemWithListingPricesFees(accessToken, item, opts = 
   let salePriceFetched = null;
   const skipSalePrice = process.env.ML_SKIP_SALE_PRICE === "1";
 
-  if (!skipSalePrice && item.id != null) {
+  if (!skipSalePrice && !preservarPrecoCenario && item.id != null) {
     try {
       const saleCtx = "channel_marketplace";
       const sp = await fetchItemSalePrice(accessToken, String(item.id), { context: saleCtx });
@@ -1281,7 +1779,18 @@ export async function enrichItemWithListingPricesFees(accessToken, item, opts = 
       : rootPx != null && rootPx > 0
         ? rootPx
         : 0;
-  if (lp > 0) {
+  if (preservarPrecoCenario) {
+    priceForFees = rootPx != null && rootPx > 0 ? rootPx : null;
+    if (priceForFees != null) {
+      next = next === item ? { ...item } : next;
+      next = {
+        ...next,
+        price: priceForFees,
+        original_price: null,
+        base_price: null,
+      };
+    }
+  } else if (lp > 0) {
     const hasPromo = promoEff != null && promoEff > 0 && promoEff < lp;
     const resolvedFees = resolveMercadoLivreSalePriceOfficial({
       marketplace: "mercado_livre",
@@ -1331,7 +1840,7 @@ export async function enrichItemWithListingPricesFees(accessToken, item, opts = 
     skipDeepExtract: true,
   });
   /** Sync de `marketplace_listing_health` sempre consulta listing_prices quando há token (tarifa oficial). */
-  const forceOfficialListingPrices = opts.healthSync === true;
+  const forceOfficialListingPrices = opts.healthSync === true || preservarPrecoCenario;
   const needListingPrices =
     forceOfficialListingPrices ||
     curSolid.amount == null ||
@@ -1444,9 +1953,10 @@ export async function enrichItemWithListingPricesFees(accessToken, item, opts = 
             ...itemForFees,
             sale_fee_details: row.sale_fee_details,
             sale_fee_amount: row.sale_fee_amount,
+            sale_fee_percent: row.sale_fee_percent,
           },
           {
-            deriveFromPercent: false,
+            deriveFromPercent: true,
             listing: /** @type {Record<string, unknown>} */ (item),
             skipDeepExtract: true,
           }
@@ -1465,7 +1975,7 @@ export async function enrichItemWithListingPricesFees(accessToken, item, opts = 
         });
       }
 
-      if ((row == null || feeAfterMerge == null) && typeof itemForFees === "object") {
+      if ((row == null || feeAfterMerge == null) && typeof itemForFees === "object" && !preservarPrecoCenario) {
         lpUsedMinimalFallback = true;
         const lpDet2 = await fetchListingPricesForItemDetailed(accessToken, itemForFees, {
           omitShippingParams: true,
@@ -1757,5 +2267,391 @@ export async function putMercadoLibreItemPrice(accessToken, itemId, price) {
     throw err;
   }
   return /** @type {Record<string, unknown>} */ (json);
+}
+
+/**
+ * Atualização parcial do item (PUT /items/:id) para campos operacionais básicos.
+ * @param {string} accessToken
+ * @param {string} itemId
+ * @param {Record<string, unknown>} payload
+ * @returns {Promise<Record<string, unknown>>}
+ */
+export async function putMercadoLibreItemPartial(accessToken, itemId, payload) {
+  const id = String(itemId ?? "").trim();
+  if (!id) {
+    const err = new /** @type {Error & { status?: number; body?: unknown }} */ (Error)("itemId vazio");
+    err.status = 400;
+    throw err;
+  }
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    const err = new /** @type {Error & { status?: number; body?: unknown }} */ (Error)("Payload inválido");
+    err.status = 400;
+    throw err;
+  }
+  const url = `${ML_API}/items/${encodeURIComponent(id)}`;
+  const res = await fetch(url, {
+    method: "PUT",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      Accept: "application/json",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const msg =
+      json?.message != null
+        ? String(json.message)
+        : json?.error != null
+          ? String(json.error)
+          : `ML put item HTTP ${res.status}`;
+    const err = new Error(msg);
+    /** @type {Error & { status?: number; body?: unknown }} */
+    const e = /** @type {any} */ (err);
+    e.status = res.status;
+    e.body = json;
+    throw err;
+  }
+  return /** @type {Record<string, unknown>} */ (json);
+}
+
+/**
+ * Atualiza título do anúncio ML.
+ * @param {string} accessToken
+ * @param {string} itemId
+ * @param {string} title
+ */
+export async function putMercadoLibreItemTitle(accessToken, itemId, title) {
+  const value = String(title ?? "").trim();
+  if (!value) {
+    const err = new /** @type {Error & { status?: number; body?: unknown }} */ (Error)("Título inválido");
+    err.status = 400;
+    throw err;
+  }
+  return putMercadoLibreItemPartial(accessToken, itemId, { title: value });
+}
+
+/**
+ * Atualiza descrição do anúncio ML (PUT /items/:id/description).
+ * @param {string} accessToken
+ * @param {string} itemId
+ * @param {string} plainText
+ */
+export async function putMercadoLibreItemDescription(accessToken, itemId, plainText) {
+  const id = String(itemId ?? "").trim();
+  const value = String(plainText ?? "").trim();
+  if (!id) {
+    const err = new /** @type {Error & { status?: number; body?: unknown }} */ (Error)("itemId vazio");
+    err.status = 400;
+    throw err;
+  }
+  if (!value) {
+    const err = new /** @type {Error & { status?: number; body?: unknown }} */ (Error)("Descrição inválida");
+    err.status = 400;
+    throw err;
+  }
+  const url = `${ML_API}/items/${encodeURIComponent(id)}/description`;
+  const res = await fetch(url, {
+    method: "PUT",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      Accept: "application/json",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ plain_text: value }),
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const msg =
+      json?.message != null
+        ? String(json.message)
+        : json?.error != null
+          ? String(json.error)
+          : `ML put description HTTP ${res.status}`;
+    const err = new Error(msg);
+    /** @type {Error & { status?: number; body?: unknown }} */
+    const e = /** @type {any} */ (err);
+    e.status = res.status;
+    e.body = json;
+    throw err;
+  }
+  return /** @type {Record<string, unknown>} */ (json);
+}
+
+/**
+ * Cria descrição do anúncio ML (POST /items/:id/description).
+ * Usado quando o anúncio ainda não possui descrição (PUT retorna 404).
+ * @param {string} accessToken
+ * @param {string} itemId
+ * @param {string} plainText
+ */
+export async function postMercadoLibreItemDescription(accessToken, itemId, plainText) {
+  const id = String(itemId ?? "").trim();
+  const value = String(plainText ?? "");
+  if (!id) {
+    const err = new /** @type {Error & { status?: number; body?: unknown }} */ (Error)("itemId vazio");
+    err.status = 400;
+    throw err;
+  }
+  if (!value.trim()) {
+    const err = new /** @type {Error & { status?: number; body?: unknown }} */ (Error)("Descrição inválida");
+    err.status = 400;
+    throw err;
+  }
+  const url = `${ML_API}/items/${encodeURIComponent(id)}/description`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      Accept: "application/json",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ plain_text: value }),
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const msg =
+      json?.message != null
+        ? String(json.message)
+        : json?.error != null
+          ? String(json.error)
+          : `ML post description HTTP ${res.status}`;
+    const err = new Error(msg);
+    /** @type {Error & { status?: number; body?: unknown }} */
+    const e = /** @type {any} */ (err);
+    e.status = res.status;
+    e.body = json;
+    throw err;
+  }
+  return /** @type {Record<string, unknown>} */ (json);
+}
+
+// ======================================================
+// Concorrência (S1 — Descoberta Real) — endpoints de catálogo + busca pública.
+// Mesmo padrão dos helpers acima: fetch Bearer + parse JSON + erro com status/body.
+// Sem persistência. Logs com prefixo [COMPETITION] ficam no engine/strategies.
+// ======================================================
+
+/**
+ * GET /items/{item_id}/price_to_win?version=v2 — status competitivo do item de catálogo do seller
+ * (winner, price_to_win, visit_share). Best-effort no fluxo de descoberta (contexto/log).
+ * @param {string} accessToken
+ * @param {string} itemId
+ * @param {{ version?: string }} [opts]
+ * @returns {Promise<Record<string, unknown> | null>}
+ */
+export async function fetchItemPriceToWin(accessToken, itemId, opts = {}) {
+  const id = String(itemId ?? "").trim();
+  if (!id) return null;
+  const version =
+    opts.version != null && String(opts.version).trim() !== "" ? String(opts.version).trim() : "v2";
+  const url = `${ML_API}/items/${encodeURIComponent(id)}/price_to_win?version=${encodeURIComponent(version)}`;
+  const res = await fetch(url, {
+    headers: { Authorization: `Bearer ${accessToken}`, Accept: "application/json" },
+  });
+  const json = await res.json().catch(() => null);
+  if (!res.ok) {
+    const err = new Error((json && (json.message || json.error)) || `ML price_to_win HTTP ${res.status}`);
+    err.status = res.status;
+    err.body = json;
+    throw err;
+  }
+  return json && typeof json === "object" && !Array.isArray(json) ? json : null;
+}
+
+/**
+ * GET /products/{product_id} — metadados do produto de catálogo (nome, atributos, buy_box_winner).
+ * @param {string} accessToken
+ * @param {string} productId
+ * @returns {Promise<Record<string, unknown> | null>}
+ */
+export async function fetchCatalogProduct(accessToken, productId) {
+  const id = String(productId ?? "").trim();
+  if (!id) return null;
+  const url = `${ML_API}/products/${encodeURIComponent(id)}`;
+  const res = await fetch(url, {
+    headers: { Authorization: `Bearer ${accessToken}`, Accept: "application/json" },
+  });
+  const json = await res.json().catch(() => null);
+  if (!res.ok) {
+    const err = new Error((json && (json.message || json.error)) || `ML product HTTP ${res.status}`);
+    err.status = res.status;
+    err.body = json;
+    throw err;
+  }
+  return json && typeof json === "object" && !Array.isArray(json) ? json : null;
+}
+
+/**
+ * GET /products/{product_id}/items — publicações concorrentes que disputam a mesma PDP de catálogo.
+ * @param {string} accessToken
+ * @param {string} productId
+ * @param {{ limit?: number, offset?: number }} [opts]
+ * @returns {Promise<{ results: Record<string, unknown>[]; paging: Record<string, unknown> }>}
+ */
+export async function fetchCatalogProductItems(accessToken, productId, opts = {}) {
+  const safe = await fetchCatalogProductItemsSafe(accessToken, productId, opts);
+  if (!safe.ok) {
+    const err = new Error(safe.error || `ML product items HTTP ${safe.status}`);
+    err.status = safe.status;
+    err.body = safe.body;
+    throw err;
+  }
+  return { results: safe.results, paging: safe.paging };
+}
+
+/**
+ * GET /products/{product_id}/items — versão segura (não lança em 404/403).
+ * @returns {Promise<{ ok: boolean; status: number; results: Record<string, unknown>[]; paging: Record<string, unknown>; error?: string; body?: unknown }>}
+ */
+export async function fetchCatalogProductItemsSafe(accessToken, productId, opts = {}) {
+  const id = String(productId ?? "").trim();
+  if (!id) return { ok: true, status: 200, results: [], paging: { total: 0 } };
+  const limit = Number.isFinite(Number(opts.limit)) ? Math.min(Math.max(Number(opts.limit), 1), 50) : 50;
+  const offset = Number.isFinite(Number(opts.offset)) ? Math.max(Number(opts.offset), 0) : 0;
+  const url = `${ML_API}/products/${encodeURIComponent(id)}/items?limit=${limit}&offset=${offset}`;
+  const res = await fetch(url, {
+    headers: { Authorization: `Bearer ${accessToken}`, Accept: "application/json" },
+  });
+  const json = await res.json().catch(() => null);
+  if (!res.ok) {
+    return {
+      ok: false,
+      status: res.status,
+      results: [],
+      paging: { total: 0 },
+      error: (json && (json.message || json.error)) || `HTTP ${res.status}`,
+      body: json,
+    };
+  }
+  const results = Array.isArray(json?.results) ? json.results : Array.isArray(json) ? json : [];
+  const paging =
+    json?.paging && typeof json.paging === "object" ? json.paging : { total: results.length, offset, limit };
+  return { ok: true, status: res.status, results, paging };
+}
+
+/**
+ * @deprecated O endpoint GET /sites/{site_id}/search foi DESCONTINUADO pelo Mercado Livre
+ * (responde 403 forbidden). Para busca por palavra-chave use `searchCatalogProducts`
+ * (GET /products/search) + `fetchCatalogProductItems`. Mantido apenas por compatibilidade.
+ *
+ * GET /sites/{site_id}/search — busca pública por título/categoria/marca/GTIN (token obrigatório hoje).
+ * @param {string} accessToken
+ * @param {{ siteId?: string, q?: string, categoryId?: string | null, sellerId?: string | null, condition?: string | null, sort?: string | null, limit?: number, offset?: number }} [opts]
+ * @returns {Promise<{ results: Record<string, unknown>[]; paging: Record<string, unknown> }>}
+ */
+export async function searchMarketplaceListings(accessToken, opts = {}) {
+  const siteId = opts.siteId != null && String(opts.siteId).trim() !== "" ? String(opts.siteId).trim() : "MLB";
+  const q = opts.q != null ? String(opts.q).trim() : "";
+  const limit = Number.isFinite(Number(opts.limit)) ? Math.min(Math.max(Number(opts.limit), 1), 50) : 20;
+  const offset = Number.isFinite(Number(opts.offset)) ? Math.min(Math.max(Number(opts.offset), 0), 1000) : 0;
+
+  const params = new URLSearchParams();
+  if (q) params.set("q", q);
+  if (opts.categoryId != null && String(opts.categoryId).trim() !== "") {
+    params.set("category", String(opts.categoryId).trim());
+  }
+  if (opts.sellerId != null && String(opts.sellerId).trim() !== "") {
+    params.set("seller_id", String(opts.sellerId).trim());
+  }
+  if (opts.condition != null && String(opts.condition).trim() !== "") {
+    params.set("condition", String(opts.condition).trim());
+  }
+  if (opts.sort != null && String(opts.sort).trim() !== "") {
+    params.set("sort", String(opts.sort).trim());
+  }
+  params.set("limit", String(limit));
+  params.set("offset", String(offset));
+
+  const url = `${ML_API}/sites/${encodeURIComponent(siteId)}/search?${params.toString()}`;
+  const res = await fetch(url, {
+    headers: { Authorization: `Bearer ${accessToken}`, Accept: "application/json" },
+  });
+  const json = await res.json().catch(() => null);
+  if (!res.ok) {
+    const err = new Error((json && (json.message || json.error)) || `ML site search HTTP ${res.status}`);
+    err.status = res.status;
+    err.body = json;
+    throw err;
+  }
+  const results = Array.isArray(json?.results) ? json.results : [];
+  const paging =
+    json?.paging && typeof json.paging === "object" ? json.paging : { total: results.length, offset, limit };
+  return { results, paging };
+}
+
+/**
+ * GET /products/search — buscador de PRODUTOS de catálogo por palavra-chave (substitui
+ * o /sites/$SITE/search público, que foi DESCONTINUADO pelo Mercado Livre → 403 forbidden).
+ * Retorna produtos de catálogo (id "MLB..."); os anúncios concorrentes saem de /products/{id}/items.
+ * `q` OU `productIdentifier` (GTIN/EAN) é obrigatório; categoria/catálogo NÃO são exigidos.
+ * @param {string} accessToken
+ * @param {{ siteId?: string, q?: string, productIdentifier?: string | null, status?: string, domainId?: string | null, limit?: number, offset?: number }} [opts]
+ * @returns {Promise<{ results: Record<string, unknown>[]; paging: Record<string, unknown>; keywords: string }>}
+ */
+export async function searchCatalogProducts(accessToken, opts = {}) {
+  const siteId = opts.siteId != null && String(opts.siteId).trim() !== "" ? String(opts.siteId).trim() : "MLB";
+  const q = opts.q != null ? String(opts.q).trim() : "";
+  const productIdentifier =
+    opts.productIdentifier != null && String(opts.productIdentifier).trim() !== ""
+      ? String(opts.productIdentifier).trim()
+      : "";
+  const status = opts.status != null && String(opts.status).trim() !== "" ? String(opts.status).trim() : "active";
+  const limit = Number.isFinite(Number(opts.limit)) ? Math.min(Math.max(Number(opts.limit), 1), 50) : 20;
+  const offset = Number.isFinite(Number(opts.offset)) ? Math.min(Math.max(Number(opts.offset), 0), 1000) : 0;
+
+  const params = new URLSearchParams();
+  params.set("site_id", siteId);
+  if (status) params.set("status", status);
+  if (q) params.set("q", q);
+  if (productIdentifier) params.set("product_identifier", productIdentifier);
+  if (opts.domainId != null && String(opts.domainId).trim() !== "") {
+    params.set("domain_id", String(opts.domainId).trim());
+  }
+  params.set("limit", String(limit));
+  params.set("offset", String(offset));
+
+  const url = `${ML_API}/products/search?${params.toString()}`;
+  const res = await fetch(url, {
+    headers: { Authorization: `Bearer ${accessToken}`, Accept: "application/json" },
+  });
+  const json = await res.json().catch(() => null);
+  if (!res.ok) {
+    const err = new Error((json && (json.message || json.error)) || `ML products search HTTP ${res.status}`);
+    err.status = res.status;
+    err.body = json;
+    throw err;
+  }
+  const results = Array.isArray(json?.results) ? json.results : [];
+  const paging =
+    json?.paging && typeof json.paging === "object" ? json.paging : { total: results.length, offset, limit };
+  return { results, paging, keywords: json?.keywords ?? q };
+}
+
+/**
+ * GET /categories/{category_id} — caminho oficial da categoria (path_from_root).
+ * @param {string} accessToken
+ * @param {string} categoryId
+ * @returns {Promise<string | null>}
+ */
+export async function fetchMercadoLivreCategoryPath(accessToken, categoryId) {
+  const id = String(categoryId ?? "").trim();
+  if (!id || !accessToken) return null;
+  try {
+    const url = `${ML_API}/categories/${encodeURIComponent(id)}`;
+    const res = await fetch(url, {
+      headers: { Authorization: `Bearer ${accessToken}`, Accept: "application/json" },
+    });
+    const json = await res.json().catch(() => null);
+    if (!res.ok || !json || typeof json !== "object") return null;
+    const path = Array.isArray(json.path_from_root) ? json.path_from_root : [];
+    const labels = path
+      .map((node) => (node?.name != null ? String(node.name).trim() : ""))
+      .filter(Boolean);
+    return labels.length > 0 ? labels.join(" > ") : null;
+  } catch {
+    return null;
+  }
 }
 

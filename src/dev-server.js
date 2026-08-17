@@ -13,16 +13,10 @@
 import dotenv from "dotenv";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-
 import http from "node:http";
 
-import { applyDevServerEnvIsolation } from "./infra/devEnvIsolation.js";
-import {
-  validateMlConnectOAuthEnv,
-  classifyMlOAuthRedirect,
-  getMlOAuthRuntimeLabel,
-  maskMlClientIdForLog,
-} from "./handlers/ml/_helpers/oauthConnect.js";
+// Não importar módulos que carregam infra/config.js antes do dotenv abaixo —
+// config congela process.env na primeira carga e causaria 503 em requireAuthUser.
 
 /** Raiz do pacote suse7-backend (pasta do package.json), independente do cwd. */
 const backendRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -31,6 +25,17 @@ dotenv.config({ path: path.join(backendRoot, ".env") });
 dotenv.config({ path: path.join(backendRoot, ".env.local"), override: true });
 
 const PORT = Number(process.env.PORT) || 3001;
+
+const { applyDevServerEnvIsolation } = await import("./infra/devEnvIsolation.js");
+const {
+  validateMlConnectOAuthEnv,
+  classifyMlOAuthRedirect,
+  getMlOAuthRuntimeLabel,
+  maskMlClientIdForLog,
+} = await import("./handlers/ml/_helpers/oauthConnect.js");
+const { getManualSaleRayxRuntimeEnvSnapshot } = await import(
+  "./domain/notifications/central/sales/manualSaleRayxLiveDelivery.js"
+);
 
 applyDevServerEnvIsolation(PORT);
 
@@ -47,6 +52,18 @@ console.log("[BOOT] ML_CLIENT_ID length:", mlIdBoot.length, "| preview:", maskMl
 console.log("[BOOT] ML OAuth env (rótulo):", getMlOAuthRuntimeLabel(), "| NODE_ENV:", process.env.NODE_ENV ?? "(unset)");
 console.log("[BOOT] ML_CLIENT_SECRET length:", mlSecBoot.length);
 console.log("[BOOT] PORT:", PORT);
+
+{
+  const waLive = getManualSaleRayxRuntimeEnvSnapshot();
+  console.log("[BOOT] Raio-X WhatsApp manual:", {
+    provider: waLive.whatsapp_provider,
+    mode: waLive.s7_whatsapp_mode,
+    allow_live: waLive.s7_allow_live_delivery,
+    smoke_enabled: waLive.s7_provider_smoke_enabled,
+    smoke_phone: waLive.s7_provider_smoke_phone,
+    live_active: waLive.live_delivery_active,
+  });
+}
 
 const supabaseUrl = (process.env.SUPABASE_URL || "").trim();
 console.log(
@@ -102,6 +119,8 @@ function createRes(res) {
       res.setHeader("Content-Type", "application/json; charset=utf-8");
       if (!res.statusCode || res.statusCode < 200) res.statusCode = 200;
       res.end(JSON.stringify(obj));
+      // Sinaliza handler concluído — ok()/fail() repassam este valor ao router (evita 404 fantasma local).
+      return true;
     },
     status(code) {
       res.statusCode = code;
@@ -115,6 +134,7 @@ function createRes(res) {
           Object.entries(headers).forEach(([k, v]) => res.setHeader(k, v));
           res.setHeader("Content-Type", "application/json");
           res.end(JSON.stringify(obj));
+          return true;
         },
         redirect(location) {
           const loc = String(location ?? "");
@@ -184,6 +204,15 @@ server.on("error", (err) => {
   console.error("[BOOT] Falha ao abrir servidor HTTP — verifique se a porta está livre:", err?.message || err);
   process.exit(1);
 });
+
+if (process.env.NODE_ENV !== "production") {
+  process.on("unhandledRejection", (reason) => {
+    console.error("[dev-server] unhandledRejection — processo mantido em DEV:", reason);
+  });
+  process.on("uncaughtException", (err) => {
+    console.error("[dev-server] uncaughtException — processo mantido em DEV:", err);
+  });
+}
 
 server.listen(PORT, () => {
   console.log(`[BOOT] listening http://localhost:${PORT}`);

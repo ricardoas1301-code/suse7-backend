@@ -11,12 +11,21 @@
 // ==================================================
 
 import { applyCors } from "../src/middlewares/cors.js";
+import handleMlWebhookRoute from "../src/handlers/ml/mlWebhookRoutes.js";
 
 const DEBUG_ML_FIELD_MAP_PATH = "/api/debug/marketplaces/mercado-livre/listings/field-map";
 const DEBUG_ML_COVER_COMPARE_PATH = "/api/debug/ml/listing-cover-compare";
 const DEBUG_ML_LISTINGS_COVER_CONTEXT_PATH = "/api/debug/ml/listings-cover-context";
 console.log("[S7 API Router] boot — rotas diagnóstico ML:", DEBUG_ML_FIELD_MAP_PATH, DEBUG_ML_COVER_COMPARE_PATH, DEBUG_ML_LISTINGS_COVER_CONTEXT_PATH);
 console.log("[S7 API Router] boot — ML OAuth diag: GET /api/ml/oauth-config");
+console.log("[S7 API Router] boot — billing: GET /api/billing/ping · GET /api/billing/plans · POST /api/billing/checkout/card · POST /api/billing/checkout/start · GET /api/billing/webhooks/asaas/health · POST /api/billing/webhooks/asaas · POST /api/jobs/billing-renewal-engine · POST /api/jobs/billing-consistency-check · POST /api/billing/renewals/:id/pay");
+console.log("[S7 API Router] boot — legal: GET /api/legal/documents · GET /api/legal/documents/terms-of-use · GET /api/legal/documents/privacy-policy · POST /api/legal/document-acceptances");
+console.log("[S7 API Router] boot — signup: POST /api/signup/pending-birth · bind · abort · complete-birth");
+console.log("[S7 API Router] boot — onboarding: GET /api/onboarding/configuration-snapshot");
+console.log("[S7 API Router] boot — notifications: POST /api/jobs/daily-sales-summary-automation");
+console.log("[S7 API Router] boot — competition: POST /api/jobs/competition-daily-snapshot");
+console.log("[S7 API Router] boot — pricing: POST /api/jobs/pricing-current-state-backfill");
+console.log("[S7 API Router] boot — notifications: POST /api/notifications/manual/competition-report");
 
 /**
  * Resolve rota lógica para o router único (/api + __path no Vercel).
@@ -124,6 +133,49 @@ export default async function handler(req, res) {
   try {
     const baseUrl = `http://${req.headers?.host || "localhost"}`;
     const rawUrl = req.url || "/api";
+    const methodUpper = String(req.method || "GET").toUpperCase();
+
+    // ------------------------------
+    // ML ingest webhook — PRIMEIRO (antes de qualquer outro roteamento).
+    // Vercel: rawUrl pode ser /api/ml/webhook?__path=...; evitar substring "ml/webhook" (colide com ml-webhook-events).
+    // ------------------------------
+    {
+      const rawLower = String(rawUrl || "").toLowerCase();
+      const pathResolvedEarly = resolveRouterPath(rawUrl, baseUrl);
+      const pathNormEarly =
+        String(pathResolvedEarly || "")
+          .replace(/\/+$/, "")
+          .replace(/\/{2,}/g, "/") || "/";
+      const isMlWebhookEventsJob =
+        rawLower.includes("ml-webhook-events") ||
+        rawLower.includes("jobs%2fml-webhook-events") ||
+        rawLower.includes("jobs/ml-webhook-events");
+      const pathMatchIngest =
+        pathNormEarly === "/api/ml/webhook" ||
+        pathNormEarly === "/ml/webhook" ||
+        pathNormEarly === "/api/ml/webhooks" ||
+        pathNormEarly === "/ml/webhooks";
+      const rawMatchIngest =
+        rawLower.includes("/api/ml/webhook") ||
+        rawLower.includes("/api/ml/webhooks") ||
+        rawLower.includes("/ml/webhook") ||
+        rawLower.includes("/ml/webhooks") ||
+        rawLower.includes("__path=ml%2fwebhook") ||
+        rawLower.includes("__path=ml%2Fwebhook") ||
+        rawLower.includes("__path=api%2fml%2fwebhook") ||
+        rawLower.includes("__path=api%2Fml%2Fwebhook") ||
+        rawLower.includes("__path=ml/webhook") ||
+        rawLower.includes("__path=api/ml/webhook");
+      if (!isMlWebhookEventsJob && (pathMatchIngest || rawMatchIngest)) {
+        console.info("[ml/webhook] route_matched", {
+          pathNorm: pathNormEarly,
+          pathResolved: pathResolvedEarly,
+          rawUrl,
+          method: methodUpper,
+        });
+        return await handleMlWebhookRoute(req, res);
+      }
+    }
 
     // ------------------------------
     // HOTFIX — Job ML Webhook Events
@@ -155,15 +207,30 @@ export default async function handler(req, res) {
         router_version: "marketplace-account-sync-rawurl-hotfix-v1",
       });
 
-      const mod = await import("../src/handlers/jobs/marketplaceAccountSyncJob.js");
-      return mod.handleJobsMarketplaceAccountSync(req, res);
+      try {
+        const mod = await import("../src/handlers/jobs/marketplaceAccountSyncJob.js");
+        return await mod.handleJobsMarketplaceAccountSync(req, res);
+      } catch (syncRouteErr) {
+        console.error("[S7 API Router] marketplace-account-sync route failed", {
+          phase: "import_or_handler",
+          message: syncRouteErr?.message ?? String(syncRouteErr),
+          name: syncRouteErr?.name ?? null,
+          code: syncRouteErr?.code ?? null,
+          stack: syncRouteErr?.stack ?? null,
+        });
+        throw syncRouteErr;
+      }
     }
 
     const url = new URL(rawUrl, baseUrl);
     const path = resolveRouterPath(rawUrl, baseUrl);
+    const pathNorm = String(path || "")
+      .replace(/\/+$/, "")
+      .replace(/\/{2,}/g, "/") || "/";
 
     console.log("[S7 API Router] resolved path", {
       path,
+      pathNorm,
       rawUrl,
       method: req.method,
       router_version: "ml-webhook-job-top-route-v1",
@@ -203,8 +270,19 @@ export default async function handler(req, res) {
         router_version: "marketplace-account-sync-route-v1",
       });
 
-      const mod = await import("../src/handlers/jobs/marketplaceAccountSyncJob.js");
-      return mod.handleJobsMarketplaceAccountSync(req, res);
+      try {
+        const mod = await import("../src/handlers/jobs/marketplaceAccountSyncJob.js");
+        return await mod.handleJobsMarketplaceAccountSync(req, res);
+      } catch (syncRouteErr) {
+        console.error("[S7 API Router] marketplace-account-sync route failed", {
+          phase: "import_or_handler",
+          message: syncRouteErr?.message ?? String(syncRouteErr),
+          name: syncRouteErr?.name ?? null,
+          code: syncRouteErr?.code ?? null,
+          stack: syncRouteErr?.stack ?? null,
+        });
+        throw syncRouteErr;
+      }
     }
 
     req.query = Object.fromEntries(url.searchParams);
@@ -220,9 +298,76 @@ export default async function handler(req, res) {
       });
     }
 
+    if (path === "/api/public/fale-conosco/contact" && req.method === "POST") {
+      const mod = await import("../src/handlers/public/faleConoscoContactApi.js");
+      return mod.handleFaleConoscoContact(req, res);
+    }
+
+    // ------------------------------
+    // Billing — cedo no router (path + pathNorm + rawUrl; evita 404 se divergir normalização)
+    // Preview (Opção B / 6.9A.13A): bloqueia mutações financeiras no escopo Preview do projeto DEV.
+    // ------------------------------
+    if (
+      pathNorm.startsWith("/api/billing") ||
+      path.startsWith("/api/billing") ||
+      /(?:^|[?&])__path=(?:api%2F|api%2f)?billing/i.test(String(rawUrl || "")) ||
+      /(?:^|[?&])__path=billing\//i.test(String(rawUrl || "")) ||
+      /\/api\/billing/i.test(String(rawUrl || ""))
+    ) {
+      const billingPath =
+        String(pathNorm && pathNorm !== "/" ? pathNorm : path || "")
+          .replace(/\/+$/, "")
+          .replace(/\/{2,}/g, "/") || "/";
+      const method = String(req.method || "GET").toUpperCase();
+      const isReadOnlyBilling =
+        method === "GET" || method === "HEAD" || method === "OPTIONS";
+      if (!isReadOnlyBilling) {
+        const { isBillingFinancialMutationBlocked, billingPreviewBlockedPayload } = await import(
+          "../src/billing/services/billingPreviewRuntimeGuard.js"
+        );
+        if (isBillingFinancialMutationBlocked()) {
+          console.warn("[S7_BILLING] BILLING_RUNTIME_ENVIRONMENT_UNCONFIRMED", { path: billingPath, method });
+          return res.status(403).json(billingPreviewBlockedPayload(billingPath));
+        }
+      }
+      const mod = await import("../src/billing/routes/billingRoutes.js");
+      return mod.handleBillingRoutes(req, res, billingPath);
+    }
+
+    // ------------------------------
+    // Legal — aceites de documentos (SignUp Termos de Uso)
+    // Mesmo handler em dev-server (api/index.js) e Vercel router único.
+    // ------------------------------
+    if (pathNorm.startsWith("/api/legal") || path.startsWith("/api/legal")) {
+      const legalPath =
+        String(pathNorm && pathNorm !== "/" ? pathNorm : path || "")
+          .replace(/\/+$/, "")
+          .replace(/\/{2,}/g, "/") || "/";
+      const mod = await import("../src/legal/routes/legalRoutes.js");
+      const handled = await mod.handleLegalRoutes(req, res, legalPath);
+      if (handled !== null && handled !== undefined) return handled;
+    }
+
+    // ------------------------------
+    // Signup two-phase — pending birth / bind / complete
+    // ------------------------------
+    if (pathNorm.startsWith("/api/signup") || path.startsWith("/api/signup")) {
+      const signupPath =
+        String(pathNorm && pathNorm !== "/" ? pathNorm : path || "")
+          .replace(/\/+$/, "")
+          .replace(/\/{2,}/g, "/") || "/";
+      const mod = await import("../src/signup/routes/signupRoutes.js");
+      const handled = await mod.handleSignupRoutes(req, res, signupPath);
+      if (handled !== null && handled !== undefined) return handled;
+    }
+
     // ------------------------------
     // Rotas (lazy import — FASE 2)
     // ------------------------------
+    if (path === "/api/user/profile-summary" && req.method === "GET") {
+      const mod = await import("../src/handlers/user/profileSummary.js");
+      return mod.handleUserProfileSummary(req, res);
+    }
     if (path === "/api/user/preferences") {
       const mod = await import("../src/handlers/user/preferences.js");
       return mod.handleUserPreferences(req, res);
@@ -231,6 +376,63 @@ export default async function handler(req, res) {
       const mod = await import("../src/handlers/user/preferencesReset.js");
       return mod.handleUserPreferencesReset(req, res);
     }
+    if (path === "/api/internal/notifications/email/process") {
+      const mod = await import("../src/handlers/notifications/processEmailOutboxApi.js");
+      return mod.handleProcessEmailOutbox(req, res);
+    }
+    if (path === "/api/internal/notifications/whatsapp/process") {
+      const mod = await import("../src/handlers/notifications/processWhatsAppOutboxApi.js");
+      return mod.handleProcessWhatsAppOutbox(req, res);
+    }
+    if (
+      path === "/api/notifications/inbox" ||
+      path === "/api/notifications/inbox/read-all" ||
+      /^\/api\/notifications\/inbox\/[^/]+\/read$/.test(path)
+    ) {
+      const mod = await import("../src/handlers/notifications/sellerNotificationInboxApi.js");
+      return mod.handleNotificationInboxRoutes(req, res, path);
+    }
+    if (path === "/api/notifications/manual/sale-rayx" && req.method === "POST") {
+      const mod = await import("../src/handlers/notifications/saleRayxManualNotificationApi.js");
+      return mod.handleSaleRayxManualNotification(req, res);
+    }
+    if (path === "/api/notifications/manual/sales-report" && req.method === "POST") {
+      const mod = await import("../src/handlers/notifications/salesReportManualNotificationApi.js");
+      return mod.handleSalesReportManualNotification(req, res);
+    }
+    if (path === "/api/notifications/manual/competition-report" && req.method === "POST") {
+      const mod = await import("../src/handlers/notifications/competitionReportManualNotificationApi.js");
+      return mod.handleCompetitionReportManualNotification(req, res);
+    }
+    if (path === "/api/notifications/categories" && req.method === "GET") {
+      const mod = await import("../src/handlers/notifications/sellerNotificationSellerApi.js");
+      return mod.handleNotificationSellerCategories(req, res);
+    }
+    if (path === "/api/notifications/preferences" && (req.method === "GET" || req.method === "PATCH")) {
+      const mod = await import("../src/handlers/notifications/sellerNotificationSellerApi.js");
+      return mod.handleNotificationSellerPreferences(req, res);
+    }
+    if (
+      path === "/api/notifications/event-delivery-rules" &&
+      (req.method === "GET" || req.method === "PATCH")
+    ) {
+      const mod = await import("../src/handlers/notifications/sellerNotificationSellerApi.js");
+      return mod.handleNotificationSellerEventDeliveryRules(req, res);
+    }
+    if (
+      path === "/api/notifications/automation-rules/daily-sales-summary" &&
+      (req.method === "GET" || req.method === "PATCH")
+    ) {
+      const mod = await import("../src/handlers/notifications/sellerNotificationSellerApi.js");
+      return mod.handleNotificationSellerDailySalesSummaryAutomation(req, res);
+    }
+    if (
+      (path === "/api/notifications/recipients" && (req.method === "GET" || req.method === "POST")) ||
+      /^\/api\/notifications\/recipients\/[^/]+$/.test(path)
+    ) {
+      const mod = await import("../src/handlers/notifications/sellerNotificationSellerApi.js");
+      return mod.handleNotificationSellerRecipients(req, res, path);
+    }
     if (path === "/api/notifications") {
       const mod = await import("../src/handlers/notifications/index.js");
       return mod.handleNotifications(req, res);
@@ -238,6 +440,50 @@ export default async function handler(req, res) {
     if (path === "/api/notifications/mark-read") {
       const mod = await import("../src/handlers/notifications/markRead.js");
       return mod.handleNotificationsMarkRead(req, res);
+    }
+    if (path === "/api/notifications/contacts" && (req.method === "GET" || req.method === "POST")) {
+      const mod = await import("../src/handlers/notifications/notificationContacts.js");
+      return mod.handleNotificationContacts(req, res);
+    }
+    if (/^\/api\/notifications\/contacts\/[^/]+$/.test(path)) {
+      const mod = await import("../src/handlers/notifications/notificationContacts.js");
+      return mod.handleNotificationContactById(req, res, path);
+    }
+    if (path === "/api/notifications/routing-rules" && (req.method === "GET" || req.method === "PUT")) {
+      const mod = await import("../src/handlers/notifications/notificationRoutingRules.js");
+      return mod.handleNotificationRoutingRules(req, res);
+    }
+    if (path === "/api/notifications/debug/resolve" && req.method === "GET") {
+      const mod = await import("../src/handlers/notifications/debugResolve.js");
+      return mod.handleNotificationsDebugResolve(req, res);
+    }
+    if (path === "/api/notifications/routing-summary" && req.method === "GET") {
+      const mod = await import("../src/handlers/notifications/notificationRoutingSummary.js");
+      return mod.handleNotificationRoutingSummary(req, res);
+    }
+    if (path === "/api/notifications/debug/simulate" && req.method === "POST") {
+      const mod = await import("../src/handlers/notifications/notificationDebugSimulate.js");
+      return mod.handleNotificationDebugSimulate(req, res);
+    }
+    if (/^\/api\/notifications\/deliveries\/[^/]+\/retry$/.test(path) && req.method === "POST") {
+      const mod = await import("../src/handlers/notifications/notificationDeliveryRetry.js");
+      return mod.handleNotificationDeliveryRetry(req, res, path);
+    }
+    if (/^\/api\/notifications\/deliveries\/[^/]+\/cancel$/.test(path) && req.method === "POST") {
+      const mod = await import("../src/handlers/notifications/notificationDeliveryCancel.js");
+      return mod.handleNotificationDeliveryCancel(req, res, path);
+    }
+    if (path === "/api/notifications/deliveries" && req.method === "GET") {
+      const mod = await import("../src/handlers/notifications/notificationDeliveriesList.js");
+      return mod.handleNotificationDeliveriesList(req, res);
+    }
+    if (path === "/api/notifications/events" && req.method === "GET") {
+      const mod = await import("../src/handlers/notifications/notificationEventsList.js");
+      return mod.handleNotificationEventsList(req, res);
+    }
+    if (/^\/api\/notifications\/events\/[^/]+$/.test(path) && req.method === "GET") {
+      const mod = await import("../src/handlers/notifications/notificationEventDetail.js");
+      return mod.handleNotificationEventDetail(req, res, path);
     }
     if (path === "/api/drafts/upsert") {
       const mod = await import("../src/handlers/drafts/upsert.js");
@@ -283,15 +529,79 @@ export default async function handler(req, res) {
       const mod = await import("../src/handlers/ml/listingsHealthBackfill.js");
       return await mod.default(req, res);
     }
+    if (path === "/api/ml/backfill-listing-quality") {
+      const mod = await import("../src/handlers/ml/listingsListingQualityBackfill.js");
+      return await mod.default(req, res);
+    }
+    if (path === "/api/ml/listings/accumulated-performance" && req.method === "GET") {
+      const mod = await import("../src/handlers/ml/listingAccumulatedPerformance.js");
+      return await mod.default(req, res);
+    }
+    if (path === "/api/ml/listings/catalog-pricing-health-buckets" && req.method === "GET") {
+      const mod = await import("../src/handlers/ml/catalogPricingHealthBuckets.js");
+      return mod.handleMlListingsCatalogPricingHealthBuckets(req, res);
+    }
     if (path === "/api/ml/listings") {
       const mod = await import("../src/handlers/ml/listingsList.js");
+      return await mod.default(req, res);
+    }
+    if (path === "/api/ml/listings/detail" && req.method === "GET") {
+      const mod = await import("../src/handlers/ml/listingEditorDetail.js");
+      return await mod.default(req, res);
+    }
+    if (path === "/api/ml/listings/content") {
+      const mod = await import("../src/handlers/ml/listingEditorContentUpdate.js");
+      return await mod.default(req, res);
+    }
+    if (path === "/api/ml/listings/stock-settings") {
+      const mod = await import("../src/handlers/ml/listingEditorStockSettingsUpdate.js");
+      return await mod.default(req, res);
+    }
+    if (path === "/api/ml/listings/primary-picture-settings") {
+      const mod = await import("../src/handlers/ml/listingEditorPrimaryPictureSettingsUpdate.js");
+      return await mod.default(req, res);
+    }
+    if (path === "/api/ml/listings/description-settings") {
+      const mod = await import("../src/handlers/ml/listingEditorDescriptionSettingsUpdate.js");
+      return await mod.default(req, res);
+    }
+    if (path === "/api/ml/listings/measurement-settings") {
+      const mod = await import("../src/handlers/ml/listingEditorMeasurementSettingsUpdate.js");
       return await mod.default(req, res);
     }
     if (path === "/api/ml/listings/set-sku") {
       const mod = await import("../src/handlers/ml/listingSetSku.js");
       return await mod.default(req, res);
     }
+    if (path === "/api/ml/listings/sku-lookup") {
+      const mod = await import("../src/handlers/ml/listingSkuLookup.js");
+      return await mod.default(req, res);
+    }
     if (path === "/api/ml/listings/pricing-scenarios") {
+      const mod = await import("../src/handlers/ml/listingPricingScenarios.js");
+      return await mod.default(req, res);
+    }
+    const mlListingPromotionsDebugMatch = path.match(
+      /^\/api\/ml\/listings\/([^/]+)\/promotions\/debug\/?$/,
+    );
+    if (mlListingPromotionsDebugMatch && req.method === "GET") {
+      req.params = { ...(req.params || {}), listingId: mlListingPromotionsDebugMatch[1] };
+      const mod = await import("../src/handlers/ml/listingPromotionsFreshnessDebug.js");
+      return mod.default(req, res);
+    }
+    if (path === "/api/ml/listings/pricing-simulate-scenario" && req.method === "POST") {
+      const mod = await import("../src/handlers/ml/listingPricingSimulateScenario.js");
+      return await mod.default(req, res);
+    }
+    if (
+      path === "/api/ml/listings/pricing-simulation-config" &&
+      (req.method === "GET" || req.method === "POST")
+    ) {
+      const mod = await import("../src/handlers/ml/listingPricingSimulationConfig.js");
+      return await mod.default(req, res);
+    }
+    /** Alias histórico: mesmo handler que `pricing-scenarios` (contrato canônico no FE). */
+    if (path === "/api/ml/listings/sale-xray-modal") {
       const mod = await import("../src/handlers/ml/listingPricingScenarios.js");
       return await mod.default(req, res);
     }
@@ -307,16 +617,51 @@ export default async function handler(req, res) {
       const mod = await import("../src/handlers/ml/salesSummary.js");
       return await mod.default(req, res);
     }
+    if (path === "/api/sales/detail" && req.method === "GET") {
+      const mod = await import("../src/handlers/sales/detail.js");
+      return mod.default(req, res);
+    }
     if (path === "/api/sales" && req.method === "GET") {
       const mod = await import("../src/handlers/sales/list.js");
+      return mod.default(req, res);
+    }
+    if (path === "/api/sales/executive-summary" && req.method === "GET") {
+      const mod = await import("../src/handlers/sales/executiveSummary.js");
+      return mod.default(req, res);
+    }
+    if (path === "/api/sales/top10" && req.method === "GET") {
+      const mod = await import("../src/handlers/sales/top10.js");
       return mod.default(req, res);
     }
     if (path === "/api/sales/summary" && req.method === "GET") {
       const mod = await import("../src/handlers/sales/summary.js");
       return mod.default(req, res);
     }
+    if (path === "/api/dev/billing/entitlement-unclassified-probe" && req.method === "GET") {
+      const mod = await import("../src/handlers/dev/billingEntitlementUnclassifiedProbe.js");
+      return mod.default(req, res);
+    }
+    if (
+      (path === "/api/dev/sales/refresh-financial-contracts" ||
+        /^\/api\/dev\/sales\/[^/]+\/refresh-financial-contract$/.test(path)) &&
+      req.method === "POST"
+    ) {
+      const mod = await import("../src/handlers/sales/saleFinancialContractRefresh.js");
+      return mod.handleSaleFinancialContractRefresh(req, res, path);
+    }
     if (path === "/api/pricing/simulate") {
       const mod = await import("../src/handlers/pricing/simulate.js");
+      return mod.default(req, res);
+    }
+    const pricingFinancialSettingsMatch = path.match(
+      /^\/api\/pricing\/intelligent\/([^/]+)\/financial-settings$/,
+    );
+    if (
+      pricingFinancialSettingsMatch &&
+      (req.method === "PATCH" || req.method === "GET")
+    ) {
+      req.params = { listing_id: pricingFinancialSettingsMatch[1] };
+      const mod = await import("../src/handlers/pricing/intelligentFinancialSettings.js");
       return mod.default(req, res);
     }
     if (path === "/api/pricing/apply") {
@@ -332,6 +677,14 @@ export default async function handler(req, res) {
     if (path === "/api/products/health") {
       const mod = await import("../src/handlers/products/health.js");
       return mod.handleProductsHealth(req, res);
+    }
+    if (path === "/api/products/costs/pending") {
+      const mod = await import("../src/handlers/products/costsPendingList.js");
+      return mod.handleProductsCostsPendingList(req, res);
+    }
+    if (path === "/api/products/costs/batch") {
+      const mod = await import("../src/handlers/products/costsBatchSave.js");
+      return mod.handleProductsCostsBatchSave(req, res);
     }
     if (path === "/api/products/upsert") {
       const mod = await import("../src/handlers/products/upsert.js");
@@ -357,9 +710,122 @@ export default async function handler(req, res) {
       const mod = await import("../src/handlers/products/catalogRankings.js");
       return mod.handleProductsCatalogRankings(req, res);
     }
+    if (path === "/api/products/catalog-financial") {
+      const mod = await import("../src/handlers/products/catalogFinancial.js");
+      return mod.handleProductsCatalogFinancial(req, res);
+    }
+    if (path === "/api/products/catalog-health-buckets") {
+      const mod = await import("../src/handlers/products/catalogHealthBuckets.js");
+      return mod.handleProductsCatalogHealthBuckets(req, res);
+    }
+    if (path === "/api/dashboard/products-health-summary" && req.method === "GET") {
+      const mod = await import("../src/handlers/dashboard/productsHealthSummary.js");
+      return mod.handleDashboardProductsHealthSummary(req, res);
+    }
+    if (path === "/api/dashboard/listings-health-summary" && req.method === "GET") {
+      const mod = await import("../src/handlers/dashboard/listingsHealthSummary.js");
+      return mod.handleDashboardListingsHealthSummary(req, res);
+    }
+    if (path === "/api/dashboard/competition-health-summary" && req.method === "GET") {
+      const mod = await import("../src/handlers/dashboard/competitionHealthSummary.js");
+      return mod.handleDashboardCompetitionHealthSummary(req, res);
+    }
+    if (path === "/api/dashboard/pricing-health-summary" && req.method === "GET") {
+      const mod = await import("../src/handlers/dashboard/pricingHealthSummary.js");
+      return mod.handleDashboardPricingHealthSummary(req, res);
+    }
+    if (path === "/api/dashboard/operational-tasks" && req.method === "GET") {
+      const mod = await import("../src/handlers/dashboard/operationalTasks.js");
+      return mod.handleDashboardOperationalTasks(req, res);
+    }
+    if (path === "/api/onboarding/configuration-snapshot" && req.method === "GET") {
+      const mod = await import("../src/handlers/onboarding/configurationSnapshot.js");
+      return mod.handleOnboardingConfigurationSnapshot(req, res);
+    }
+    if (/^\/api\/products\/[^/]+\/images\/sync-listings\/?$/.test(path)) {
+      const mod = await import("../src/handlers/products/productImageSync.js");
+      return mod.default(req, res);
+    }
+    if (/^\/api\/products\/[^/]+\/titles\/sync-listings\/?$/.test(path)) {
+      const mod = await import("../src/handlers/products/productTitleSync.js");
+      return mod.default(req, res);
+    }
+    if (/^\/api\/products\/[^/]+\/descriptions\/sync-listings\/?$/.test(path)) {
+      const mod = await import("../src/handlers/products/productDescriptionSync.js");
+      return mod.default(req, res);
+    }
     if (path === "/api/jobs/stock-min-check") {
       const mod = await import("../src/handlers/jobs/stockMinCheck.js");
       return mod.handleJobsStockMinCheck(req, res);
+    }
+    if (path === "/api/jobs/process-notification-deliveries") {
+      const mod = await import("../src/handlers/jobs/processNotificationDeliveriesJob.js");
+      return mod.handleJobsProcessNotificationDeliveries(req, res);
+    }
+    if (path === "/api/jobs/daily-sales-summary-automation") {
+      const mod = await import("../src/handlers/jobs/dailySalesSummaryAutomationJob.js");
+      return mod.handleJobsDailySalesSummaryAutomation(req, res);
+    }
+    if (path === "/api/jobs/competition-daily-snapshot") {
+      const mod = await import("../src/handlers/jobs/competitionDailySnapshotJob.js");
+      return mod.handleJobsCompetitionDailySnapshot(req, res);
+    }
+    if (path === "/api/jobs/pricing-current-state-backfill") {
+      const mod = await import("../src/handlers/jobs/pricingCurrentStateBackfillJob.js");
+      return mod.handleJobsPricingCurrentStateBackfill(req, res);
+    }
+    if (
+      path === "/api/jobs/billing-process-period-expirations" ||
+      path === "/api/jobs/billing-process-overdues" ||
+      path === "/api/jobs/billing-process-renewals" ||
+      path === "/api/jobs/billing-renewal-engine" ||
+      path === "/api/jobs/billing-consistency-check" ||
+      path === "/api/jobs/billing-billable-sale-admission-reconciler" ||
+      path === "/jobs/billing-billable-sale-admission-reconciler" ||
+      path === "/api/jobs/billing-trial-lifecycle-reconciler" ||
+      path === "/jobs/billing-trial-lifecycle-reconciler"
+    ) {
+      const { isBillingFinancialMutationBlocked, billingPreviewBlockedPayload } = await import(
+        "../src/billing/services/billingPreviewRuntimeGuard.js"
+      );
+      if (isBillingFinancialMutationBlocked()) {
+        console.warn("[S7_BILLING] BILLING_RUNTIME_ENVIRONMENT_UNCONFIRMED", { path });
+        return res.status(403).json(billingPreviewBlockedPayload(path));
+      }
+    }
+    if (path === "/api/jobs/billing-process-period-expirations") {
+      const mod = await import("../src/handlers/jobs/billingPeriodExpirationsJob.js");
+      return mod.handleJobsBillingProcessPeriodExpirations(req, res);
+    }
+    if (path === "/api/jobs/billing-process-overdues") {
+      const mod = await import("../src/handlers/jobs/billingOverduesJob.js");
+      return mod.handleJobsBillingProcessOverdues(req, res);
+    }
+    if (path === "/api/jobs/billing-process-renewals") {
+      const mod = await import("../src/handlers/jobs/billingRenewalsJob.js");
+      return mod.handleJobsBillingProcessRenewals(req, res);
+    }
+    if (path === "/api/jobs/billing-renewal-engine") {
+      const mod = await import("../src/handlers/jobs/billingRenewalEngineJob.js");
+      return mod.handleJobsBillingRenewalEngine(req, res);
+    }
+    if (path === "/api/jobs/billing-consistency-check") {
+      const mod = await import("../src/handlers/jobs/billingConsistencyCheckJob.js");
+      return mod.handleJobsBillingConsistencyCheck(req, res);
+    }
+    if (
+      path === "/api/jobs/billing-billable-sale-admission-reconciler" ||
+      path === "/jobs/billing-billable-sale-admission-reconciler"
+    ) {
+      const mod = await import("../src/handlers/jobs/billingBillableSaleAdmissionReconcilerJob.js");
+      return mod.default(req, res);
+    }
+    if (
+      path === "/api/jobs/billing-trial-lifecycle-reconciler" ||
+      path === "/jobs/billing-trial-lifecycle-reconciler"
+    ) {
+      const mod = await import("../src/handlers/jobs/billingTrialLifecycleReconcilerJob.js");
+      return mod.default(req, res);
     }
     if (path === "/api/images/seo-rename") {
       const mod = await import("../src/handlers/images/seoRename.js");
@@ -390,6 +856,25 @@ export default async function handler(req, res) {
       const mod = await import("../src/handlers/marketplace/accounts.js");
       return mod.default(req, res);
     }
+    if (path === "/api/marketplace/import-intelligence" && req.method === "GET") {
+      const mod = await import("../src/handlers/marketplace/importIntelligenceSummary.js");
+      return mod.default(req, res);
+    }
+    // S_4.6.2 — domínio seller (JWT user scope). Não confundir com /api/dev-center/customers-global.
+    if (path === "/api/customers" && req.method === "GET") {
+      const mod = await import("../src/handlers/customers/list.js");
+      return mod.default(req, res);
+    }
+    if (/^\/api\/customers\/[^/]+$/.test(path) && req.method === "GET") {
+      const m = path.match(/^\/api\/customers\/([^/]+)$/);
+      req.params = { ...(req.params || {}), customerId: m?.[1] || null };
+      const mod = await import("../src/handlers/customers/detail.js");
+      return mod.default(req, res);
+    }
+    if (/^\/api\/marketplace\/accounts\/[^/]+\/start-initial-sync$/.test(path) && req.method === "POST") {
+      const mod = await import("../src/handlers/marketplace/accountStartInitialSync.js");
+      return mod.default(req, res, path);
+    }
     if (/^\/api\/marketplace\/accounts\/[^/]+\/sync-status$/.test(path) && req.method === "GET") {
       const mod = await import("../src/handlers/marketplace/accountSyncStatus.js");
       return mod.default(req, res, path);
@@ -399,10 +884,18 @@ export default async function handler(req, res) {
       return mod.default(req, res, path);
     }
 
-    if (
-      path === "/api/competition/listings" ||
-      /^\/api\/competition\/listing\/[^/]+\/(overview|discover|select|insights)$/.test(path)
-    ) {
+    // Concorrência Inteligente: roteamento interno fica no handler
+    // (products, products/:id/competitors, competitors/:id, discover, + rotas legadas).
+    if (path === "/api/competition" || path.startsWith("/api/competition/")) {
+      console.info("[S7_COMPETITION_AUDIT_BOOT]", {
+        module: "api_index_competition_gate",
+        path,
+        node_env: process.env.NODE_ENV ?? null,
+        vercel_env: process.env.VERCEL_ENV ?? null,
+        vercel_url: process.env.VERCEL_URL ?? null,
+        sales_audit_flag: process.env.S7_COMPETITION_SALES_AUDIT ?? null,
+        at: new Date().toISOString(),
+      });
       const mod = await import("../src/handlers/competition/index.js");
       return mod.default(req, res, path);
     }

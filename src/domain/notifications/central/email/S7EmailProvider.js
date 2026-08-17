@@ -1,0 +1,272 @@
+// =============================================================================
+// Provider de envio — mock / Resend / SendGrid via env (sem hardcode de API key)
+// =============================================================================
+
+import { config } from "../../../../infra/config.js";
+import {
+  evaluateEmailSendPolicy,
+  getEmailSandboxWhitelist,
+  isDevSandboxEmailMode,
+  isEmailSandboxWhitelisted,
+} from "./emailSandboxPolicy.js";
+import { logEmailNotification } from "./emailLog.js";
+
+/**
+ * @typedef {Object} S7EmailSendInput
+ * @property {string} to
+ * @property {string} subject
+ * @property {string} html
+ * @property {string} text
+ * @property {Record<string, unknown>} [metadata]
+ * @property {"fale_conosco"} [policyContext] — formulário público: Resend live sem whitelist de seller
+ */
+
+/**
+ * @typedef {Object} S7EmailSendResult
+ * @property {boolean} ok
+ * @property {boolean} [simulated]
+ * @property {string} [provider]
+ * @property {string} [providerMessageId]
+ * @property {string} [error]
+ * @property {Record<string, unknown>} [raw]
+ */
+
+/**
+ * @returns {boolean}
+ */
+export function isRealEmailProviderConfigured() {
+  const mode = String(config.s7EmailMode ?? "").toLowerCase();
+  if (mode === "mock" || mode === "simulate") return false;
+
+  const provider = String(config.s7EmailProvider ?? "").toLowerCase();
+  if (provider === "resend" && config.resendApiKey) return true;
+  if (provider === "sendgrid" && config.sendgridApiKey) return true;
+  return false;
+}
+
+/**
+ * Envio real permitido (Resend/SendGrid) — inclui dev_sandbox com API key.
+ * @returns {boolean}
+ */
+export function canSendRealEmailNow() {
+  if (!isRealEmailProviderConfigured() && !isDevSandboxEmailMode()) return false;
+  if (isDevSandboxEmailMode()) {
+    const provider = String(config.s7EmailProvider ?? "").toLowerCase();
+    if (provider === "resend" && config.resendApiKey) return true;
+    if (provider === "sendgrid" && config.sendgridApiKey) return true;
+    return false;
+  }
+  return isRealEmailProviderConfigured();
+}
+
+/**
+ * @param {S7EmailSendInput} input
+ * @returns {Promise<S7EmailSendResult>}
+ */
+export async function sendS7Email(input) {
+  const to = String(input.to ?? "").trim().toLowerCase();
+  if (!to || !to.includes("@")) {
+    return { ok: false, error: "INVALID_EMAIL" };
+  }
+
+  if (input.policyContext === "fale_conosco") {
+    return sendFaleConoscoPublicFormEmail(input, to);
+  }
+
+  const policy = evaluateEmailSendPolicy(to);
+  if (!policy.allowed) {
+    logEmailNotification("BLOCKED", {
+      reason: policy.reason ?? "NOT_WHITELISTED",
+      to_masked: maskEmailForLog(to),
+      mode: policy.mode,
+    });
+    return { ok: false, error: policy.reason ?? "NOT_WHITELISTED", blocked: true };
+  }
+
+  const whitelistActive = getEmailSandboxWhitelist().length > 0;
+  const maySendReal =
+    canSendRealEmailNow() && (!whitelistActive || isEmailSandboxWhitelisted(to));
+
+  if (maySendReal) {
+    const provider = String(config.s7EmailProvider ?? "").toLowerCase();
+    if (provider === "resend") return sendViaResend(input, to);
+    if (provider === "sendgrid") {
+      return { ok: false, error: "SENDGRID_NOT_IMPLEMENTED", provider: "sendgrid" };
+    }
+  }
+
+  if (!isRealEmailProviderConfigured() && !isDevSandboxEmailMode()) {
+    const mockId = `s7_mock_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    logEmailNotification("SENT", {
+      simulated: true,
+      provider: "mock",
+      provider_message_id: mockId,
+      subject_preview: String(input.subject ?? "").slice(0, 80),
+    });
+    return {
+      ok: true,
+      simulated: true,
+      provider: "mock",
+      providerMessageId: mockId,
+      raw: { mock: true },
+    };
+  }
+
+  if (isDevSandboxEmailMode()) {
+    const mockId = `s7_sandbox_mock_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    logEmailNotification("SENT", {
+      simulated: true,
+      provider: "sandbox_mock",
+      provider_message_id: mockId,
+      subject_preview: String(input.subject ?? "").slice(0, 80),
+      whitelist_only: true,
+    });
+    return {
+      ok: true,
+      simulated: true,
+      provider: "sandbox_mock",
+      providerMessageId: mockId,
+      raw: { sandbox: true, whitelist: true },
+    };
+  }
+
+  return { ok: false, error: "UNKNOWN_PROVIDER" };
+}
+
+/**
+ * Fale Conosco — mesmo contrato da Edge legada: Resend real quando configurado.
+ * Não retorna sucesso simulado (mock) para evitar falso positivo no modal.
+ * @param {S7EmailSendInput} input
+ * @param {string} to
+ * @returns {Promise<S7EmailSendResult>}
+ */
+async function sendFaleConoscoPublicFormEmail(input, to) {
+  const provider = String(config.s7EmailProvider ?? "").toLowerCase();
+
+  if (provider === "resend" && config.resendApiKey) {
+    return sendViaResend(input, to);
+  }
+  if (provider === "sendgrid" && config.sendgridApiKey) {
+    return { ok: false, error: "SENDGRID_NOT_IMPLEMENTED", provider: "sendgrid" };
+  }
+
+  logEmailNotification("FALE_CONOSCO_UNAVAILABLE", {
+    to_masked: maskEmailForLog(to),
+    s7_email_mode: config.s7EmailMode ?? null,
+    s7_email_provider: provider,
+    resend_configured: Boolean(config.resendApiKey),
+  });
+  return { ok: false, error: "EMAIL_PROVIDER_NOT_CONFIGURED" };
+}
+
+/**
+ * @param {string} email
+ */
+function maskEmailForLog(email) {
+  const [user, domain] = String(email).split("@");
+  if (!domain) return "***";
+  const visible = user.length <= 2 ? "*" : `${user.slice(0, 2)}***`;
+  return `${visible}@${domain}`;
+}
+
+/**
+ * @param {string} dataUri
+ * @returns {string}
+ */
+function dataUriToBase64Payload(dataUri) {
+  const value = String(dataUri ?? "").trim();
+  if (!value) return "";
+  const marker = "base64,";
+  const idx = value.indexOf(marker);
+  if (idx >= 0) return value.slice(idx + marker.length);
+  if (!value.startsWith("data:")) return value;
+  return "";
+}
+
+/**
+ * @param {Record<string, unknown>} [metadata]
+ * @returns {Array<{ filename: string; content: string; content_id?: string }>}
+ */
+function buildResendAttachmentsFromMetadata(metadata) {
+  const meta = metadata && typeof metadata === "object" ? metadata : {};
+  if (meta.share_email_file_attachments !== true) return [];
+
+  /** @type {Array<{ filename: string; content: string; content_id?: string }>} */
+  const attachments = [];
+
+  const logoContent = dataUriToBase64Payload(meta.s7_mail_logo_data_uri);
+  if (logoContent) {
+    attachments.push({
+      filename: String(meta.s7_mail_logo_filename ?? "").trim() || "suse7-logo-abreviada.png",
+      content: logoContent,
+      content_id: "s7_mail_logo",
+    });
+  }
+
+  const imageContent = dataUriToBase64Payload(meta.share_image_data_uri);
+  if (imageContent) {
+    /** @type {{ filename: string; content: string; content_id?: string }} */
+    const imageAttachment = {
+      filename: String(meta.share_image_filename ?? "").trim() || "resumo-executivo.png",
+      content: imageContent,
+    };
+    if (meta.share_image_inline === true) {
+      imageAttachment.content_id = String(meta.share_image_content_id ?? "").trim() || "s7_report_summary";
+    }
+    attachments.push(imageAttachment);
+  }
+
+  const documentContent = dataUriToBase64Payload(meta.share_document_data_uri);
+  if (documentContent) {
+    attachments.push({
+      filename: String(meta.share_document_filename ?? "").trim() || "relatorio.xlsx",
+      content: documentContent,
+    });
+  }
+
+  return attachments;
+}
+
+/**
+ * @param {S7EmailSendInput} input
+ * @param {string} to
+ * @returns {Promise<S7EmailSendResult>}
+ */
+async function sendViaResend(input, to) {
+  const apiKey = config.resendApiKey;
+  if (!apiKey) return { ok: false, error: "RESEND_NOT_CONFIGURED" };
+
+  const from = config.s7EmailFrom || "Suse7 <notificacoes@suse7.com.br>";
+  const attachments = buildResendAttachmentsFromMetadata(input.metadata);
+  const res = await fetch("https://api.resend.com/emails", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      from,
+      to: [to],
+      subject: input.subject,
+      html: input.html,
+      text: input.text,
+      ...(attachments.length > 0 ? { attachments } : {}),
+    }),
+  });
+
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const errMsg = String(json?.message ?? json?.error ?? res.statusText ?? "resend_failed").slice(0, 500);
+    logEmailNotification("FAILED", { provider: "resend", status: res.status, error: errMsg });
+    return { ok: false, error: errMsg, provider: "resend", raw: { status: res.status } };
+  }
+
+  const messageId = json?.id != null ? String(json.id) : null;
+  logEmailNotification("SENT", { provider: "resend", provider_message_id: messageId });
+  return {
+    ok: true,
+    provider: "resend",
+    providerMessageId: messageId,
+    raw: { id: messageId },
+  };
+}

@@ -52,6 +52,36 @@ export function toFiniteFeeScalar(v) {
   return toFiniteNumber(v);
 }
 
+/**
+ * Valor monetário em linhas de pedido ML: número, string ou `{ amount | value | total }`.
+ *
+ * @param {unknown} v
+ * @returns {number | null}
+ */
+export function parseMlMoneyScalar(v) {
+  if (v == null || v === "") return null;
+  if (typeof v === "number" && Number.isFinite(v)) return v;
+  if (typeof v === "string") {
+    const t = v.trim();
+    if (!t) return null;
+    const lastComma = t.lastIndexOf(",");
+    const lastDot = t.lastIndexOf(".");
+    if (lastComma !== -1 && lastComma > lastDot) {
+      return toFiniteNumber(t.replace(/\./g, "").replace(",", "."));
+    }
+    if (lastDot !== -1 && lastDot > lastComma) {
+      return toFiniteNumber(t.replace(/,/g, ""));
+    }
+    return toFiniteNumber(t.replace(",", "."));
+  }
+  if (typeof v === "object" && !Array.isArray(v)) {
+    const o = /** @type {Record<string, unknown>} */ (v);
+    const inner = o.amount ?? o.value ?? o.total ?? o.base_amount;
+    if (inner != null && inner !== v) return parseMlMoneyScalar(inner);
+  }
+  return toFiniteNumber(v);
+}
+
 /** @param {unknown[]} vals */
 function coalescePositiveFeeAmountVals(...vals) {
   for (const v of vals) {
@@ -715,6 +745,10 @@ export function extractOfficialMercadoLibreListingPricesFee(listingPricesRow) {
   const r = /** @type {Record<string, unknown>} */ (listingPricesRow);
   const fromDetails = normalizeSaleFeeDetailsShape(r.sale_fee_details);
   let percent = fromDetails.percent != null && fromDetails.percent > 0 ? fromDetails.percent : null;
+  if (percent == null) {
+    const pctRoot = toFiniteNumber(r.sale_fee_percent ?? r.percentage_fee ?? r.meli_percentage_fee);
+    if (pctRoot != null && pctRoot > 0) percent = pctRoot;
+  }
   /** Tarifa efetiva: mesma regra que coalesceListingPricesPersistedFeeAmount (subsídio ML na tarifa). */
   const coalescedEffective = coalesceListingPricesPersistedFeeAmount(r);
   let amount =
@@ -1225,6 +1259,28 @@ export function extractMercadoLivreLogisticsSellerCost(saleFeeDetails, opts = {}
   }
 
   return result;
+}
+
+/**
+ * Soma créditos/estornos/bonificações do marketplace no breakdown de taxa (ex.: estorno +R$ 5,52 no painel ML).
+ * @param {unknown} saleFeeDetails
+ * @returns {number | null}
+ */
+export function extractMercadoLivrePositiveAdjustmentsFromSaleFeeDetails(saleFeeDetails) {
+  const raw = unwrapSaleFeeDetailsForLogistics(saleFeeDetails);
+  /** @type {Record<string, unknown>[]} */
+  const parts = [];
+  collectSaleFeeBreakdownLeafParts(raw, parts, 0);
+  let sum = 0;
+  for (const part of parts) {
+    if (!mlFeePartIsLikelyMarketplaceCostCredit(part)) continue;
+    if (mlFeePartIsLikelyShippingOrLogistics(part)) continue;
+    const amt = toFiniteNumber(
+      part.amount ?? part.value ?? part.gross_amount ?? part.total_amount ?? part.fixed_fee
+    );
+    if (amt != null && Math.abs(amt) > 0.001) sum += Math.abs(amt);
+  }
+  return sum > 0.001 ? Math.round(sum * 100) / 100 : null;
 }
 
 /**

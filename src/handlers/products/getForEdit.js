@@ -8,6 +8,7 @@ import { createClient } from "@supabase/supabase-js";
 import { config } from "../../infra/config.js";
 import { ok, fail, getTraceId } from "../../infra/http.js";
 import { computeProductReadiness } from "../../domain/productReadiness.js";
+import { sanitizeAdTitlesForDisplay } from "../../utils/sanitizeAdTitlesForDisplay.js";
 
 export async function handleProductsForEdit(req, res) {
   const traceId = getTraceId(req);
@@ -95,6 +96,7 @@ export async function handleProductsForEdit(req, res) {
 
     const productWithLinks = {
       ...product,
+      ad_titles: sanitizeAdTitlesForDisplay(product.ad_titles, product.product_name),
       product_image_links: imageLinkRows || [],
     };
 

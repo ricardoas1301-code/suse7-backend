@@ -1,0 +1,64 @@
+name: ML Webhook Events Cron (DEV)
+
+# Contrato DEV (oficial):
+#   POST secrets.DEV_ML_WEBHOOK_JOB_URL  (ex.: https://suse7-backend-dev.vercel.app/api/jobs/ml-webhook-events)
+#   Header X-Job-Secret: secrets.DEV_JOB_SECRET
+#   Body: {"limit":20}
+# Complementa o dispatch inline do POST /api/ml/webhook quando o processor estoura budget ou falha auth.
+
+on:
+  schedule:
+    - cron: "*/1 * * * *"
+  workflow_dispatch: {}
+
+jobs:
+  run-dev-ml-webhook-job:
+    runs-on: ubuntu-latest
+    env:
+      WEBHOOK_JOB_URL: ${{ secrets.DEV_ML_WEBHOOK_JOB_URL }}
+      JOB_SECRET: ${{ secrets.DEV_JOB_SECRET }}
+    steps:
+      - name: Trigger DEV ml-webhook-events job
+        run: |
+          set -euo pipefail
+
+          echo "[ml-webhook-events-dev] workflow_boot event=schedule_or_dispatch"
+
+          if [ -n "${WEBHOOK_JOB_URL}" ]; then
+            echo "[ml-webhook-events-dev] url_present=true source=DEV_ML_WEBHOOK_JOB_URL"
+          else
+            echo "[ml-webhook-events-dev] url_present=false"
+          fi
+
+          if [ -n "${JOB_SECRET}" ]; then
+            echo "[ml-webhook-events-dev] secret_present=true source=DEV_JOB_SECRET"
+          else
+            echo "[ml-webhook-events-dev] secret_present=false"
+          fi
+
+          if [ -z "${WEBHOOK_JOB_URL}" ] || [ -z "${JOB_SECRET}" ]; then
+            echo "::error::Missing required GitHub Actions secrets (DEV_ML_WEBHOOK_JOB_URL and/or DEV_JOB_SECRET)"
+            exit 1
+          fi
+
+          echo "[ml-webhook-events-dev] cron_firing method=POST limit=20"
+          http_code=$(curl -sS -o /tmp/ml-webhook-events-dev.json -w "%{http_code}" -X POST "${WEBHOOK_JOB_URL}" \
+            -H "Content-Type: application/json" \
+            -H "X-Job-Secret: ${JOB_SECRET}" \
+            -d '{"limit":20}')
+
+          echo "[ml-webhook-events-dev] request_http_status=${http_code}"
+
+          if command -v jq >/dev/null 2>&1; then
+            jq -c '{ok, processed, done, ignored, failed, budget_stopped, elapsed_ms, error}' /tmp/ml-webhook-events-dev.json 2>/dev/null || head -c 500 /tmp/ml-webhook-events-dev.json
+          else
+            head -c 500 /tmp/ml-webhook-events-dev.json || true
+            echo
+          fi
+
+          if [ "${http_code}" -lt 200 ] || [ "${http_code}" -ge 300 ]; then
+            echo "::error::Falha DEV ml-webhook-events: HTTP ${http_code} (esperado 2xx)"
+            exit 1
+          fi
+
+          echo "[ml-webhook-events-dev] request_success http_status=${http_code}"

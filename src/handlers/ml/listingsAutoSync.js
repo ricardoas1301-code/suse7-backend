@@ -59,10 +59,70 @@ export default async function handleMlListingsAutoSync(req, res) {
   const userId = user.id;
   const logPrefix = "[ml/auto-sync-listings]";
 
+  let body = {};
+  try {
+    body = typeof req.body === "string" ? JSON.parse(req.body || "{}") : req.body || {};
+  } catch {
+    body = {};
+  }
+
+  const requestedAccountId =
+    body.marketplace_account_id != null && String(body.marketplace_account_id).trim() !== ""
+      ? String(body.marketplace_account_id).trim()
+      : null;
+
+  /** @type {{ marketplaceAccountId?: string; mlUserId?: string }} */
+  let tokenCtx = {};
+
+  if (requestedAccountId) {
+    const { data: acc, error: accErr } = await supabase
+      .from("marketplace_accounts")
+      .select("id, external_seller_id, status")
+      .eq("id", requestedAccountId)
+      .eq("user_id", userId)
+      .maybeSingle();
+    if (accErr || !acc?.id || String(acc.status || "").toLowerCase() !== "active") {
+      console.error(logPrefix, "invalid_marketplace_account", { accErr, userId, requestedAccountId });
+      return res.status(400).json({
+        ok: false,
+        error: "marketplace_account_id inválido ou conta inativa.",
+      });
+    }
+    tokenCtx.marketplaceAccountId = String(acc.id);
+    if (acc.external_seller_id != null && String(acc.external_seller_id).trim() !== "") {
+      tokenCtx.mlUserId = String(acc.external_seller_id).trim();
+    }
+  } else {
+    const { data: tokRows, error: tokErr } = await supabase
+      .from("ml_tokens")
+      .select("ml_user_id")
+      .eq("user_id", userId)
+      .eq("marketplace", ML_MARKETPLACE_SLUG)
+      .limit(2);
+    if (tokErr) {
+      console.error(logPrefix, "ml_tokens_list_error", { tokErr, userId });
+      return res.status(401).json({ ok: false, error: "Não foi possível obter token válido do Mercado Livre." });
+    }
+    const rows = Array.isArray(tokRows) ? tokRows : [];
+    if (rows.length > 1) {
+      console.warn(logPrefix, "multi_account_requires_marketplace_account_id", { userId });
+      return res.status(400).json({
+        ok: false,
+        error:
+          "Várias contas Mercado Livre conectadas. Envie marketplace_account_id no body para escolher qual conta sincronizar.",
+      });
+    }
+    const pick = rows[0];
+    if (!pick?.ml_user_id) {
+      return res.status(401).json({ ok: false, error: "Não foi possível obter token válido do Mercado Livre." });
+    }
+    tokenCtx.mlUserId = String(pick.ml_user_id).trim();
+  }
+
   try {
     let accessToken;
     try {
-      accessToken = await getValidMLToken(userId);
+      accessToken = await getValidMLToken(userId, tokenCtx);
     } catch (e) {
       console.error(logPrefix, "token_error", { message: e?.message, userId });
       return res.status(401).json({

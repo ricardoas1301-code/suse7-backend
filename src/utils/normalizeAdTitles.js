@@ -4,7 +4,7 @@
 // Regras:
 // - Aceita array | string JSON | null
 // - Limita a 10 itens
-// - Garante mínimo 1 item
+// - Não cria título automático (aba inicia vazia até ação do seller)
 // - NÃO valida duplicidade (regra de ML será aplicada no fluxo de anúncios)
 // ======================================================================
 
@@ -37,10 +37,9 @@ export function normalizeAdTitles(input) {
     if (result.length >= 10) break;
   }
 
-  // Garantir mínimo 1 item
+  // Garantir array vazio quando não há títulos preenchidos (aba inicia vazia).
   if (result.length === 0) {
-    const id = typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : `t_${Date.now()}_${Math.random().toString(36).slice(2)}`;
-    result.push({ id, value: "" });
+    return [];
   }
 
   return result;

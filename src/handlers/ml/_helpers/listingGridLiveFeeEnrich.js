@@ -148,6 +148,14 @@ export async function maybeEnrichGridRowsWithLiveListingPrices(p) {
           );
           gridRows[idx] = {
             ...fresh,
+            id: prevRow.id ?? fresh.id,
+            product_id: prevRow.product_id ?? listing.product_id ?? fresh.product_id,
+            marketplace_account_id:
+              prevRow.marketplace_account_id ?? listing.marketplace_account_id ?? null,
+            account_alias: prevRow.account_alias ?? null,
+            ml_account_alias: prevRow.ml_account_alias ?? null,
+            account_logo_url: prevRow.account_logo_url ?? null,
+            product_card_metrics: prevRow.product_card_metrics ?? null,
             gallery_image_urls: prevRow.gallery_image_urls,
             gallery_image_source: prevRow.gallery_image_source,
             _listing_cover_trace: prevRow._listing_cover_trace,

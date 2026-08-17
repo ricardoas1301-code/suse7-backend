@@ -2,9 +2,9 @@
 // FASE 3 — Persistência de vendas ML → sales_* + listing_sales_metrics
 //
 // Pedido:
-// - upsert sales_orders por (marketplace, external_order_id)
-// - itens: DELETE por sales_order_id + INSERT (evita duplicata em resync;
-//   external_order_item_id do ML é persistido em raw_json quando existir)
+// - upsert sales_orders por (marketplace, marketplace_account_id, external_order_id) — multi-conta
+// - itens: UPSERT canônico por (marketplace, marketplace_account_id, external_order_id, external_order_item_id)
+//   + remoção de órfãos; identidade ML em mercadoLivreOrderItemIdentity.js
 // - snapshot: append-only em order_raw_snapshots
 //
 // Consolidado:
@@ -14,7 +14,18 @@
 // ======================================================
 
 import Decimal from "decimal.js";
+import { resolveMercadoLivreOrderItemIdentity } from "../../../domain/sales/mercadoLivreOrderItemIdentity.js";
+import {
+  logSalesOrderItemsReconciliationAlert,
+  persistSalesOrderItemsCanonicalUpsert,
+  reconcileSalesOrderItemsGrossVsHeader,
+} from "./salesOrderItemsCanonicalPersist.js";
 import { ML_MARKETPLACE_SLUG } from "./mlMarketplace.js";
+import { fetchOrderById } from "./mercadoLibreOrdersApi.js";
+import {
+  extractBuyerForGlobalSync,
+  touchGlobalCustomerFromOrderContext,
+} from "../../../services/customers/s7GlobalCustomerSync.js";
 
 /** Chave estável para join com marketplace_listings / listing_sales_metrics. */
 export function normalizeExternalListingId(id) {
@@ -26,6 +37,23 @@ export function normalizeExternalListingId(id) {
  * ID do anúncio ML a partir de uma linha de pedido (order_items) ou do raw_json persistido.
  * Usado em mapMlOrderItemToRow e no backfill de linhas antigas com external_listing_id nulo.
  */
+/** Primeira URL de foto do item na linha do pedido ML (persistência em thumbnail_snapshot). */
+export function extractMlLineThumbnail(line) {
+  if (!line || typeof line !== "object") return null;
+  const itemObj = line.item && typeof line.item === "object" ? line.item : {};
+  const th = itemObj.thumbnail ?? line.thumbnail;
+  if (typeof th === "string" && th.trim()) return th.trim();
+  if (th && typeof th === "object" && th.secure_url != null && String(th.secure_url).trim()) {
+    return String(th.secure_url).trim();
+  }
+  const pics = itemObj.pictures ?? line.pictures;
+  if (!Array.isArray(pics) || pics.length === 0) return null;
+  const p0 = pics[0];
+  if (p0 && typeof p0 === "object" && p0.secure_url) return String(p0.secure_url).trim();
+  if (p0 && typeof p0 === "object" && p0.url) return String(p0.url).trim();
+  return null;
+}
+
 export function extractExternalListingIdFromOrderLine(line) {
   if (!line || typeof line !== "object") return null;
   const itemObj = line.item && typeof line.item === "object" ? line.item : {};
@@ -102,12 +130,12 @@ export function extractOrderLinePricing(line) {
     line?.discounted_unit_price,
     line?.unit_price,
     line?.paid_unit_price,
-    itemObj?.promotional_price,
     line?.promotional_price,
-    itemObj?.price,
+    itemObj?.promotional_price,
     line?.full_unit_price,
     line?.base_unit_price,
     itemObj?.base_price,
+    itemObj?.price,
   ];
 
   let unit = null;
@@ -120,10 +148,10 @@ export function extractOrderLinePricing(line) {
     line?.total_amount,
     line?.paid_amount,
     line?.transaction_amount,
-    line?.full_total_amount,
-    line?.base_total_amount,
     line?.gross_amount,
     line?.gross_price,
+    line?.full_total_amount,
+    line?.base_total_amount,
   ];
 
   let gross = null;
@@ -144,7 +172,16 @@ export function extractOrderLinePricing(line) {
     }
   }
 
-  const fee = parseMlMoney(line?.sale_fee ?? line?.listing_fee ?? line?.discount_fee);
+  let fee = parseMlMoney(line?.sale_fee ?? line?.listing_fee ?? line?.discount_fee);
+
+  if (fee != null && gross != null && qty > 1) {
+    const feeLineTotal = fee * qty;
+    const ratioUnit = fee / gross;
+    const ratioTotal = feeLineTotal / gross;
+    if (ratioUnit > 0 && ratioUnit < 0.06 && ratioTotal >= 0.08 && ratioTotal <= 0.35) {
+      fee = feeLineTotal;
+    }
+  }
 
   let net = null;
   if (gross != null && fee != null) {
@@ -186,6 +223,413 @@ function extractTaxAmount(order) {
 }
 
 /**
+ * Metadados de envio / entrega combinada (não bloqueia persistência se shipment estiver ausente).
+ * @param {unknown} order
+ */
+export function extractMlOrderDeliveryMeta(order) {
+  if (!order || typeof order !== "object") {
+    return {
+      shipping_mode: null,
+      logistic_type: null,
+      fulfillment_mode: null,
+      shipping_status: null,
+      shipment_id: null,
+      needs_manual_delivery_arrangement: false,
+      delivery_hints: [],
+    };
+  }
+  const o = /** @type {Record<string, unknown>} */ (order);
+  const shipping = o.shipping && typeof o.shipping === "object" ? /** @type {Record<string, unknown>} */ (o.shipping) : {};
+  const tags = Array.isArray(o.tags) ? o.tags.map((t) => String(t)) : [];
+  const statusDetail =
+    o.status_detail && typeof o.status_detail === "object"
+      ? /** @type {Record<string, unknown>} */ (o.status_detail).code
+      : o.status_detail;
+  const shippingMode = shipping.mode != null ? String(shipping.mode) : null;
+  const logisticType = shipping.logistic_type != null ? String(shipping.logistic_type) : null;
+  const fulfillmentMode =
+    shipping.fulfillment_type != null
+      ? String(shipping.fulfillment_type)
+      : o.fulfillment_type != null
+        ? String(o.fulfillment_type)
+        : null;
+  const shippingStatus = shipping.status != null ? String(shipping.status) : null;
+  const shipmentId =
+    shipping.id != null
+      ? String(shipping.id)
+      : o.shipment_id != null
+        ? String(o.shipment_id)
+        : null;
+  const hints = [];
+  const modeLower = shippingMode ? shippingMode.toLowerCase() : "";
+  const logisticLower = logisticType ? logisticType.toLowerCase() : "";
+  const statusDetailLower = statusDetail != null ? String(statusDetail).toLowerCase() : "";
+  if (tags.some((t) => /combine|arrange|entrega|delivery/i.test(t))) hints.push("tag_delivery_arrangement");
+  if (modeLower === "custom" || modeLower === "not_specified") hints.push("shipping_mode_non_standard");
+  if (
+    logisticLower === "self_service" ||
+    logisticLower === "flex" ||
+    logisticLower === "drop_off" ||
+    logisticLower === "xd_drop_off"
+  ) {
+    hints.push("logistic_type_manual_or_flex");
+  }
+  if (/arrange|combine|deliver|entrega/.test(statusDetailLower)) hints.push("status_detail_delivery_arrangement");
+  const needsManual =
+    hints.length > 0 ||
+    (modeLower === "custom" && !shipmentId) ||
+    (logisticLower === "self_service" && !shipmentId);
+
+  return {
+    shipping_mode: shippingMode,
+    logistic_type: logisticType,
+    fulfillment_mode: fulfillmentMode,
+    shipping_status: shippingStatus,
+    shipment_id: shipmentId,
+    needs_manual_delivery_arrangement: needsManual,
+    delivery_hints: hints,
+  };
+}
+
+/**
+ * Anota o payload do pedido com metadados S7 de entrega (persistido em raw_json).
+ * @param {unknown} order
+ */
+export function annotateMlOrderForPersist(order) {
+  if (!order || typeof order !== "object") return order;
+  const delivery = extractMlOrderDeliveryMeta(order);
+  return {
+    .../** @type {Record<string, unknown>} */ (order),
+    _s7_delivery: delivery,
+  };
+}
+
+/**
+ * Normaliza candidatos a array de linhas de pedido (formatos variados da API ML).
+ * @param {unknown} candidate
+ * @returns {Record<string, unknown>[]}
+ */
+function unwrapMlOrderItemsCandidate(candidate) {
+  if (candidate == null) return [];
+  if (Array.isArray(candidate)) {
+    return candidate.filter((x) => x && typeof x === "object").map((x) => /** @type {Record<string, unknown>} */ (x));
+  }
+  if (typeof candidate === "object") {
+    const o = /** @type {Record<string, unknown>} */ (candidate);
+    for (const key of ["elements", "items", "results", "order_items"]) {
+      const nested = o[key];
+      if (Array.isArray(nested) && nested.length > 0) {
+        return nested.filter((x) => x && typeof x === "object").map((x) => /** @type {Record<string, unknown>} */ (x));
+      }
+    }
+  }
+  return [];
+}
+
+/**
+ * Extrai linhas vendáveis do payload do pedido (independente de modalidade de envio).
+ * @param {unknown} order
+ * @returns {Record<string, unknown>[]}
+ */
+export function resolveMlOrderLinesFromOrder(order) {
+  if (!order || typeof order !== "object") return [];
+  const o = /** @type {Record<string, unknown>} */ (order);
+
+  const sources = [
+    o.order_items,
+    o.items,
+    o.orderItems,
+    o._s7_order_items,
+    o.raw_json && typeof o.raw_json === "object"
+      ? /** @type {Record<string, unknown>} */ (o.raw_json).order_items
+      : null,
+    o.raw_json && typeof o.raw_json === "object" ? /** @type {Record<string, unknown>} */ (o.raw_json).items : null,
+  ];
+
+  for (const src of sources) {
+    const lines = unwrapMlOrderItemsCandidate(src);
+    if (lines.length > 0) return lines;
+  }
+
+  /** @type {Record<string, unknown>[]} */
+  const bundleFlat = [];
+  for (const src of [o.bundle_items, o.order_bundles]) {
+    const arr = unwrapMlOrderItemsCandidate(src);
+    for (const entry of arr) {
+      if (entry.item && typeof entry.item === "object") {
+        bundleFlat.push(entry);
+      } else {
+        bundleFlat.push(...unwrapMlOrderItemsCandidate(entry.order_items));
+      }
+    }
+  }
+  if (bundleFlat.length > 0) return bundleFlat;
+
+  const synthesized = synthesizeMlOrderLineFromOrderShell(o);
+  return synthesized ? [synthesized] : [];
+}
+
+/**
+ * Último recurso: linha sintética a partir do cabeçalho do pedido (total/pagamentos),
+ * sem regra por tipo de envio — apenas quando a API não enviou order_items.
+ * @param {Record<string, unknown>} order
+ * @returns {Record<string, unknown> | null}
+ */
+function synthesizeMlOrderLineFromOrderShell(order) {
+  const total =
+    parseMlMoney(order.total_amount) ??
+    parseMlMoney(order.paid_amount) ??
+    (order.order_totals && typeof order.order_totals === "object"
+      ? parseMlMoney(/** @type {Record<string, unknown>} */ (order.order_totals).total)
+      : null);
+  if (total == null || total <= 0) return null;
+
+  const payments = Array.isArray(order.payments) ? order.payments : [];
+  const approved =
+    payments.find((p) => p && typeof p === "object" && String(/** @type {Record<string, unknown>} */ (p).status || "").toLowerCase() === "approved") ??
+    payments[0];
+  const pay = approved && typeof approved === "object" ? /** @type {Record<string, unknown>} */ (approved) : null;
+
+  const title = pay?.reason != null ? String(pay.reason).trim() : null;
+  const unit =
+    parseMlMoney(pay?.transaction_amount) ?? parseMlMoney(pay?.total_paid_amount) ?? total;
+
+  let itemId = null;
+  for (const key of ["item_id", "listing_id", "product_id"]) {
+    if (order[key] != null && String(order[key]).trim() !== "") {
+      itemId = String(order[key]).trim();
+      break;
+    }
+  }
+  if (!itemId && pay) {
+    for (const key of ["item_id", "listing_id"]) {
+      if (pay[key] != null && String(pay[key]).trim() !== "") {
+        itemId = String(pay[key]).trim();
+        break;
+      }
+    }
+  }
+
+  /** @type {Record<string, unknown>} */
+  const item = {
+    title: title || "Pedido Mercado Livre",
+    seller_custom_field: null,
+  };
+  if (itemId) item.id = itemId;
+
+  return {
+    quantity: 1,
+    unit_price: unit,
+    full_unit_price: unit,
+    currency_id: order.currency_id ?? pay?.currency_id ?? null,
+    item,
+    _s7_synthesized: {
+      source: "order_shell",
+      at: new Date().toISOString(),
+      had_payments: payments.length > 0,
+    },
+  };
+}
+
+/**
+ * Garante order_items no payload antes da persistência (refetch ML quando vazio).
+ * @param {unknown} order
+ * @param {string} [accessToken]
+ * @param {{ marketplaceAccountId?: string | null; log?: (msg: string, extra?: Record<string, unknown>) => void }} [options]
+ * @returns {Promise<Record<string, unknown>>}
+ */
+export async function hydrateMlOrderLinesIfMissing(order, accessToken, options = {}) {
+  if (!order || typeof order !== "object") return /** @type {Record<string, unknown>} */ ({});
+  let o = { .../** @type {Record<string, unknown>} */ (order) };
+  const log = options.log || (() => {});
+
+  let lines = resolveMlOrderLinesFromOrder(o);
+  if (lines.length > 0) {
+    if (!Array.isArray(o.order_items) || o.order_items.length === 0) {
+      o.order_items = lines;
+    }
+    return o;
+  }
+
+  const orderId = o.id != null ? String(o.id).trim() : "";
+  const token = accessToken != null ? String(accessToken).trim() : "";
+
+  if (token && orderId) {
+    try {
+      const fresh = await fetchOrderById(token, orderId, {
+        marketplaceAccountId: options.marketplaceAccountId ?? null,
+      });
+      if (fresh && typeof fresh === "object") {
+        o = { ...o, .../** @type {Record<string, unknown>} */ (fresh) };
+        lines = resolveMlOrderLinesFromOrder(o);
+        if (lines.length > 0) {
+          log("hydrate_order_items_refetch_ok", { orderId, line_count: lines.length });
+          o.order_items = lines;
+          return o;
+        }
+      }
+    } catch (e) {
+      log("hydrate_order_items_refetch_failed", {
+        orderId,
+        message: e instanceof Error ? e.message : String(e),
+      });
+    }
+  }
+
+  lines = resolveMlOrderLinesFromOrder(o);
+  if (lines.length > 0) {
+    o.order_items = lines;
+    return o;
+  }
+
+  const synthesized = synthesizeMlOrderLineFromOrderShell(o);
+  if (synthesized) {
+    log("hydrate_order_items_synthesized", { orderId: orderId || null });
+    o.order_items = [synthesized];
+  } else {
+    const delivery = extractMlOrderDeliveryMeta(o);
+    log("hydrate_order_items_still_empty", {
+      orderId: orderId || null,
+      shipping_status: delivery.shipping_status,
+      shipment_id: delivery.shipment_id,
+    });
+  }
+  return o;
+}
+
+/**
+ * Repara pedidos já gravados em sales_orders sem linhas em sales_order_items,
+ * usando order_items presentes em raw_json (ex.: após enrichment/refetch).
+ */
+export async function backfillMissingSalesOrderItemsFromOrderRaw(supabase, userId, marketplace, log = () => {}) {
+  const { data: orders, error: oErr } = await supabase
+    .from("sales_orders")
+    .select("id, external_order_id, raw_json, marketplace_account_id, seller_company_id")
+    .eq("user_id", userId)
+    .eq("marketplace", marketplace)
+    .order("updated_at", { ascending: false })
+    .limit(800);
+
+  if (oErr) {
+    log("backfill_items_fetch_orders_failed", { oErr });
+    throw oErr;
+  }
+
+  let repairedOrders = 0;
+  let insertedLines = 0;
+  const nowIso = new Date().toISOString();
+
+  for (const ord of orders || []) {
+    const salesOrderId = ord.id;
+    const { count, error: cErr } = await supabase
+      .from("sales_order_items")
+      .select("id", { count: "exact", head: true })
+      .eq("sales_order_id", salesOrderId);
+    if (cErr) {
+      log("backfill_items_count_failed", { salesOrderId, cErr });
+      continue;
+    }
+    if ((count ?? 0) > 0) continue;
+
+    const raw = ord.raw_json && typeof ord.raw_json === "object" ? ord.raw_json : null;
+    const lines = resolveMlOrderLinesFromOrder(raw ?? {});
+    if (lines.length === 0) continue;
+
+    const extPreview = ord.external_order_id != null ? String(ord.external_order_id) : null;
+    const marketplaceAccountId =
+      ord.marketplace_account_id != null ? String(ord.marketplace_account_id).trim() : null;
+    const sellerCompanyId = ord.seller_company_id != null ? String(ord.seller_company_id).trim() : null;
+
+    const rows = lines.map((line, lineIndex) =>
+      mapMlOrderItemToRow(
+        userId,
+        marketplace,
+        salesOrderId,
+        line,
+        nowIso,
+        marketplaceAccountId,
+        sellerCompanyId,
+        extPreview,
+        { lineIndex, linesInOrder: lines },
+      )
+    );
+
+    try {
+      await persistSalesOrderItemsCanonicalUpsert(
+        supabase,
+        salesOrderId,
+        rows,
+        (msg, extra) => log(msg, { salesOrderId, external_order_id: extPreview, ...(extra ?? {}) }),
+      );
+    } catch (insErr) {
+      log("backfill_items_insert_failed", { salesOrderId, external_order_id: extPreview, insErr });
+      continue;
+    }
+    repairedOrders += 1;
+    insertedLines += rows.length;
+  }
+
+  log("backfill_items_from_raw_done", { repairedOrders, insertedLines });
+  return { repairedOrders, insertedLines };
+}
+
+/**
+ * Insere sales_order_items quando o pedido existe mas a listagem /vendas ficaria vazia.
+ * Usado após enrichment/refetch que populou order_items em raw_json.
+ */
+export async function ensureSalesOrderItemsFromOrderLines(
+  supabase,
+  userId,
+  salesOrderId,
+  order,
+  marketplace = ML_MARKETPLACE_SLUG
+) {
+  const { count, error: cErr } = await supabase
+    .from("sales_order_items")
+    .select("id", { count: "exact", head: true })
+    .eq("sales_order_id", salesOrderId);
+  if (cErr) throw cErr;
+  if ((count ?? 0) > 0) return { inserted: 0, skipped: "already_has_items" };
+
+  const lines = resolveMlOrderLinesFromOrder(order);
+  if (lines.length === 0) return { inserted: 0, skipped: "no_lines" };
+
+  const { data: salesOrder, error: oErr } = await supabase
+    .from("sales_orders")
+    .select("external_order_id, marketplace_account_id, seller_company_id")
+    .eq("id", salesOrderId)
+    .eq("user_id", userId)
+    .maybeSingle();
+  if (oErr) throw oErr;
+  if (!salesOrder) return { inserted: 0, skipped: "order_not_found" };
+
+  const nowIso = new Date().toISOString();
+  const extPreview =
+    salesOrder.external_order_id != null ? String(salesOrder.external_order_id) : null;
+  const marketplaceAccountId =
+    salesOrder.marketplace_account_id != null ? String(salesOrder.marketplace_account_id).trim() : null;
+  const sellerCompanyId =
+    salesOrder.seller_company_id != null ? String(salesOrder.seller_company_id).trim() : null;
+
+  const rows = lines.map((line, lineIndex) =>
+    mapMlOrderItemToRow(
+      userId,
+      marketplace,
+      salesOrderId,
+      line,
+      nowIso,
+      marketplaceAccountId,
+      sellerCompanyId,
+      extPreview,
+      { lineIndex, linesInOrder: lines },
+    )
+  );
+
+  await persistSalesOrderItemsCanonicalUpsert(supabase, salesOrderId, rows);
+  return { inserted: rows.length, skipped: null };
+}
+
+/**
  * Monta linha sales_orders a partir do GET /orders/:id.
  */
 export function mapMlOrderToSalesOrderRow(
@@ -209,6 +653,15 @@ export function mapMlOrderToSalesOrderRow(
     parseMlMoney(order.shipping?.cost) ??
     parseMlMoney(order.order_totals?.shipping);
 
+  const deliveryMeta = extractMlOrderDeliveryMeta(order);
+  const rawOrder =
+    order && typeof order === "object"
+      ? {
+          .../** @type {Record<string, unknown>} */ (order),
+          _s7_delivery: deliveryMeta,
+        }
+      : order;
+
   return {
     user_id: userId,
     marketplace,
@@ -231,7 +684,7 @@ export function mapMlOrderToSalesOrderRow(
     total_amount: total,
     shipping_amount: ship,
     tax_amount: extractTaxAmount(order),
-    raw_json: order,
+    raw_json: rawOrder,
     api_imported_at: nowIso,
     api_last_seen_at: nowIso,
     updated_at: nowIso,
@@ -240,8 +693,7 @@ export function mapMlOrderToSalesOrderRow(
 
 /**
  * Converte uma linha de order_items do ML em sales_order_items.
- * Estratégia: sem id estável confiável em todos os casos → sempre substituir
- * todas as linhas do pedido no resync (ver persistMercadoLibreOrder).
+ * Identidade canônica via resolveMercadoLivreOrderItemIdentity (UPSERT idempotente).
  */
 export function mapMlOrderItemToRow(
   userId,
@@ -251,7 +703,8 @@ export function mapMlOrderItemToRow(
   nowIso,
   marketplaceAccountId = null,
   sellerCompanyId = null,
-  externalOrderId = null
+  externalOrderId = null,
+  identityContext = null,
 ) {
   const itemObj = line?.item && typeof line.item === "object" ? line.item : {};
   const listingId = extractExternalListingIdFromOrderLine(line);
@@ -264,12 +717,20 @@ export function mapMlOrderItemToRow(
 
   const { qty, unit, gross: lineTotal, fee, net } = extractOrderLinePricing(line);
 
-  const extLineId =
-    line.id != null
-      ? String(line.id)
-      : line.order_item_id != null
-        ? String(line.order_item_id)
-        : null;
+  const linesInOrder =
+    identityContext?.linesInOrder && Array.isArray(identityContext.linesInOrder)
+      ? identityContext.linesInOrder
+      : [line];
+  const lineIndex =
+    identityContext?.lineIndex != null && Number.isFinite(Number(identityContext.lineIndex))
+      ? Number(identityContext.lineIndex)
+      : 0;
+  const extOrderId = externalOrderId != null ? String(externalOrderId).trim() : "";
+  const identity = resolveMercadoLivreOrderItemIdentity(line, {
+    externalOrderId: extOrderId,
+    lineIndex,
+    linesInOrder,
+  });
 
   return {
     sales_order_id: salesOrderId,
@@ -278,7 +739,7 @@ export function mapMlOrderItemToRow(
     marketplace_account_id: marketplaceAccountId,
     seller_company_id: sellerCompanyId,
     external_order_id: externalOrderId,
-    external_order_item_id: extLineId,
+    external_order_item_id: identity.external_order_item_id,
     external_listing_id: listingId,
     external_variation_id: variationId,
     title_snapshot:
@@ -300,6 +761,7 @@ export function mapMlOrderItemToRow(
     shipping_share_amount: parseMlMoney(line.shipping_cost_share),
     tax_amount: parseMlMoney(line.taxes?.[0]?.amount ?? line.tax_amount),
     net_amount: net,
+    thumbnail_snapshot: extractMlLineThumbnail(line),
     raw_json: line,
     api_imported_at: nowIso,
     api_last_seen_at: nowIso,
@@ -310,10 +772,23 @@ export function mapMlOrderItemToRow(
 /**
  * Upsert pedido + substitui itens + snapshot append-only.
  * Em resync: preserva api_imported_at e created_at implícitos do primeiro insert
- * (consulta prévia por marketplace + external_order_id).
+ * (consulta prévia por marketplace + marketplace_account_id + external_order_id).
  */
 export async function persistMercadoLibreOrder(supabase, userId, order, opts = {}) {
   const log = opts.log || (() => {});
+  const traceCtx = opts.traceCtx && typeof opts.traceCtx === "object" ? opts.traceCtx : {};
+  const logStep = (step, extra = {}) => {
+    console.info("[S7][ml-sales-sync-order-step]", {
+      syncRunId: traceCtx.syncRunId ?? null,
+      marketplaceAccountId: opts.marketplaceAccountId ?? null,
+      sellerCompanyId: opts.sellerCompanyId ?? null,
+      externalOrderId: order?.id != null ? String(order.id) : null,
+      index: traceCtx.orderIndex ?? null,
+      total: traceCtx.total ?? null,
+      step,
+      ...extra,
+    });
+  };
   /** @type {{ remaining: number } | null | undefined} */
   const pricingDebug = opts.pricingDebug;
   const marketplace = opts.marketplace || ML_MARKETPLACE_SLUG;
@@ -321,6 +796,9 @@ export async function persistMercadoLibreOrder(supabase, userId, order, opts = {
     opts.marketplaceAccountId != null && String(opts.marketplaceAccountId).trim() !== ""
       ? String(opts.marketplaceAccountId).trim()
       : null;
+  if (marketplace === ML_MARKETPLACE_SLUG && !marketplaceAccountId) {
+    throw new Error("marketplace_account_id é obrigatório para persistir pedido Mercado Livre (multi-conta).");
+  }
   const sellerCompanyId =
     opts.sellerCompanyId != null && String(opts.sellerCompanyId).trim() !== ""
       ? String(opts.sellerCompanyId).trim()
@@ -330,14 +808,28 @@ export async function persistMercadoLibreOrder(supabase, userId, order, opts = {
   const extPreview = order?.id != null ? String(order.id) : null;
   if (!extPreview) throw new Error("Pedido ML sem id");
 
-  let existingQuery = supabase
+  logStep("resolve order_items");
+  const accessToken = opts.accessToken != null ? String(opts.accessToken).trim() : "";
+  const orderForPersist = accessToken
+    ? await hydrateMlOrderLinesIfMissing(order, accessToken, {
+        marketplaceAccountId,
+        log: (msg, extra) => log(msg, { external_order_id: extPreview, ...extra }),
+      })
+    : (() => {
+        const resolved = resolveMlOrderLinesFromOrder(order);
+        if (resolved.length > 0 && (!Array.isArray(order.order_items) || order.order_items.length === 0)) {
+          return { .../** @type {Record<string, unknown>} */ (order), order_items: resolved };
+        }
+        return /** @type {Record<string, unknown>} */ (order);
+      })();
+
+  const existingQuery = supabase
     .from("sales_orders")
     .select("id, api_imported_at")
     .eq("marketplace", marketplace)
+    .eq("marketplace_account_id", marketplaceAccountId)
     .eq("external_order_id", extPreview);
-  if (marketplaceAccountId) {
-    existingQuery = existingQuery.eq("marketplace_account_id", marketplaceAccountId);
-  }
+  logStep("prefetch order");
   const { data: existingOrder, error: exErr } = await existingQuery.maybeSingle();
 
   if (exErr) {
@@ -347,7 +839,7 @@ export async function persistMercadoLibreOrder(supabase, userId, order, opts = {
 
   const orderRow = mapMlOrderToSalesOrderRow(
     userId,
-    order,
+    orderForPersist,
     marketplace,
     nowIso,
     marketplaceAccountId,
@@ -358,6 +850,7 @@ export async function persistMercadoLibreOrder(supabase, userId, order, opts = {
   let salesOrderId;
 
   if (existingOrder?.id) {
+    logStep("persist order");
     const { error: updErr } = await supabase
       .from("sales_orders")
       .update(orderRow)
@@ -369,6 +862,7 @@ export async function persistMercadoLibreOrder(supabase, userId, order, opts = {
     }
     salesOrderId = existingOrder.id;
   } else {
+    logStep("persist order");
     const { data: inserted, error: insErr } = await supabase
       .from("sales_orders")
       .insert(orderRow)
@@ -382,12 +876,10 @@ export async function persistMercadoLibreOrder(supabase, userId, order, opts = {
     salesOrderId = inserted.id;
   }
 
-  const { error: delI } = await supabase.from("sales_order_items").delete().eq("sales_order_id", salesOrderId);
-  if (delI) log("delete_order_items_warn", { delI, salesOrderId });
-
-  const lines = Array.isArray(order.order_items) ? order.order_items : [];
+  logStep("persist items");
+  const lines = resolveMlOrderLinesFromOrder(orderForPersist);
   if (lines.length > 0) {
-    const rows = lines.map((line) =>
+    const rows = lines.map((line, lineIndex) =>
       mapMlOrderItemToRow(
         userId,
         marketplace,
@@ -396,7 +888,8 @@ export async function persistMercadoLibreOrder(supabase, userId, order, opts = {
         nowIso,
         marketplaceAccountId,
         sellerCompanyId,
-        extPreview
+        extPreview,
+        { lineIndex, linesInOrder: lines },
       )
     );
 
@@ -404,6 +897,7 @@ export async function persistMercadoLibreOrder(supabase, userId, order, opts = {
       console.log("[ml/sync-sales] pricing_debug_sample", {
         external_order_id: extPreview,
         lines: rows.map((r) => ({
+          external_order_item_id: r.external_order_item_id,
           external_listing_id: r.external_listing_id,
           quantity: r.quantity,
           unit_price: r.unit_price,
@@ -416,17 +910,54 @@ export async function persistMercadoLibreOrder(supabase, userId, order, opts = {
       pricingDebug.remaining -= 1;
     }
 
-    const { error: insErr } = await supabase.from("sales_order_items").insert(rows);
-    if (insErr) log("insert_order_items_failed", { insErr, salesOrderId });
-    if (insErr) throw insErr;
+    await persistSalesOrderItemsCanonicalUpsert(supabase, salesOrderId, rows, (msg, extra) =>
+      log(msg, { salesOrderId, external_order_id: extPreview, ...(extra ?? {}) }),
+    );
+
+    const reconciliation = reconcileSalesOrderItemsGrossVsHeader(orderRow.total_amount, rows);
+    logSalesOrderItemsReconciliationAlert(orderRow, reconciliation, (msg, extra) =>
+      log(msg, { salesOrderId, external_order_id: extPreview, ...(extra ?? {}) }),
+    );
+  } else {
+    const { error: delAllErr } = await supabase.from("sales_order_items").delete().eq("sales_order_id", salesOrderId);
+    if (delAllErr) {
+      log("delete_all_order_items_failed", { delAllErr, salesOrderId, external_order_id: extPreview });
+      throw delAllErr;
+    }
+    const delivery = extractMlOrderDeliveryMeta(orderForPersist);
+    log("persist_order_without_items", {
+      salesOrderId,
+      external_order_id: extPreview,
+      shipping_status: delivery.shipping_status,
+      shipment_id: delivery.shipment_id,
+    });
   }
 
+  logStep("snapshot");
   const { error: snapErr } = await supabase.from("order_raw_snapshots").insert({
     sales_order_id: salesOrderId,
-    payload: { order, imported_at: nowIso, marketplace },
+    payload: { order: orderForPersist, imported_at: nowIso, marketplace },
   });
   if (snapErr) log("order_snapshot_warn", { snapErr, salesOrderId });
 
+  logStep("global_customer");
+  try {
+    const buyerPick = extractBuyerForGlobalSync(order);
+    await touchGlobalCustomerFromOrderContext(supabase, {
+      userId,
+      marketplace,
+      marketplaceAccountId,
+      sellerCompanyId,
+      orderDateIso: order?.date_created != null ? String(order.date_created) : null,
+      orderTotal: orderRow.total_amount,
+      buyerPick,
+      bumpOrderAggregate: !existingOrder,
+    });
+  } catch (e) {
+    log("global_customer_sync_warn", { message: e?.message });
+  }
+
+  logStep("metrics");
   return { salesOrderId, external_order_id: orderRow.external_order_id };
 }
 
@@ -530,6 +1061,7 @@ export async function backfillSalesOrderItemsExternalListingIds(supabase, userId
 export async function rebuildListingSalesMetricsForUser(supabase, userId, marketplace, log = () => {}) {
   const nowIso = new Date().toISOString();
 
+  const itemsBackfill = await backfillMissingSalesOrderItemsFromOrderRaw(supabase, userId, marketplace, log);
   const backfill = await backfillSalesOrderItemsExternalListingIds(supabase, userId, marketplace, log);
 
   const { data: orders, error: oErr } = await supabase
@@ -663,5 +1195,5 @@ export async function rebuildListingSalesMetricsForUser(supabase, userId, market
   }
 
   log("metrics_rebuild_done", { listings: metricRows.length });
-  return { listingsUpdated: metricRows.length, backfill };
+  return { listingsUpdated: metricRows.length, backfill, itemsBackfill };
 }

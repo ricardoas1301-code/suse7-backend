@@ -1,0 +1,1702 @@
+{
+  "generated_at": "2026-06-23T18:26:26.742Z",
+  "script": "scripts/ssot_guard_check.mjs",
+  "scope": {
+    "roots": [
+      "suse7-backend/src",
+      "suse7-backend/api",
+      "suse7-backend/scripts",
+      "suse7-frontend/src"
+    ],
+    "blocked_paths_policy": "Areas de notificacoes/exportacoes rebaixam ERROR para WARNING ate checkout completo",
+    "critical_rules": [
+      "S7-HIST-001",
+      "S7-HIST-002",
+      "S7-HIST-003",
+      "S7-HIST-004"
+    ]
+  },
+  "summary": {
+    "errors": 0,
+    "warnings": 186,
+    "infos": 0,
+    "total": 186,
+    "scanned_files": 762
+  },
+  "findings": [
+    {
+      "file": "suse7-backend/src/billing/services/billingCustomerService.js",
+      "line": 38,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Lookup potencial de configuracao atual em fluxo financeiro",
+      "severity": "WARNING",
+      "snippet": ".from(\"profiles\")",
+      "suggestion": "Evitar lookup vivo em historico; usar snapshot persistido e marcar snapshot_missing quando ausente."
+    },
+    {
+      "file": "suse7-backend/src/billing/services/billingCustomerService.js",
+      "line": 48,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Lookup potencial de configuracao atual em fluxo financeiro",
+      "severity": "WARNING",
+      "snippet": ".from(\"seller_companies\")",
+      "suggestion": "Evitar lookup vivo em historico; usar snapshot persistido e marcar snapshot_missing quando ausente."
+    },
+    {
+      "file": "suse7-backend/src/domain/notifications/central/competition/triggerManualCompetitionReportNotification.js",
+      "line": 189,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Lookup potencial de configuracao atual em fluxo financeiro",
+      "severity": "WARNING",
+      "snippet": ".from(\"profiles\")",
+      "suggestion": "Evitar lookup vivo em historico; usar snapshot persistido e marcar snapshot_missing quando ausente."
+    },
+    {
+      "file": "suse7-backend/src/domain/notifications/central/recipients/resolveCentralRecipients.js",
+      "line": 14,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Lookup potencial de configuracao atual em fluxo financeiro",
+      "severity": "WARNING",
+      "snippet": ".from(\"profiles\")",
+      "suggestion": "Evitar lookup vivo em historico; usar snapshot persistido e marcar snapshot_missing quando ausente."
+    },
+    {
+      "file": "suse7-backend/src/domain/notifications/central/sales/buildDailySalesSummaryTemplatePayload.js",
+      "line": 43,
+      "rule_id": "S7-HIST-002",
+      "rule_title": "Number(...) em valor monetario",
+      "severity": "WARNING",
+      "snippet": "const lowMarginCount = Number(health.low_margin_count ?? 0);",
+      "suggestion": "Usar Decimal para parse e operacoes financeiras."
+    },
+    {
+      "file": "suse7-backend/src/domain/notifications/central/sales/triggerManualSaleRayxNotification.js",
+      "line": 323,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Lookup potencial de configuracao atual em fluxo financeiro",
+      "severity": "WARNING",
+      "snippet": ".from(\"profiles\")",
+      "suggestion": "Evitar lookup vivo em historico; usar snapshot persistido e marcar snapshot_missing quando ausente."
+    },
+    {
+      "file": "suse7-backend/src/domain/notifications/central/sales/triggerManualSaleRayxNotification.js",
+      "line": 365,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Lookup potencial de configuracao atual em fluxo financeiro",
+      "severity": "WARNING",
+      "snippet": ".from(\"profiles\")",
+      "suggestion": "Evitar lookup vivo em historico; usar snapshot persistido e marcar snapshot_missing quando ausente."
+    },
+    {
+      "file": "suse7-backend/src/domain/notifications/central/sales/triggerManualSalesReportNotification.js",
+      "line": 192,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Lookup potencial de configuracao atual em fluxo financeiro",
+      "severity": "WARNING",
+      "snippet": ".from(\"profiles\")",
+      "suggestion": "Evitar lookup vivo em historico; usar snapshot persistido e marcar snapshot_missing quando ausente."
+    },
+    {
+      "file": "suse7-backend/src/domain/notifications/central/sales/triggerManualSalesReportNotification.js",
+      "line": 420,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Lookup potencial de configuracao atual em fluxo financeiro",
+      "severity": "WARNING",
+      "snippet": ".from(\"profiles\")",
+      "suggestion": "Evitar lookup vivo em historico; usar snapshot persistido e marcar snapshot_missing quando ausente."
+    },
+    {
+      "file": "suse7-backend/src/domain/pricing/listingHealthCommercial.js",
+      "line": 75,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Lookup potencial de configuracao atual em fluxo financeiro",
+      "severity": "WARNING",
+      "snippet": ".from(\"marketplace_listing_health\")",
+      "suggestion": "Evitar lookup vivo em historico; usar snapshot persistido e marcar snapshot_missing quando ausente."
+    },
+    {
+      "file": "suse7-backend/src/domain/pricing/listingHealthCommercial.js",
+      "line": 96,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Lookup potencial de configuracao atual em fluxo financeiro",
+      "severity": "WARNING",
+      "snippet": ".from(\"marketplace_listing_health\")",
+      "suggestion": "Evitar lookup vivo em historico; usar snapshot persistido e marcar snapshot_missing quando ausente."
+    },
+    {
+      "file": "suse7-backend/src/domain/pricing/mercadoLivreScenarioShippingResolve.js",
+      "line": 269,
+      "rule_id": "S7-HIST-002",
+      "rule_title": "Number(...) em valor monetario",
+      "severity": "WARNING",
+      "snippet": "? Number(payload.list_cost)",
+      "suggestion": "Usar Decimal para parse e operacoes financeiras."
+    },
+    {
+      "file": "suse7-backend/src/domain/pricing/mercadoLivreScenarioShippingResolve.js",
+      "line": 275,
+      "rule_id": "S7-HIST-002",
+      "rule_title": "Number(...) em valor monetario",
+      "severity": "WARNING",
+      "snippet": "? Number(payload.promoted_amount)",
+      "suggestion": "Usar Decimal para parse e operacoes financeiras."
+    },
+    {
+      "file": "suse7-backend/src/domain/pricing/mercadoLivreSimulateListingTypeScenario.js",
+      "line": 343,
+      "rule_id": "S7-HIST-002",
+      "rule_title": "Number(...) em valor monetario",
+      "severity": "WARNING",
+      "snippet": "? Number(String(opts.targetMarginPct).replace(\",\", \".\"))",
+      "suggestion": "Usar Decimal para parse e operacoes financeiras."
+    },
+    {
+      "file": "suse7-backend/src/domain/productCatalogCompleteness.js",
+      "line": 33,
+      "rule_id": "S7-HIST-002",
+      "rule_title": "parseFloat em contexto financeiro",
+      "severity": "WARNING",
+      "snippet": ": parseFloat(String(costPrice).trim().replace(\",\", \".\"));",
+      "suggestion": "Trocar por Decimal ou NUMERIC no backend."
+    },
+    {
+      "file": "suse7-backend/src/domain/productCatalogCompleteness.js",
+      "line": 39,
+      "rule_id": "S7-HIST-002",
+      "rule_title": "parseFloat em contexto financeiro",
+      "severity": "WARNING",
+      "snippet": ": parseFloat(String(packagingCost).trim().replace(\",\", \".\"));",
+      "suggestion": "Trocar por Decimal ou NUMERIC no backend."
+    },
+    {
+      "file": "suse7-backend/src/domain/productCatalogCompleteness.js",
+      "line": 45,
+      "rule_id": "S7-HIST-002",
+      "rule_title": "parseFloat em contexto financeiro",
+      "severity": "WARNING",
+      "snippet": ": parseFloat(String(operationalCost).trim().replace(\",\", \".\"));",
+      "suggestion": "Trocar por Decimal ou NUMERIC no backend."
+    },
+    {
+      "file": "suse7-backend/src/domain/ProductDomainService.js",
+      "line": 206,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Lookup potencial de configuracao atual em fluxo financeiro",
+      "severity": "WARNING",
+      "snippet": ".from(\"products\")",
+      "suggestion": "Evitar lookup vivo em historico; usar snapshot persistido e marcar snapshot_missing quando ausente."
+    },
+    {
+      "file": "suse7-backend/src/domain/ProductDomainService.js",
+      "line": 228,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Lookup potencial de configuracao atual em fluxo financeiro",
+      "severity": "WARNING",
+      "snippet": ".from(\"products\")",
+      "suggestion": "Evitar lookup vivo em historico; usar snapshot persistido e marcar snapshot_missing quando ausente."
+    },
+    {
+      "file": "suse7-backend/src/domain/ProductDomainService.js",
+      "line": 236,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Lookup potencial de configuracao atual em fluxo financeiro",
+      "severity": "WARNING",
+      "snippet": ".from(\"product_variants\")",
+      "suggestion": "Evitar lookup vivo em historico; usar snapshot persistido e marcar snapshot_missing quando ausente."
+    },
+    {
+      "file": "suse7-backend/src/domain/ProductStatusDomainService.js",
+      "line": 96,
+      "rule_id": "S7-HIST-002",
+      "rule_title": "parseFloat em contexto financeiro",
+      "severity": "WARNING",
+      "snippet": "const n = parseFloat(String(costPrice).replace(\",\", \".\"));",
+      "suggestion": "Trocar por Decimal ou NUMERIC no backend."
+    },
+    {
+      "file": "suse7-backend/src/domain/sales/buildSaleExecutiveSummary.js",
+      "line": 223,
+      "rule_id": "S7-HIST-002",
+      "rule_title": "Acumulador monetario inicializado como number",
+      "severity": "WARNING",
+      "snippet": "let profitLinesWithValue = 0;",
+      "suggestion": "Inicializar como new Decimal(0) quando for valor monetario."
+    },
+    {
+      "file": "suse7-backend/src/domain/sales/buildSaleExecutiveSummary.js",
+      "line": 832,
+      "rule_id": "S7-HIST-002",
+      "rule_title": "Number(...) em valor monetario",
+      "severity": "WARNING",
+      "snippet": "return Number(b.gross_sales_brl) - Number(a.gross_sales_brl);",
+      "suggestion": "Usar Decimal para parse e operacoes financeiras."
+    },
+    {
+      "file": "suse7-backend/src/domain/sales/buildSaleExecutiveSummary.js",
+      "line": 835,
+      "rule_id": "S7-HIST-002",
+      "rule_title": "Number(...) em valor monetario",
+      "severity": "WARNING",
+      "snippet": "const gd = Number(b.gross_sales_brl) - Number(a.gross_sales_brl);",
+      "suggestion": "Usar Decimal para parse e operacoes financeiras."
+    },
+    {
+      "file": "suse7-backend/src/domain/sales/buildSaleExecutiveSummary.js",
+      "line": 839,
+      "rule_id": "S7-HIST-002",
+      "rule_title": "Number(...) em valor monetario",
+      "severity": "WARNING",
+      "snippet": "const pd = Number(b.contribution_profit_brl) - Number(a.contribution_profit_brl);",
+      "suggestion": "Usar Decimal para parse e operacoes financeiras."
+    },
+    {
+      "file": "suse7-backend/src/domain/sales/buildSaleExecutiveSummary.js",
+      "line": 841,
+      "rule_id": "S7-HIST-002",
+      "rule_title": "Number(...) em valor monetario",
+      "severity": "WARNING",
+      "snippet": "return Number(b.gross_sales_brl) - Number(a.gross_sales_brl);",
+      "suggestion": "Usar Decimal para parse e operacoes financeiras."
+    },
+    {
+      "file": "suse7-backend/src/domain/sales/buildSaleExecutiveSummary.js",
+      "line": 898,
+      "rule_id": "S7-HIST-002",
+      "rule_title": "Number(...) em valor monetario",
+      "severity": "WARNING",
+      "snippet": "return Number(b.gross_sales_brl) - Number(a.gross_sales_brl);",
+      "suggestion": "Usar Decimal para parse e operacoes financeiras."
+    },
+    {
+      "file": "suse7-backend/src/domain/sales/historicalCardHomologationDebug.js",
+      "line": 356,
+      "rule_id": "S7-HIST-002",
+      "rule_title": "Number(...) em valor monetario",
+      "severity": "WARNING",
+      "snippet": "? Number(/** @type {{ profitLines?: number }} */ (listingAgg).profitLines)",
+      "suggestion": "Usar Decimal para parse e operacoes financeiras."
+    },
+    {
+      "file": "suse7-backend/src/domain/sales/historicalCardHomologationDebug.js",
+      "line": 360,
+      "rule_id": "S7-HIST-002",
+      "rule_title": "Number(...) em valor monetario",
+      "severity": "WARNING",
+      "snippet": "? Number(/** @type {{ profitLines?: number }} */ (productAgg).profitLines)",
+      "suggestion": "Usar Decimal para parse e operacoes financeiras."
+    },
+    {
+      "file": "suse7-backend/src/domain/sales/historicalCardHomologationDebug.js",
+      "line": 369,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Referencia a custo/imposto/configuracao atual",
+      "severity": "WARNING",
+      "snippet": "profitUiReason = \"missing_tax_profile_ou_missing_product_link_nas_linhas\";",
+      "suggestion": "Revisar se a origem e historica (_s7_financial). Se for legado permitido, documentar com ssot-guard:ignore."
+    },
+    {
+      "file": "suse7-backend/src/domain/sales/historicalCardOrderItemsAggregates.js",
+      "line": 167,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Uso de perfil fiscal atual em fluxo historico",
+      "severity": "WARNING",
+      "snippet": "const profile = await resolveSaleInternalTaxProfile(supabase, userId, {",
+      "suggestion": "Substituir por leitura exclusiva de _s7_financial (tax_snapshot/internal_costs_snapshot)."
+    },
+    {
+      "file": "suse7-backend/src/domain/sales/historicalCardProfitAggregates.js",
+      "line": 115,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Uso de perfil fiscal atual em fluxo historico",
+      "severity": "WARNING",
+      "snippet": "const profile = await resolveSaleInternalTaxProfile(supabase, userId, {",
+      "suggestion": "Substituir por leitura exclusiva de _s7_financial (tax_snapshot/internal_costs_snapshot)."
+    },
+    {
+      "file": "suse7-backend/src/domain/sales/mercadoLivreSaleFinancialFormula.js",
+      "line": 219,
+      "rule_id": "S7-HIST-002",
+      "rule_title": "Math.round em valor monetario",
+      "severity": "WARNING",
+      "snippet": "const bonus = Math.round((baseCost - listCost) * 100) / 100;",
+      "suggestion": "Arredondar com Decimal.toDecimalPlaces e regra explicita."
+    },
+    {
+      "file": "suse7-backend/src/domain/sales/mercadoLivreSaleFinancialFormula.js",
+      "line": 276,
+      "rule_id": "S7-HIST-002",
+      "rule_title": "Math.round em valor monetario",
+      "severity": "WARNING",
+      "snippet": "candidates.list_minus_cost = Math.round((listCost - cost) * 100) / 100;",
+      "suggestion": "Arredondar com Decimal.toDecimalPlaces e regra explicita."
+    },
+    {
+      "file": "suse7-backend/src/domain/sales/mercadoLivreSaleFinancialFormula.js",
+      "line": 284,
+      "rule_id": "S7-HIST-002",
+      "rule_title": "Math.round em valor monetario",
+      "severity": "WARNING",
+      "snippet": "candidates[\"cost_components.ratio\"] = Math.round(ratio * grossDec.toNumber() * 100) / 100;",
+      "suggestion": "Arredondar com Decimal.toDecimalPlaces e regra explicita."
+    },
+    {
+      "file": "suse7-backend/src/domain/sales/saleDetailContingencyMargin.js",
+      "line": 141,
+      "rule_id": "S7-HIST-003",
+      "rule_title": "Percentual financeiro sem Decimal/campo canonico",
+      "severity": "WARNING",
+      "snippet": "margin_formula: \"profit_brl / gross_sale_amount * 100\",",
+      "suggestion": "Usar valor percentual canonico do backend ou calcular com Decimal no backend."
+    },
+    {
+      "file": "suse7-backend/src/domain/sales/saleDetailInternalCosts.js",
+      "line": 91,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Referencia a custo/imposto/configuracao atual",
+      "severity": "WARNING",
+      "snippet": "confidenceRaw === \"persisted\" || confidenceRaw === \"partial\" || confidenceRaw === \"missing_tax_profile\"",
+      "suggestion": "Revisar se a origem e historica (_s7_financial). Se for legado permitido, documentar com ssot-guard:ignore."
+    },
+    {
+      "file": "suse7-backend/src/domain/sales/saleDetailInternalCosts.js",
+      "line": 158,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Lookup potencial de configuracao atual em fluxo financeiro",
+      "severity": "WARNING",
+      "snippet": ".from(\"seller_companies\")",
+      "suggestion": "Evitar lookup vivo em historico; usar snapshot persistido e marcar snapshot_missing quando ausente."
+    },
+    {
+      "file": "suse7-backend/src/domain/sales/saleDetailInternalCosts.js",
+      "line": 215,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Referencia a custo/imposto/configuracao atual",
+      "severity": "WARNING",
+      "snippet": "internalTaxSource = \"marketplace_account_seller_company_tax_profile\";",
+      "suggestion": "Revisar se a origem e historica (_s7_financial). Se for legado permitido, documentar com ssot-guard:ignore."
+    },
+    {
+      "file": "suse7-backend/src/domain/sales/saleDetailInternalCosts.js",
+      "line": 224,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Referencia a custo/imposto/configuracao atual",
+      "severity": "WARNING",
+      "snippet": "source: internalTaxSource ?? \"seller_company_tax_profile\",",
+      "suggestion": "Revisar se a origem e historica (_s7_financial). Se for legado permitido, documentar com ssot-guard:ignore."
+    },
+    {
+      "file": "suse7-backend/src/domain/sales/saleDetailInternalCosts.js",
+      "line": 232,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Referencia a custo/imposto/configuracao atual",
+      "severity": "WARNING",
+      "snippet": "source: \"missing_tax_profile\",",
+      "suggestion": "Revisar se a origem e historica (_s7_financial). Se for legado permitido, documentar com ssot-guard:ignore."
+    },
+    {
+      "file": "suse7-backend/src/domain/sales/saleDetailInternalCosts.js",
+      "line": 240,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Lookup potencial de configuracao atual em fluxo financeiro",
+      "severity": "WARNING",
+      "snippet": ".from(\"profiles\")",
+      "suggestion": "Evitar lookup vivo em historico; usar snapshot persistido e marcar snapshot_missing quando ausente."
+    },
+    {
+      "file": "suse7-backend/src/domain/sales/saleDetailInternalCosts.js",
+      "line": 259,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Referencia a custo/imposto/configuracao atual",
+      "severity": "WARNING",
+      "snippet": "source: \"missing_tax_profile\",",
+      "suggestion": "Revisar se a origem e historica (_s7_financial). Se for legado permitido, documentar com ssot-guard:ignore."
+    },
+    {
+      "file": "suse7-backend/src/domain/sales/saleDetailInternalCosts.js",
+      "line": 268,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Uso de perfil fiscal atual em fluxo historico",
+      "severity": "WARNING",
+      "snippet": "return resolveSaleInternalTaxProfile(supabase, userId, { seller_company_id: sellerCompanyId });",
+      "suggestion": "Substituir por leitura exclusiva de _s7_financial (tax_snapshot/internal_costs_snapshot)."
+    },
+    {
+      "file": "suse7-backend/src/domain/sales/saleDetailInternalCosts.js",
+      "line": 327,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Referencia a custo/imposto/configuracao atual",
+      "severity": "WARNING",
+      "snippet": "const hasTaxProfile = taxPctDec != null && taxSource !== \"missing_tax_profile\";",
+      "suggestion": "Revisar se a origem e historica (_s7_financial). Se for legado permitido, documentar com ssot-guard:ignore."
+    },
+    {
+      "file": "suse7-backend/src/domain/sales/saleDetailInternalCosts.js",
+      "line": 334,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Referencia a custo/imposto/configuracao atual",
+      "severity": "WARNING",
+      "snippet": "else if (!hasTaxProfile) confidence = \"missing_tax_profile\";",
+      "suggestion": "Revisar se a origem e historica (_s7_financial). Se for legado permitido, documentar com ssot-guard:ignore."
+    },
+    {
+      "file": "suse7-backend/src/domain/sales/saleDetailInternalCosts.js",
+      "line": 338,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Referencia a custo/imposto/configuracao atual",
+      "severity": "WARNING",
+      "snippet": "taxSource === \"missing_tax_profile\"",
+      "suggestion": "Revisar se a origem e historica (_s7_financial). Se for legado permitido, documentar com ssot-guard:ignore."
+    },
+    {
+      "file": "suse7-backend/src/domain/sales/saleDetailInternalCosts.js",
+      "line": 339,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Referencia a custo/imposto/configuracao atual",
+      "severity": "WARNING",
+      "snippet": "? \"missing_tax_profile\"",
+      "suggestion": "Revisar se a origem e historica (_s7_financial). Se for legado permitido, documentar com ssot-guard:ignore."
+    },
+    {
+      "file": "suse7-backend/src/domain/sales/saleExecutiveProductScope.js",
+      "line": 35,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Lookup potencial de configuracao atual em fluxo financeiro",
+      "severity": "WARNING",
+      "snippet": ".from(\"products\")",
+      "suggestion": "Evitar lookup vivo em historico; usar snapshot persistido e marcar snapshot_missing quando ausente."
+    },
+    {
+      "file": "suse7-backend/src/domain/sales/saleListingHealthCommercial.js",
+      "line": 188,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Lookup potencial de configuracao atual em fluxo financeiro",
+      "severity": "WARNING",
+      "snippet": ".from(\"marketplace_listing_health\")",
+      "suggestion": "Evitar lookup vivo em historico; usar snapshot persistido e marcar snapshot_missing quando ausente."
+    },
+    {
+      "file": "suse7-backend/src/handlers/marketplace/importIntelligenceSummary.js",
+      "line": 138,
+      "rule_id": "S7-HIST-002",
+      "rule_title": "Number(...) em valor monetario",
+      "severity": "WARNING",
+      "snippet": "const hasHistCustomersJobs = Boolean(histCustomers && (Number(histCustomers.windows_total) || 0) > 0);",
+      "suggestion": "Usar Decimal para parse e operacoes financeiras."
+    },
+    {
+      "file": "suse7-backend/src/handlers/marketplace/importIntelligenceSummary.js",
+      "line": 161,
+      "rule_id": "S7-HIST-002",
+      "rule_title": "Number(...) em valor monetario",
+      "severity": "WARNING",
+      "snippet": "const pcC = Number(histCustomers?.progress_current);",
+      "suggestion": "Usar Decimal para parse e operacoes financeiras."
+    },
+    {
+      "file": "suse7-backend/src/handlers/marketplace/importIntelligenceSummary.js",
+      "line": 162,
+      "rule_id": "S7-HIST-002",
+      "rule_title": "Number(...) em valor monetario",
+      "severity": "WARNING",
+      "snippet": "const ptC = Number(histCustomers?.progress_total);",
+      "suggestion": "Usar Decimal para parse e operacoes financeiras."
+    },
+    {
+      "file": "suse7-backend/src/handlers/ml/salesSummary.js",
+      "line": 52,
+      "rule_id": "S7-HIST-002",
+      "rule_title": "Acumulador monetario inicializado como number",
+      "severity": "WARNING",
+      "snippet": "let gross_revenue_total = 0;",
+      "suggestion": "Inicializar como new Decimal(0) quando for valor monetario."
+    },
+    {
+      "file": "suse7-backend/src/handlers/ml/salesSummary.js",
+      "line": 53,
+      "rule_id": "S7-HIST-002",
+      "rule_title": "Acumulador monetario inicializado como number",
+      "severity": "WARNING",
+      "snippet": "let net_revenue_total = 0;",
+      "suggestion": "Inicializar como new Decimal(0) quando for valor monetario."
+    },
+    {
+      "file": "suse7-backend/src/handlers/ml/salesSummary.js",
+      "line": 55,
+      "rule_id": "S7-HIST-002",
+      "rule_title": "Acumulador monetario inicializado como number",
+      "severity": "WARNING",
+      "snippet": "let gross_revenue_listing_lines = 0;",
+      "suggestion": "Inicializar como new Decimal(0) quando for valor monetario."
+    },
+    {
+      "file": "suse7-backend/src/handlers/ml/salesSummary.js",
+      "line": 56,
+      "rule_id": "S7-HIST-002",
+      "rule_title": "Acumulador monetario inicializado como number",
+      "severity": "WARNING",
+      "snippet": "let net_revenue_listing_lines = 0;",
+      "suggestion": "Inicializar como new Decimal(0) quando for valor monetario."
+    },
+    {
+      "file": "suse7-backend/src/handlers/ml/salesSummary.js",
+      "line": 62,
+      "rule_id": "S7-HIST-002",
+      "rule_title": "Number(...) em valor monetario",
+      "severity": "WARNING",
+      "snippet": "const g = Number(it.gross_amount);",
+      "suggestion": "Usar Decimal para parse e operacoes financeiras."
+    },
+    {
+      "file": "suse7-backend/src/handlers/ml/salesSummary.js",
+      "line": 65,
+      "rule_id": "S7-HIST-002",
+      "rule_title": "Number(...) em valor monetario",
+      "severity": "WARNING",
+      "snippet": "const n = it.net_amount != null ? Number(it.net_amount) : null;",
+      "suggestion": "Usar Decimal para parse e operacoes financeiras."
+    },
+    {
+      "file": "suse7-backend/src/handlers/ml/_helpers/mlListingProductLink.js",
+      "line": 177,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Lookup potencial de configuracao atual em fluxo financeiro",
+      "severity": "WARNING",
+      "snippet": ".from(\"products\")",
+      "suggestion": "Evitar lookup vivo em historico; usar snapshot persistido e marcar snapshot_missing quando ausente."
+    },
+    {
+      "file": "suse7-backend/src/handlers/ml/_helpers/mlListingProductLink.js",
+      "line": 202,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Lookup potencial de configuracao atual em fluxo financeiro",
+      "severity": "WARNING",
+      "snippet": ".from(\"products\")",
+      "suggestion": "Evitar lookup vivo em historico; usar snapshot persistido e marcar snapshot_missing quando ausente."
+    },
+    {
+      "file": "suse7-backend/src/handlers/ml/_helpers/mlListingProductLink.js",
+      "line": 238,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Lookup potencial de configuracao atual em fluxo financeiro",
+      "severity": "WARNING",
+      "snippet": "const { data: vars, error: err3 } = await supabase.from(\"product_variants\").select(\"product_id, sku\").in(\"product_id\", productIds);",
+      "suggestion": "Evitar lookup vivo em historico; usar snapshot persistido e marcar snapshot_missing quando ausente."
+    },
+    {
+      "file": "suse7-backend/src/handlers/ml/_helpers/mlListingProductLink.js",
+      "line": 312,
+      "rule_id": "S7-HIST-002",
+      "rule_title": "parseFloat em contexto financeiro",
+      "severity": "WARNING",
+      "snippet": "const n = parseFloat(String(w).replace(\",\", \".\"));",
+      "suggestion": "Trocar por Decimal ou NUMERIC no backend."
+    },
+    {
+      "file": "suse7-backend/src/handlers/ml/_helpers/mlListingProductLink.js",
+      "line": 321,
+      "rule_id": "S7-HIST-002",
+      "rule_title": "parseFloat em contexto financeiro",
+      "severity": "WARNING",
+      "snippet": "const n = parseFloat(String(x).replace(\",\", \".\"));",
+      "suggestion": "Trocar por Decimal ou NUMERIC no backend."
+    },
+    {
+      "file": "suse7-backend/src/handlers/ml/_helpers/mlListingProductLink.js",
+      "line": 417,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Lookup potencial de configuracao atual em fluxo financeiro",
+      "severity": "WARNING",
+      "snippet": ".from(\"products\")",
+      "suggestion": "Evitar lookup vivo em historico; usar snapshot persistido e marcar snapshot_missing quando ausente."
+    },
+    {
+      "file": "suse7-backend/src/handlers/ml/_helpers/mlListingProductLink.js",
+      "line": 658,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Lookup potencial de configuracao atual em fluxo financeiro",
+      "severity": "WARNING",
+      "snippet": ".from(\"products\")",
+      "suggestion": "Evitar lookup vivo em historico; usar snapshot persistido e marcar snapshot_missing quando ausente."
+    },
+    {
+      "file": "suse7-backend/src/handlers/ml/_helpers/syncListingHealthProductSnapshot.js",
+      "line": 30,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Lookup potencial de configuracao atual em fluxo financeiro",
+      "severity": "WARNING",
+      "snippet": ".from(\"products\")",
+      "suggestion": "Evitar lookup vivo em historico; usar snapshot persistido e marcar snapshot_missing quando ausente."
+    },
+    {
+      "file": "suse7-backend/src/handlers/ml/_helpers/syncListingHealthProductSnapshot.js",
+      "line": 55,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Lookup potencial de configuracao atual em fluxo financeiro",
+      "severity": "WARNING",
+      "snippet": ".from(\"marketplace_listing_health\")",
+      "suggestion": "Evitar lookup vivo em historico; usar snapshot persistido e marcar snapshot_missing quando ausente."
+    },
+    {
+      "file": "suse7-backend/src/handlers/notifications/notificationEventDetail.js",
+      "line": 67,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Lookup potencial de configuracao atual em fluxo financeiro",
+      "severity": "WARNING",
+      "snippet": ".from(\"seller_companies\")",
+      "suggestion": "Evitar lookup vivo em historico; usar snapshot persistido e marcar snapshot_missing quando ausente."
+    },
+    {
+      "file": "suse7-backend/src/handlers/pricing/simulate.js",
+      "line": 46,
+      "rule_id": "S7-HIST-002",
+      "rule_title": "Number(...) em valor monetario",
+      "severity": "WARNING",
+      "snippet": "? Number(String(body.min_margin_pct).replace(\",\", \".\"))",
+      "suggestion": "Usar Decimal para parse e operacoes financeiras."
+    },
+    {
+      "file": "suse7-backend/src/handlers/pricing/simulate.js",
+      "line": 50,
+      "rule_id": "S7-HIST-002",
+      "rule_title": "Number(...) em valor monetario",
+      "severity": "WARNING",
+      "snippet": "? Number(String(body.min_profit_brl).replace(\",\", \".\"))",
+      "suggestion": "Usar Decimal para parse e operacoes financeiras."
+    },
+    {
+      "file": "suse7-backend/src/handlers/pricing/_helpers/mercadoLivrePricingSimulation.js",
+      "line": 107,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Lookup potencial de configuracao atual em fluxo financeiro",
+      "severity": "WARNING",
+      "snippet": ".from(\"marketplace_listing_health\")",
+      "suggestion": "Evitar lookup vivo em historico; usar snapshot persistido e marcar snapshot_missing quando ausente."
+    },
+    {
+      "file": "suse7-backend/src/handlers/pricing/_helpers/mercadoLivrePricingSimulation.js",
+      "line": 142,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Lookup potencial de configuracao atual em fluxo financeiro",
+      "severity": "WARNING",
+      "snippet": ".from(\"profiles\")",
+      "suggestion": "Evitar lookup vivo em historico; usar snapshot persistido e marcar snapshot_missing quando ausente."
+    },
+    {
+      "file": "suse7-backend/src/handlers/pricing/_helpers/mercadoLivrePricingSimulation.js",
+      "line": 291,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Lookup potencial de configuracao atual em fluxo financeiro",
+      "severity": "WARNING",
+      "snippet": ".from(\"marketplace_listing_health\")",
+      "suggestion": "Evitar lookup vivo em historico; usar snapshot persistido e marcar snapshot_missing quando ausente."
+    },
+    {
+      "file": "suse7-backend/src/handlers/pricing/_helpers/mercadoLivrePricingSimulation.js",
+      "line": 326,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Lookup potencial de configuracao atual em fluxo financeiro",
+      "severity": "WARNING",
+      "snippet": ".from(\"profiles\")",
+      "suggestion": "Evitar lookup vivo em historico; usar snapshot persistido e marcar snapshot_missing quando ausente."
+    },
+    {
+      "file": "suse7-backend/src/handlers/products/adTitles.js",
+      "line": 20,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Lookup potencial de configuracao atual em fluxo financeiro",
+      "severity": "WARNING",
+      "snippet": ".from(\"products\")",
+      "suggestion": "Evitar lookup vivo em historico; usar snapshot persistido e marcar snapshot_missing quando ausente."
+    },
+    {
+      "file": "suse7-backend/src/handlers/products/changeStatus.js",
+      "line": 54,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Lookup potencial de configuracao atual em fluxo financeiro",
+      "severity": "WARNING",
+      "snippet": ".from(\"products\")",
+      "suggestion": "Evitar lookup vivo em historico; usar snapshot persistido e marcar snapshot_missing quando ausente."
+    },
+    {
+      "file": "suse7-backend/src/handlers/products/changeStatus.js",
+      "line": 84,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Lookup potencial de configuracao atual em fluxo financeiro",
+      "severity": "WARNING",
+      "snippet": ".from(\"product_variants\")",
+      "suggestion": "Evitar lookup vivo em historico; usar snapshot persistido e marcar snapshot_missing quando ausente."
+    },
+    {
+      "file": "suse7-backend/src/handlers/products/changeStatus.js",
+      "line": 106,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Lookup potencial de configuracao atual em fluxo financeiro",
+      "severity": "WARNING",
+      "snippet": ".from(\"products\")",
+      "suggestion": "Evitar lookup vivo em historico; usar snapshot persistido e marcar snapshot_missing quando ausente."
+    },
+    {
+      "file": "suse7-backend/src/handlers/products/create.js",
+      "line": 23,
+      "rule_id": "S7-HIST-002",
+      "rule_title": "parseFloat em contexto financeiro",
+      "severity": "WARNING",
+      "snippet": "const n = parseFloat(s);",
+      "suggestion": "Trocar por Decimal ou NUMERIC no backend."
+    },
+    {
+      "file": "suse7-backend/src/handlers/products/getForEdit.js",
+      "line": 47,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Lookup potencial de configuracao atual em fluxo financeiro",
+      "severity": "WARNING",
+      "snippet": ".from(\"products\")",
+      "suggestion": "Evitar lookup vivo em historico; usar snapshot persistido e marcar snapshot_missing quando ausente."
+    },
+    {
+      "file": "suse7-backend/src/handlers/products/getForEdit.js",
+      "line": 68,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Lookup potencial de configuracao atual em fluxo financeiro",
+      "severity": "WARNING",
+      "snippet": ".from(\"product_variants\")",
+      "suggestion": "Evitar lookup vivo em historico; usar snapshot persistido e marcar snapshot_missing quando ausente."
+    },
+    {
+      "file": "suse7-backend/src/handlers/products/health.js",
+      "line": 63,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Lookup potencial de configuracao atual em fluxo financeiro",
+      "severity": "WARNING",
+      "snippet": ".from(\"products\")",
+      "suggestion": "Evitar lookup vivo em historico; usar snapshot persistido e marcar snapshot_missing quando ausente."
+    },
+    {
+      "file": "suse7-backend/src/handlers/products/health.js",
+      "line": 90,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Lookup potencial de configuracao atual em fluxo financeiro",
+      "severity": "WARNING",
+      "snippet": ".from(\"product_variants\")",
+      "suggestion": "Evitar lookup vivo em historico; usar snapshot persistido e marcar snapshot_missing quando ausente."
+    },
+    {
+      "file": "suse7-backend/src/handlers/products/performance.js",
+      "line": 82,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Lookup potencial de configuracao atual em fluxo financeiro",
+      "severity": "WARNING",
+      "snippet": ".from(\"products\")",
+      "suggestion": "Evitar lookup vivo em historico; usar snapshot persistido e marcar snapshot_missing quando ausente."
+    },
+    {
+      "file": "suse7-backend/src/handlers/products/performance.js",
+      "line": 148,
+      "rule_id": "S7-HIST-002",
+      "rule_title": "Number(...) em valor monetario",
+      "severity": "WARNING",
+      "snippet": "const net = Number.isFinite(Number(unitRaw)) ? new Decimal(String(unitRaw)) : new Decimal(0);",
+      "suggestion": "Usar Decimal para parse e operacoes financeiras."
+    },
+    {
+      "file": "suse7-backend/src/handlers/products/productListings.js",
+      "line": 54,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Lookup potencial de configuracao atual em fluxo financeiro",
+      "severity": "WARNING",
+      "snippet": ".from(\"products\")",
+      "suggestion": "Evitar lookup vivo em historico; usar snapshot persistido e marcar snapshot_missing quando ausente."
+    },
+    {
+      "file": "suse7-backend/src/handlers/products/productListings.js",
+      "line": 87,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Lookup potencial de configuracao atual em fluxo financeiro",
+      "severity": "WARNING",
+      "snippet": ".from(\"marketplace_listing_health\")",
+      "suggestion": "Evitar lookup vivo em historico; usar snapshot persistido e marcar snapshot_missing quando ausente."
+    },
+    {
+      "file": "suse7-backend/src/handlers/products/upsert.js",
+      "line": 132,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Lookup potencial de configuracao atual em fluxo financeiro",
+      "severity": "WARNING",
+      "snippet": ".from(\"products\")",
+      "suggestion": "Evitar lookup vivo em historico; usar snapshot persistido e marcar snapshot_missing quando ausente."
+    },
+    {
+      "file": "suse7-backend/src/handlers/products/upsert.js",
+      "line": 241,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Lookup potencial de configuracao atual em fluxo financeiro",
+      "severity": "WARNING",
+      "snippet": ".from(\"products\")",
+      "suggestion": "Evitar lookup vivo em historico; usar snapshot persistido e marcar snapshot_missing quando ausente."
+    },
+    {
+      "file": "suse7-backend/src/handlers/products/upsert.js",
+      "line": 335,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Lookup potencial de configuracao atual em fluxo financeiro",
+      "severity": "WARNING",
+      "snippet": ".from(\"products\")",
+      "suggestion": "Evitar lookup vivo em historico; usar snapshot persistido e marcar snapshot_missing quando ausente."
+    },
+    {
+      "file": "suse7-backend/src/handlers/products/variantSync.js",
+      "line": 10,
+      "rule_id": "S7-HIST-002",
+      "rule_title": "parseFloat em contexto financeiro",
+      "severity": "WARNING",
+      "snippet": "const n = parseFloat(s);",
+      "suggestion": "Trocar por Decimal ou NUMERIC no backend."
+    },
+    {
+      "file": "suse7-backend/src/handlers/products/variantSync.js",
+      "line": 30,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Lookup potencial de configuracao atual em fluxo financeiro",
+      "severity": "WARNING",
+      "snippet": ".from(\"product_variants\")",
+      "suggestion": "Evitar lookup vivo em historico; usar snapshot persistido e marcar snapshot_missing quando ausente."
+    },
+    {
+      "file": "suse7-backend/src/handlers/products/variantSync.js",
+      "line": 65,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Lookup potencial de configuracao atual em fluxo financeiro",
+      "severity": "WARNING",
+      "snippet": ".from(\"product_variants\")",
+      "suggestion": "Evitar lookup vivo em historico; usar snapshot persistido e marcar snapshot_missing quando ausente."
+    },
+    {
+      "file": "suse7-backend/src/handlers/products/variantSync.js",
+      "line": 78,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Lookup potencial de configuracao atual em fluxo financeiro",
+      "severity": "WARNING",
+      "snippet": "const { error } = await supabase.from(\"product_variants\").insert(insertRow);",
+      "suggestion": "Evitar lookup vivo em historico; usar snapshot persistido e marcar snapshot_missing quando ausente."
+    },
+    {
+      "file": "suse7-backend/src/handlers/sales/list.js",
+      "line": 227,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Lookup potencial de configuracao atual em fluxo financeiro",
+      "severity": "WARNING",
+      "snippet": "const { data, error } = await supabase.from(\"products\").select(sel).eq(\"user_id\", userId).in(\"id\", chunk);",
+      "suggestion": "Evitar lookup vivo em historico; usar snapshot persistido e marcar snapshot_missing quando ausente."
+    },
+    {
+      "file": "suse7-backend/src/handlers/sales/list.js",
+      "line": 265,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Lookup potencial de configuracao atual em fluxo financeiro",
+      "severity": "WARNING",
+      "snippet": "const { data, error } = await supabase.from(\"products\").select(sel).eq(\"user_id\", userId).in(\"normalized_sku\", chunk);",
+      "suggestion": "Evitar lookup vivo em historico; usar snapshot persistido e marcar snapshot_missing quando ausente."
+    },
+    {
+      "file": "suse7-backend/src/handlers/sales/list.js",
+      "line": 345,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Lookup potencial de configuracao atual em fluxo financeiro",
+      "severity": "WARNING",
+      "snippet": "const { data, error } = await supabase.from(\"seller_companies\").select(sel).eq(\"user_id\", userId).in(\"id\", chunk);",
+      "suggestion": "Evitar lookup vivo em historico; usar snapshot persistido e marcar snapshot_missing quando ausente."
+    },
+    {
+      "file": "suse7-backend/src/handlers/sales/saleDetailFinancial.js",
+      "line": 113,
+      "rule_id": "S7-HIST-003",
+      "rule_title": "Percentual financeiro sem Decimal/campo canonico",
+      "severity": "WARNING",
+      "snippet": "margin_formula: \"profit_brl / gross_sale_amount * 100\",",
+      "suggestion": "Usar valor percentual canonico do backend ou calcular com Decimal no backend."
+    },
+    {
+      "file": "suse7-backend/src/handlers/user/profileSummary.js",
+      "line": 60,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Lookup potencial de configuracao atual em fluxo financeiro",
+      "severity": "WARNING",
+      "snippet": ".from(\"profiles\")",
+      "suggestion": "Evitar lookup vivo em historico; usar snapshot persistido e marcar snapshot_missing quando ausente."
+    },
+    {
+      "file": "suse7-backend/src/handlers/user/profileSummary.js",
+      "line": 69,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Lookup potencial de configuracao atual em fluxo financeiro",
+      "severity": "WARNING",
+      "snippet": ".from(\"profiles\")",
+      "suggestion": "Evitar lookup vivo em historico; usar snapshot persistido e marcar snapshot_missing quando ausente."
+    },
+    {
+      "file": "suse7-backend/src/services/customers/customerIngestionHealthService.js",
+      "line": 359,
+      "rule_id": "S7-HIST-002",
+      "rule_title": "Math.round em valor monetario",
+      "severity": "WARNING",
+      "snippet": "? Math.round((stale / counts.materializedCustomers) * 1000) / 10",
+      "suggestion": "Arredondar com Decimal.toDecimalPlaces e regra explicita."
+    },
+    {
+      "file": "suse7-backend/src/services/customers/customerOrderAggregateService.js",
+      "line": 78,
+      "rule_id": "S7-HIST-002",
+      "rule_title": "Number(...) em valor monetario",
+      "severity": "WARNING",
+      "snippet": "const n = Number(amount);",
+      "suggestion": "Usar Decimal para parse e operacoes financeiras."
+    },
+    {
+      "file": "suse7-backend/src/services/customers/customerOrderAggregateService.js",
+      "line": 170,
+      "rule_id": "S7-HIST-002",
+      "rule_title": "Number(...) em valor monetario",
+      "severity": "WARNING",
+      "snippet": "const n = Number(amount);",
+      "suggestion": "Usar Decimal para parse e operacoes financeiras."
+    },
+    {
+      "file": "suse7-backend/src/services/customers/customerPresentationMapper.js",
+      "line": 198,
+      "rule_id": "S7-HIST-002",
+      "rule_title": "Number(...) em valor monetario",
+      "severity": "WARNING",
+      "snippet": "gross_amount_brl: formatBrl(Number(paid)),",
+      "suggestion": "Usar Decimal para parse e operacoes financeiras."
+    },
+    {
+      "file": "suse7-backend/src/services/customers/customerPresentationMapper.js",
+      "line": 199,
+      "rule_id": "S7-HIST-002",
+      "rule_title": "Number(...) em valor monetario",
+      "severity": "WARNING",
+      "snippet": "paid_amount_brl: formatBrl(Number(paid)),",
+      "suggestion": "Usar Decimal para parse e operacoes financeiras."
+    },
+    {
+      "file": "suse7-backend/src/services/customers/customerReadModelService.js",
+      "line": 244,
+      "rule_id": "S7-HIST-002",
+      "rule_title": "Acumulador monetario inicializado como number",
+      "severity": "WARNING",
+      "snippet": "let revenue = 0;",
+      "suggestion": "Inicializar como new Decimal(0) quando for valor monetario."
+    },
+    {
+      "file": "suse7-backend/src/services/customers/customerReadModelService.js",
+      "line": 265,
+      "rule_id": "S7-HIST-002",
+      "rule_title": "Number(...) em valor monetario",
+      "severity": "WARNING",
+      "snippet": "total_spent_brl: formatBrlAmount(Number(r.total_spent_brl)),",
+      "suggestion": "Usar Decimal para parse e operacoes financeiras."
+    },
+    {
+      "file": "suse7-backend/src/services/customers/customerReadModelService.js",
+      "line": 444,
+      "rule_id": "S7-HIST-002",
+      "rule_title": "Number(...) em valor monetario",
+      "severity": "WARNING",
+      "snippet": "const ticket = Number(metrics.average_ticket_brl);",
+      "suggestion": "Usar Decimal para parse e operacoes financeiras."
+    },
+    {
+      "file": "suse7-backend/scripts/debug_sales_detail_internal_tax.mjs",
+      "line": 39,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Lookup potencial de configuracao atual em fluxo financeiro",
+      "severity": "WARNING",
+      "snippet": ".from(\"products\")",
+      "suggestion": "Evitar lookup vivo em historico; usar snapshot persistido e marcar snapshot_missing quando ausente."
+    },
+    {
+      "file": "suse7-backend/scripts/debug_sales_detail_internal_tax.mjs",
+      "line": 48,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Uso de perfil fiscal atual em fluxo historico",
+      "severity": "WARNING",
+      "snippet": "const taxProfile = await resolveSaleInternalTaxProfile(supabase, userId, {",
+      "suggestion": "Substituir por leitura exclusiva de _s7_financial (tax_snapshot/internal_costs_snapshot)."
+    },
+    {
+      "file": "suse7-backend/scripts/inspect-product-variants.mjs",
+      "line": 29,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Lookup potencial de configuracao atual em fluxo financeiro",
+      "severity": "WARNING",
+      "snippet": ".from(\"product_variants\")",
+      "suggestion": "Evitar lookup vivo em historico; usar snapshot persistido e marcar snapshot_missing quando ausente."
+    },
+    {
+      "file": "suse7-backend/scripts/runPhase35C1A3_1SaleRayxManualHttpSmoke.mjs",
+      "line": 282,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Lookup potencial de configuracao atual em fluxo financeiro",
+      "severity": "WARNING",
+      "snippet": "const { data: profile } = await sb.from(\"profiles\").select(\"phone, email\").eq(\"id\", sellerId).maybeSingle();",
+      "suggestion": "Evitar lookup vivo em historico; usar snapshot persistido e marcar snapshot_missing quando ausente."
+    },
+    {
+      "file": "suse7-backend/scripts/smoke_dev_center_customers_boundary.mjs",
+      "line": 106,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Lookup potencial de configuracao atual em fluxo financeiro",
+      "severity": "WARNING",
+      "snippet": "const { data: admins } = await supabase.from(\"profiles\").select(\"id, is_admin\").eq(\"is_admin\", true).limit(20);",
+      "suggestion": "Evitar lookup vivo em historico; usar snapshot persistido e marcar snapshot_missing quando ausente."
+    },
+    {
+      "file": "suse7-backend/scripts/smoke_dev_center_customers_hardening.mjs",
+      "line": 52,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Lookup potencial de configuracao atual em fluxo financeiro",
+      "severity": "WARNING",
+      "snippet": "const { data: admins } = await supabase.from(\"profiles\").select(\"id\").eq(\"is_admin\", true).limit(1);",
+      "suggestion": "Evitar lookup vivo em historico; usar snapshot persistido e marcar snapshot_missing quando ausente."
+    },
+    {
+      "file": "suse7-backend/scripts/test_sale_executive_line_real_result_unit.mjs",
+      "line": 29,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Referencia a custo/imposto/configuracao atual",
+      "severity": "WARNING",
+      "snippet": "source: \"seller_company_tax_profile\",",
+      "suggestion": "Revisar se a origem e historica (_s7_financial). Se for legado permitido, documentar com ssot-guard:ignore."
+    },
+    {
+      "file": "suse7-backend/scripts/test_sale_executive_line_real_result_unit.mjs",
+      "line": 64,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Referencia a custo/imposto/configuracao atual",
+      "severity": "WARNING",
+      "snippet": "source: \"seller_company_tax_profile\",",
+      "suggestion": "Revisar se a origem e historica (_s7_financial). Se for legado permitido, documentar com ssot-guard:ignore."
+    },
+    {
+      "file": "suse7-backend/scripts/validate_internal_tax_by_seller_company.mjs",
+      "line": 37,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Lookup potencial de configuracao atual em fluxo financeiro",
+      "severity": "WARNING",
+      "snippet": ".from(\"seller_companies\")",
+      "suggestion": "Evitar lookup vivo em historico; usar snapshot persistido e marcar snapshot_missing quando ausente."
+    },
+    {
+      "file": "suse7-backend/scripts/validate_internal_tax_by_seller_company.mjs",
+      "line": 103,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Lookup potencial de configuracao atual em fluxo financeiro",
+      "severity": "WARNING",
+      "snippet": ".from(\"products\")",
+      "suggestion": "Evitar lookup vivo em historico; usar snapshot persistido e marcar snapshot_missing quando ausente."
+    },
+    {
+      "file": "suse7-backend/scripts/validate_internal_tax_by_seller_company.mjs",
+      "line": 109,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Uso de perfil fiscal atual em fluxo historico",
+      "severity": "WARNING",
+      "snippet": "const taxProfile = await resolveSaleInternalTaxProfile(supabase, userId, {",
+      "suggestion": "Substituir por leitura exclusiva de _s7_financial (tax_snapshot/internal_costs_snapshot)."
+    },
+    {
+      "file": "suse7-backend/scripts/validate_internal_tax_by_seller_company.mjs",
+      "line": 126,
+      "rule_id": "S7-HIST-002",
+      "rule_title": "Number(...) em valor monetario",
+      "severity": "WARNING",
+      "snippet": "Number(ic.tax_percent_applied) === Number(spec.expectRate);",
+      "suggestion": "Usar Decimal para parse e operacoes financeiras."
+    },
+    {
+      "file": "suse7-backend/scripts/validate_internal_tax_by_seller_company.mjs",
+      "line": 152,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Uso de perfil fiscal atual em fluxo historico",
+      "severity": "WARNING",
+      "snippet": "const taxProfile = await resolveSaleInternalTaxProfile(supabase, ord.user_id, {",
+      "suggestion": "Substituir por leitura exclusiva de _s7_financial (tax_snapshot/internal_costs_snapshot)."
+    },
+    {
+      "file": "suse7-backend/scripts/validate_internal_tax_by_seller_company.mjs",
+      "line": 157,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Lookup potencial de configuracao atual em fluxo financeiro",
+      "severity": "WARNING",
+      "snippet": "? await supabase.from(\"products\").select(\"id,cost_price,packaging_cost,operational_cost\").eq(\"id\", item.product_id).maybeSingle()",
+      "suggestion": "Evitar lookup vivo em historico; usar snapshot persistido e marcar snapshot_missing quando ausente."
+    },
+    {
+      "file": "suse7-backend/scripts/validate_rayx_internal_tax_final.mjs",
+      "line": 59,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Lookup potencial de configuracao atual em fluxo financeiro",
+      "severity": "WARNING",
+      "snippet": ".from(\"products\")",
+      "suggestion": "Evitar lookup vivo em historico; usar snapshot persistido e marcar snapshot_missing quando ausente."
+    },
+    {
+      "file": "suse7-backend/scripts/validate_rayx_internal_tax_final.mjs",
+      "line": 66,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Uso de perfil fiscal atual em fluxo historico",
+      "severity": "WARNING",
+      "snippet": "const taxProfile = await resolveSaleInternalTaxProfile(supabase, userId, {",
+      "suggestion": "Substituir por leitura exclusiva de _s7_financial (tax_snapshot/internal_costs_snapshot)."
+    },
+    {
+      "file": "suse7-backend/scripts/validate_rayx_internal_tax_final.mjs",
+      "line": 87,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Lookup potencial de configuracao atual em fluxo financeiro",
+      "severity": "WARNING",
+      "snippet": ".from(\"seller_companies\")",
+      "suggestion": "Evitar lookup vivo em historico; usar snapshot persistido e marcar snapshot_missing quando ausente."
+    },
+    {
+      "file": "suse7-backend/scripts/validate_rayx_internal_tax_final.mjs",
+      "line": 126,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Referencia a custo/imposto/configuracao atual",
+      "severity": "WARNING",
+      "snippet": "source: ic.source?.internal_tax === \"seller_company_tax_profile\",",
+      "suggestion": "Revisar se a origem e historica (_s7_financial). Se for legado permitido, documentar com ssot-guard:ignore."
+    },
+    {
+      "file": "suse7-backend/scripts/validate_rayx_internal_tax_final.mjs",
+      "line": 166,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Referencia a custo/imposto/configuracao atual",
+      "severity": "WARNING",
+      "snippet": "source: ic.source?.internal_tax === \"missing_tax_profile\",",
+      "suggestion": "Revisar se a origem e historica (_s7_financial). Se for legado permitido, documentar com ssot-guard:ignore."
+    },
+    {
+      "file": "suse7-backend/scripts/validate_rayx_result_block.mjs",
+      "line": 95,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Lookup potencial de configuracao atual em fluxo financeiro",
+      "severity": "WARNING",
+      "snippet": ".from(\"products\")",
+      "suggestion": "Evitar lookup vivo em historico; usar snapshot persistido e marcar snapshot_missing quando ausente."
+    },
+    {
+      "file": "suse7-backend/scripts/validate_rayx_result_block.mjs",
+      "line": 102,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Uso de perfil fiscal atual em fluxo historico",
+      "severity": "WARNING",
+      "snippet": "const taxProfile = await resolveSaleInternalTaxProfile(supabase, userId, {",
+      "suggestion": "Substituir por leitura exclusiva de _s7_financial (tax_snapshot/internal_costs_snapshot)."
+    },
+    {
+      "file": "suse7-backend/scripts/validate_rayx_result_block.mjs",
+      "line": 150,
+      "rule_id": "S7-HIST-003",
+      "rule_title": "Operacao paralela de lucro/custo detectada",
+      "severity": "WARNING",
+      "snippet": "console.log(\"  Lucro = net_received - product_cost - internal_tax - operation_packaging\");",
+      "suggestion": "Consumir lucro/margem de campo canonico SSOT (snapshot/agregacao oficial), sem recomputar em fallback."
+    },
+    {
+      "file": "suse7-frontend/src/components/AdsPricingIntelligenceModal.jsx",
+      "line": 30,
+      "rule_id": "S7-HIST-002",
+      "rule_title": "parseFloat em contexto financeiro",
+      "severity": "WARNING",
+      "snippet": "const tEnv = Number.parseFloat(",
+      "suggestion": "Trocar por Decimal ou NUMERIC no backend."
+    },
+    {
+      "file": "suse7-frontend/src/components/AdsPricingIntelligenceModal.jsx",
+      "line": 33,
+      "rule_id": "S7-HIST-002",
+      "rule_title": "parseFloat em contexto financeiro",
+      "severity": "WARNING",
+      "snippet": "const bEnv = Number.parseFloat(",
+      "suggestion": "Trocar por Decimal ou NUMERIC no backend."
+    },
+    {
+      "file": "suse7-frontend/src/components/dashboard/S7DailySummaryAdaptiveRevenueValue.jsx",
+      "line": 22,
+      "rule_id": "S7-HIST-002",
+      "rule_title": "parseFloat em contexto financeiro",
+      "severity": "WARNING",
+      "snippet": "return parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;",
+      "suggestion": "Trocar por Decimal ou NUMERIC no backend."
+    },
+    {
+      "file": "suse7-frontend/src/components/dashboard/S7DailySummaryAdaptiveRevenueValue.jsx",
+      "line": 35,
+      "rule_id": "S7-HIST-002",
+      "rule_title": "parseFloat em contexto financeiro",
+      "severity": "WARNING",
+      "snippet": "(parseFloat(estilo.paddingLeft) || 0) + (parseFloat(estilo.paddingRight) || 0);",
+      "suggestion": "Trocar por Decimal ou NUMERIC no backend."
+    },
+    {
+      "file": "suse7-frontend/src/components/mercadoLivrePricingScenarioCompareShared.js",
+      "line": 1490,
+      "rule_id": "S7-HIST-002",
+      "rule_title": "Number(...) em valor monetario",
+      "severity": "WARNING",
+      "snippet": "const n = Number(String(marginPctRaw).trim().replace(\",\", \".\"));",
+      "suggestion": "Usar Decimal para parse e operacoes financeiras."
+    },
+    {
+      "file": "suse7-frontend/src/components/MercadoLivrePricingScenarioRaiox.jsx",
+      "line": 432,
+      "rule_id": "S7-HIST-002",
+      "rule_title": "Number(...) em valor monetario",
+      "severity": "WARNING",
+      "snippet": "const n = Number(String(m.preview_fee_reduction_brl).replace(\",\", \".\"));",
+      "suggestion": "Usar Decimal para parse e operacoes financeiras."
+    },
+    {
+      "file": "suse7-frontend/src/components/MercadoLivrePricingScenarioRaiox.jsx",
+      "line": 438,
+      "rule_id": "S7-HIST-002",
+      "rule_title": "Number(...) em valor monetario",
+      "severity": "WARNING",
+      "snippet": "const n = Number(String(sx.charged_fee_reduction_brl).replace(\",\", \".\"));",
+      "suggestion": "Usar Decimal para parse e operacoes financeiras."
+    },
+    {
+      "file": "suse7-frontend/src/components/pricing/PricingIntelligenceCompetitorsCompareCards.jsx",
+      "line": 511,
+      "rule_id": "S7-HIST-002",
+      "rule_title": "Math.round em valor monetario",
+      "severity": "WARNING",
+      "snippet": "const margemSync = Math.round(st.resolvedMargin * 100) / 100;",
+      "suggestion": "Arredondar com Decimal.toDecimalPlaces e regra explicita."
+    },
+    {
+      "file": "suse7-frontend/src/components/pricing/PricingIntelligenceCompetitorsCompareCards.jsx",
+      "line": 563,
+      "rule_id": "S7-HIST-002",
+      "rule_title": "Number(...) em valor monetario",
+      "severity": "WARNING",
+      "snippet": "const margemSync = Number(Number(st.resolvedMargin).toFixed(2));",
+      "suggestion": "Usar Decimal para parse e operacoes financeiras."
+    },
+    {
+      "file": "suse7-frontend/src/components/pricing/pricingListingTypeChartMetrics.js",
+      "line": 31,
+      "rule_id": "S7-HIST-002",
+      "rule_title": "Number(...) em valor monetario",
+      "severity": "WARNING",
+      "snippet": "return { texto: formatarBrlExibicaoApi(raw), valor: Number(String(raw).replace(\",\", \".\")) };",
+      "suggestion": "Usar Decimal para parse e operacoes financeiras."
+    },
+    {
+      "file": "suse7-frontend/src/components/pricing/pricingListingTypeChartMetrics.js",
+      "line": 67,
+      "rule_id": "S7-HIST-002",
+      "rule_title": "Number(...) em valor monetario",
+      "severity": "WARNING",
+      "snippet": "return { texto: formatarBrlExibicaoApi(pick.raw), valor: Number(String(pick.raw).replace(\",\", \".\")) };",
+      "suggestion": "Usar Decimal para parse e operacoes financeiras."
+    },
+    {
+      "file": "suse7-frontend/src/components/pricing/PricingPageSalePriceSimulator.jsx",
+      "line": 320,
+      "rule_id": "S7-HIST-002",
+      "rule_title": "Math.round em valor monetario",
+      "severity": "WARNING",
+      "snippet": "const margemSync = Math.round(st.resolvedMargin * 100) / 100;",
+      "suggestion": "Arredondar com Decimal.toDecimalPlaces e regra explicita."
+    },
+    {
+      "file": "suse7-frontend/src/components/pricing/PricingPageSalePriceSimulator.jsx",
+      "line": 352,
+      "rule_id": "S7-HIST-002",
+      "rule_title": "Number(...) em valor monetario",
+      "severity": "WARNING",
+      "snippet": "const margemSync = Number(Number(st.resolvedMargin).toFixed(2));",
+      "suggestion": "Usar Decimal para parse e operacoes financeiras."
+    },
+    {
+      "file": "suse7-frontend/src/components/pricing/PricingPageSimulationInputs.jsx",
+      "line": 340,
+      "rule_id": "S7-HIST-002",
+      "rule_title": "Number(...) em valor monetario",
+      "severity": "WARNING",
+      "snippet": "onChange={(e) => onMargemPctChange?.(Number(e.target.value))}",
+      "suggestion": "Usar Decimal para parse e operacoes financeiras."
+    },
+    {
+      "file": "suse7-frontend/src/components/pricing/pricingPercentInputUi.js",
+      "line": 25,
+      "rule_id": "S7-HIST-002",
+      "rule_title": "Number(...) em valor monetario",
+      "severity": "WARNING",
+      "snippet": "if (margemPct == null || !Number.isFinite(Number(margemPct))) return \"\";",
+      "suggestion": "Usar Decimal para parse e operacoes financeiras."
+    },
+    {
+      "file": "suse7-frontend/src/components/pricing/pricingPercentInputUi.js",
+      "line": 26,
+      "rule_id": "S7-HIST-002",
+      "rule_title": "Number(...) em valor monetario",
+      "severity": "WARNING",
+      "snippet": "const n = Number(margemPct);",
+      "suggestion": "Usar Decimal para parse e operacoes financeiras."
+    },
+    {
+      "file": "suse7-frontend/src/components/pricing/PricingScenarioSalePriceControl.jsx",
+      "line": 74,
+      "rule_id": "S7-HIST-002",
+      "rule_title": "parseFloat em contexto financeiro",
+      "severity": "WARNING",
+      "snippet": "const gap = Number.parseFloat(estilosPainel?.getPropertyValue(\"--s7-pi-edit-popover-gap-acima-linha\") ?? \"\") || 6;",
+      "suggestion": "Trocar por Decimal ou NUMERIC no backend."
+    },
+    {
+      "file": "suse7-frontend/src/components/pricing/PricingScenarioSalePriceControl.jsx",
+      "line": 76,
+      "rule_id": "S7-HIST-002",
+      "rule_title": "parseFloat em contexto financeiro",
+      "severity": "WARNING",
+      "snippet": "Number.parseFloat(estilosPainel?.getPropertyValue(\"--s7-pi-edit-popover-deslocamento-baixo\") ?? \"\") || 8;",
+      "suggestion": "Trocar por Decimal ou NUMERIC no backend."
+    },
+    {
+      "file": "suse7-frontend/src/components/PricingIntelligenceContent.jsx",
+      "line": 642,
+      "rule_id": "S7-HIST-002",
+      "rule_title": "Number(...) em valor monetario",
+      "severity": "WARNING",
+      "snippet": "const minM = minMarginInput.trim() !== \"\" ? Number(String(minMarginInput).replace(\",\", \".\")) : null;",
+      "suggestion": "Usar Decimal para parse e operacoes financeiras."
+    },
+    {
+      "file": "suse7-frontend/src/components/PricingIntelligenceContent.jsx",
+      "line": 643,
+      "rule_id": "S7-HIST-002",
+      "rule_title": "Number(...) em valor monetario",
+      "severity": "WARNING",
+      "snippet": "const minP = minProfitInput.trim() !== \"\" ? Number(String(minProfitInput).replace(\",\", \".\")) : null;",
+      "suggestion": "Usar Decimal para parse e operacoes financeiras."
+    },
+    {
+      "file": "suse7-frontend/src/components/PricingIntelligenceContent.jsx",
+      "line": 959,
+      "rule_id": "S7-HIST-002",
+      "rule_title": "Number(...) em valor monetario",
+      "severity": "WARNING",
+      "snippet": "const profitN = Number(String(profitRaw).replace(\",\", \".\"));",
+      "suggestion": "Usar Decimal para parse e operacoes financeiras."
+    },
+    {
+      "file": "suse7-frontend/src/components/products/ProductFinancialRayXPanel.jsx",
+      "line": 128,
+      "rule_id": "S7-HIST-003",
+      "rule_title": "Percentual financeiro sem Decimal/campo canonico",
+      "severity": "WARNING",
+      "snippet": "const pct = (profit / gross) * 100;",
+      "suggestion": "Usar valor percentual canonico do backend ou calcular com Decimal no backend."
+    },
+    {
+      "file": "suse7-frontend/src/components/Products.jsx",
+      "line": 379,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Lookup potencial de configuracao atual em fluxo financeiro",
+      "severity": "WARNING",
+      "snippet": ".from(\"products\")",
+      "suggestion": "Evitar lookup vivo em historico; usar snapshot persistido e marcar snapshot_missing quando ausente."
+    },
+    {
+      "file": "suse7-frontend/src/components/Products.jsx",
+      "line": 393,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Lookup potencial de configuracao atual em fluxo financeiro",
+      "severity": "WARNING",
+      "snippet": ".from(\"products\")",
+      "suggestion": "Evitar lookup vivo em historico; usar snapshot persistido e marcar snapshot_missing quando ausente."
+    },
+    {
+      "file": "suse7-frontend/src/components/Products.jsx",
+      "line": 467,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Lookup potencial de configuracao atual em fluxo financeiro",
+      "severity": "WARNING",
+      "snippet": "const { error } = await supabase.from(\"products\").delete().eq(\"id\", product.id).eq(\"user_id\", user.id);",
+      "suggestion": "Evitar lookup vivo em historico; usar snapshot persistido e marcar snapshot_missing quando ausente."
+    },
+    {
+      "file": "suse7-frontend/src/components/Products.jsx",
+      "line": 516,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Lookup potencial de configuracao atual em fluxo financeiro",
+      "severity": "WARNING",
+      "snippet": ".from(\"products\")",
+      "suggestion": "Evitar lookup vivo em historico; usar snapshot persistido e marcar snapshot_missing quando ausente."
+    },
+    {
+      "file": "suse7-frontend/src/components/Products.jsx",
+      "line": 529,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Lookup potencial de configuracao atual em fluxo financeiro",
+      "severity": "WARNING",
+      "snippet": ".from(\"products\")",
+      "suggestion": "Evitar lookup vivo em historico; usar snapshot persistido e marcar snapshot_missing quando ausente."
+    },
+    {
+      "file": "suse7-frontend/src/components/Products.jsx",
+      "line": 539,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Lookup potencial de configuracao atual em fluxo financeiro",
+      "severity": "WARNING",
+      "snippet": ".from(\"products\")",
+      "suggestion": "Evitar lookup vivo em historico; usar snapshot persistido e marcar snapshot_missing quando ausente."
+    },
+    {
+      "file": "suse7-frontend/src/components/rayx/rayxPortalLayout.js",
+      "line": 43,
+      "rule_id": "S7-HIST-002",
+      "rule_title": "parseFloat em contexto financeiro",
+      "severity": "WARNING",
+      "snippet": "const tEnv = Number.parseFloat(",
+      "suggestion": "Trocar por Decimal ou NUMERIC no backend."
+    },
+    {
+      "file": "suse7-frontend/src/components/rayx/rayxPortalLayout.js",
+      "line": 46,
+      "rule_id": "S7-HIST-002",
+      "rule_title": "parseFloat em contexto financeiro",
+      "severity": "WARNING",
+      "snippet": "const bEnv = Number.parseFloat(",
+      "suggestion": "Trocar por Decimal ou NUMERIC no backend."
+    },
+    {
+      "file": "suse7-frontend/src/components/sales/saleRayxHealthState.js",
+      "line": 15,
+      "rule_id": "S7-HIST-002",
+      "rule_title": "Number(...) em valor monetario",
+      "severity": "WARNING",
+      "snippet": "const n = Number(String(marginPercentRaw).replace(\",\", \".\"));",
+      "suggestion": "Usar Decimal para parse e operacoes financeiras."
+    },
+    {
+      "file": "suse7-frontend/src/components/sales/saleRayxPricingVariables.js",
+      "line": 145,
+      "rule_id": "S7-HIST-002",
+      "rule_title": "Number(...) em valor monetario",
+      "severity": "WARNING",
+      "snippet": "formatNegativeBrlApi(String(Math.abs(Number(String(resolvedAmount).replace(\",\", \".\")))))",
+      "suggestion": "Usar Decimal para parse e operacoes financeiras."
+    },
+    {
+      "file": "suse7-frontend/src/components/sales/saleRayxSummaryRender.js",
+      "line": 205,
+      "rule_id": "S7-HIST-002",
+      "rule_title": "Number(...) em valor monetario",
+      "severity": "WARNING",
+      "snippet": "const n = Number(String(marginPercentRaw).replace(\",\", \".\"));",
+      "suggestion": "Usar Decimal para parse e operacoes financeiras."
+    },
+    {
+      "file": "suse7-frontend/src/features/listings/components/QuickProductCostsModal.jsx",
+      "line": 81,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Lookup potencial de configuracao atual em fluxo financeiro",
+      "severity": "WARNING",
+      "snippet": ".from(\"products\")",
+      "suggestion": "Evitar lookup vivo em historico; usar snapshot persistido e marcar snapshot_missing quando ausente."
+    },
+    {
+      "file": "suse7-frontend/src/features/listings/components/QuickProductCostsModal.jsx",
+      "line": 144,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Lookup potencial de configuracao atual em fluxo financeiro",
+      "severity": "WARNING",
+      "snippet": "let updateQuery = supabase.from(\"products\").update(payload).eq(\"user_id\", user.id);",
+      "suggestion": "Evitar lookup vivo em historico; usar snapshot persistido e marcar snapshot_missing quando ausente."
+    },
+    {
+      "file": "suse7-frontend/src/features/vendas/reports/share/buildVendasSharePayload.js",
+      "line": 136,
+      "rule_id": "S7-HIST-002",
+      "rule_title": "Acumulador monetario inicializado como number",
+      "severity": "WARNING",
+      "snippet": "let custoProduto = 0;",
+      "suggestion": "Inicializar como new Decimal(0) quando for valor monetario."
+    },
+    {
+      "file": "suse7-frontend/src/features/vendas/reports/share/buildVendasSharePayload.js",
+      "line": 139,
+      "rule_id": "S7-HIST-002",
+      "rule_title": "Acumulador monetario inicializado como number",
+      "severity": "WARNING",
+      "snippet": "let impostos = 0;",
+      "suggestion": "Inicializar como new Decimal(0) quando for valor monetario."
+    },
+    {
+      "file": "suse7-frontend/src/features/vendas/reports/share/fetchVendasReportDetailRows.js",
+      "line": 67,
+      "rule_id": "S7-HIST-002",
+      "rule_title": "Number(...) em valor monetario",
+      "severity": "WARNING",
+      "snippet": "Number(q.expectedCount ?? payload.quantidadeVendas?.valor ?? payload.listagemTotal ?? 0) || 0,",
+      "suggestion": "Usar Decimal para parse e operacoes financeiras."
+    },
+    {
+      "file": "suse7-frontend/src/features/vendas/reports/VendasRelatorioExecutivoStub.jsx",
+      "line": 16,
+      "rule_id": "S7-HIST-003",
+      "rule_title": "Percentual financeiro sem Decimal/campo canonico",
+      "severity": "WARNING",
+      "snippet": "\"Valor referente à margem de contribuição da venda/período, considerando receitas do marketplace, custos internos, impostos e custos operacionais cadastrados.\";",
+      "suggestion": "Usar valor percentual canonico do backend ou calcular com Decimal no backend."
+    },
+    {
+      "file": "suse7-frontend/src/features/vendas/reports/vendasReportMetricTone.js",
+      "line": 22,
+      "rule_id": "S7-HIST-002",
+      "rule_title": "parseFloat em contexto financeiro",
+      "severity": "WARNING",
+      "snippet": "const n = Number.parseFloat(cleaned);",
+      "suggestion": "Trocar por Decimal ou NUMERIC no backend."
+    },
+    {
+      "file": "suse7-frontend/src/features/vendas/selection/aggregateVendasSelectedSalesMetrics.js",
+      "line": 72,
+      "rule_id": "S7-HIST-002",
+      "rule_title": "Acumulador monetario inicializado como number",
+      "severity": "WARNING",
+      "snippet": "let grossTotal = 0;",
+      "suggestion": "Inicializar como new Decimal(0) quando for valor monetario."
+    },
+    {
+      "file": "suse7-frontend/src/features/vendas/selection/aggregateVendasSelectedSalesMetrics.js",
+      "line": 73,
+      "rule_id": "S7-HIST-002",
+      "rule_title": "Acumulador monetario inicializado como number",
+      "severity": "WARNING",
+      "snippet": "let profitTotal = 0;",
+      "suggestion": "Inicializar como new Decimal(0) quando for valor monetario."
+    },
+    {
+      "file": "suse7-frontend/src/features/vendas/selection/aggregateVendasSelectedSalesMetrics.js",
+      "line": 81,
+      "rule_id": "S7-HIST-002",
+      "rule_title": "Acumulador monetario inicializado como number",
+      "severity": "WARNING",
+      "snippet": "let custoProdutoTotal = 0;",
+      "suggestion": "Inicializar como new Decimal(0) quando for valor monetario."
+    },
+    {
+      "file": "suse7-frontend/src/features/vendas/selection/aggregateVendasSelectedSalesMetrics.js",
+      "line": 84,
+      "rule_id": "S7-HIST-002",
+      "rule_title": "Acumulador monetario inicializado como number",
+      "severity": "WARNING",
+      "snippet": "let impostosTotal = 0;",
+      "suggestion": "Inicializar como new Decimal(0) quando for valor monetario."
+    },
+    {
+      "file": "suse7-frontend/src/features/vendas/selection/aggregateVendasSelectedSalesMetrics.js",
+      "line": 87,
+      "rule_id": "S7-HIST-002",
+      "rule_title": "Acumulador monetario inicializado como number",
+      "severity": "WARNING",
+      "snippet": "let custosOperacionaisTotal = 0;",
+      "suggestion": "Inicializar como new Decimal(0) quando for valor monetario."
+    },
+    {
+      "file": "suse7-frontend/src/features/vendas/selection/aggregateVendasSelectedSalesMetrics.js",
+      "line": 166,
+      "rule_id": "S7-HIST-003",
+      "rule_title": "Percentual financeiro sem Decimal/campo canonico",
+      "severity": "WARNING",
+      "snippet": ": ((profitTotal / grossTotal) * 100).toFixed(2);",
+      "suggestion": "Usar valor percentual canonico do backend ou calcular com Decimal no backend."
+    },
+    {
+      "file": "suse7-frontend/src/pages/admin/sellers/drawer/toolbox/centralSync/sales/sellerToolboxRecalculateSaleFinancialOperation.js",
+      "line": 27,
+      "rule_id": "S7-HIST-002",
+      "rule_title": "Number(...) em valor monetario",
+      "severity": "WARNING",
+      "snippet": "const previousNetAmount = Number(context.previousNetAmount);",
+      "suggestion": "Usar Decimal para parse e operacoes financeiras."
+    },
+    {
+      "file": "suse7-frontend/src/pages/admin/sellers/drawer/toolbox/centralSync/sales/sellerToolboxRecalculateSaleFinancialOperation.js",
+      "line": 36,
+      "rule_id": "S7-HIST-002",
+      "rule_title": "Math.round em valor monetario",
+      "severity": "WARNING",
+      "snippet": "newNetAmount: Math.round((safePrevious + 1.53) * 100) / 100,",
+      "suggestion": "Arredondar com Decimal.toDecimalPlaces e regra explicita."
+    },
+    {
+      "file": "suse7-frontend/src/pages/admin/sellers/drawer/toolbox/centralSync/sales/useSalesSyncView.jsx",
+      "line": 110,
+      "rule_id": "S7-HIST-002",
+      "rule_title": "Number(...) em valor monetario",
+      "severity": "WARNING",
+      "snippet": "const newNetAmount = Number(result.newNetAmount);",
+      "suggestion": "Usar Decimal para parse e operacoes financeiras."
+    },
+    {
+      "file": "suse7-frontend/src/services/notificationEventScanner.js",
+      "line": 120,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Lookup potencial de configuracao atual em fluxo financeiro",
+      "severity": "WARNING",
+      "snippet": ".from(\"products\")",
+      "suggestion": "Evitar lookup vivo em historico; usar snapshot persistido e marcar snapshot_missing quando ausente."
+    },
+    {
+      "file": "suse7-frontend/src/services/notificationUserResolver.js",
+      "line": 41,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Lookup potencial de configuracao atual em fluxo financeiro",
+      "severity": "WARNING",
+      "snippet": ".from(\"profiles\")",
+      "suggestion": "Evitar lookup vivo em historico; usar snapshot persistido e marcar snapshot_missing quando ausente."
+    },
+    {
+      "file": "suse7-frontend/src/services/products/productRepository.js",
+      "line": 155,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Lookup potencial de configuracao atual em fluxo financeiro",
+      "severity": "WARNING",
+      "snippet": ".from(\"products\")",
+      "suggestion": "Evitar lookup vivo em historico; usar snapshot persistido e marcar snapshot_missing quando ausente."
+    },
+    {
+      "file": "suse7-frontend/src/shared/renderers/saleRayx/saleRayxShareHealthVisual.ts",
+      "line": 67,
+      "rule_id": "S7-HIST-002",
+      "rule_title": "Number(...) em valor monetario",
+      "severity": "WARNING",
+      "snippet": "const n = Number(String(marginPercentRaw).replace(\",\", \".\"));",
+      "suggestion": "Usar Decimal para parse e operacoes financeiras."
+    },
+    {
+      "file": "suse7-frontend/src/utils/productImagesPersistence.js",
+      "line": 143,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Lookup potencial de configuracao atual em fluxo financeiro",
+      "severity": "WARNING",
+      "snippet": ".from(\"products\")",
+      "suggestion": "Evitar lookup vivo em historico; usar snapshot persistido e marcar snapshot_missing quando ausente."
+    },
+    {
+      "file": "suse7-frontend/src/utils/productImagesPersistence.js",
+      "line": 159,
+      "rule_id": "S7-HIST-001",
+      "rule_title": "Lookup potencial de configuracao atual em fluxo financeiro",
+      "severity": "WARNING",
+      "snippet": ".from(\"products\")",
+      "suggestion": "Evitar lookup vivo em historico; usar snapshot persistido e marcar snapshot_missing quando ausente."
+    }
+  ]
+}

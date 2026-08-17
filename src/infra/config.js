@@ -26,7 +26,18 @@ export const config = {
   mlClientId: getEnv("ML_CLIENT_ID"),
   mlClientSecret: getEnv("ML_CLIENT_SECRET"),
   mlRedirectUri: getEnv("ML_REDIRECT_URI"),
-  jobSecret: getEnv("JOB_SECRET"),
+  /**
+   * Cron/job HTTP (X-Job-Secret). Ordem: JOB_SECRET → DEV_JOB_SECRET → ML_WEBHOOK_JOB_SECRET → S7_* (espelho GitHub Actions).
+   * GitHub Actions DEV: secrets.DEV_JOB_SECRET (fallback legado S7_DEV_JOB_SECRET).
+   * GitHub Actions PROD: secrets.S7_PROD_JOB_SECRET no header X-Job-Secret.
+   */
+  jobSecret:
+    getEnv("JOB_SECRET") ||
+    getEnv("DEV_JOB_SECRET") ||
+    getEnv("ML_WEBHOOK_JOB_SECRET") ||
+    getEnv("S7_PROD_JOB_SECRET") ||
+    getEnv("S7_DEV_JOB_SECRET"),
+  cronSecret: getEnv("CRON_SECRET"),
   /**
    * Dev Center — única variável oficial de acesso (lista de e-mails, minúsculas após trim).
    * Não existe SUSE7_DEV_CENTER_ALLOWED_USER_IDS; autorização é sempre por e-mail do JWT.
@@ -38,5 +49,90 @@ export const config = {
     .split(",")
     .map((s) => s.trim().toLowerCase())
     .filter(Boolean),
+
+  /** @see src/billing — gateway neutro (default: asaas). */
+  billingProviderDefault: getEnv("BILLING_PROVIDER_DEFAULT", { defaultValue: "asaas" }).trim().toLowerCase() || "asaas",
+  /**
+   * S1.HF.6.9A.13B — ASAAS_ENV obrigatório (sandbox|production|prod).
+   * Sem default silencioso; mutações financeiras falham fechadas via billingRuntimeEnvironmentService.
+   */
+  asaasEnv: getEnv("ASAAS_ENV", { defaultValue: "" }).trim(),
+  asaasApiBaseUrl: (() => {
+    const env = getEnv("ASAAS_ENV", { defaultValue: "" }).trim().toLowerCase();
+    const raw = getEnv("ASAAS_API_BASE_URL", { defaultValue: "" }).trim();
+    if (raw) return raw.replace(/\/+$/, "");
+    if (env === "production" || env === "prod") {
+      return "https://api.asaas.com/v3";
+    }
+    if (env === "sandbox") {
+      return "https://api-sandbox.asaas.com/v3";
+    }
+    // Ambiente ausente/inválido: não escolher sandbox nem production.
+    return "";
+  })(),
+  asaasApiKey: getEnv("ASAAS_API_KEY", { defaultValue: "" }).trim(),
+  asaasWebhookToken: getEnv("ASAAS_WEBHOOK_TOKEN", { defaultValue: "" }).trim(),
+
+  /** Fase 3.4 — e-mail central (mock por padrão; live via provider + API key em env). */
+  s7EmailProvider: getEnv("S7_EMAIL_PROVIDER", { defaultValue: "mock" }).trim().toLowerCase(),
+  s7EmailMode: getEnv("S7_EMAIL_MODE", { defaultValue: "mock" }).trim().toLowerCase(),
+  s7EmailFrom: getEnv("S7_EMAIL_FROM", { defaultValue: "Suse7 <notificacoes@suse7.com.br>" }).trim(),
+  /** Fase 3.4.A — whitelist sandbox (ex.: ricardoas1301@gmail.com). */
+  s7EmailSandboxWhitelist: getEnv("S7_EMAIL_SANDBOX_WHITELIST", { defaultValue: "" }).trim(),
+  resendApiKey: getEnv("RESEND_API_KEY", { defaultValue: "" }).trim(),
+  sendgridApiKey: getEnv("SENDGRID_API_KEY", { defaultValue: "" }).trim(),
+
+  /** Fase S5.13 — Fale Conosco no Motor Central (seller sintético + inbox equipe). */
+  s7FaleConoscoSystemSellerId: getEnv("S7_FALE_CONOSCO_SYSTEM_SELLER_ID", {
+    defaultValue: "00000000-0000-0000-0000-000000000001",
+  }).trim(),
+  s7FaleConoscoInboxEmail: getEnv("S7_FALE_CONOSCO_INBOX_EMAIL", {
+    defaultValue: "contato@suse7.com.br",
+  }).trim(),
+
+  /** Tier lógico: development | staging | production (Fase 3.5C). */
+  s7AppEnv: getEnv("S7_APP_ENV", { defaultValue: "" }).trim().toLowerCase(),
+  /**
+   * Guard-rail DEV: project ref esperado do Supabase (ex.: ujznkyvgqhxagemdgmor).
+   * Quando definido, /api/ml/connect e oauth-config alertam mismatch de SUPABASE_URL.
+   */
+  s7ExpectedSupabaseProjectRef: getEnv("S7_EXPECTED_SUPABASE_PROJECT_REF", { defaultValue: "" })
+    .trim()
+    .toLowerCase(),
+  /** Fase 3.5C — permite live em DEV/STAGING apenas quando true. */
+  s7AllowLiveDelivery: getEnv("S7_ALLOW_LIVE_DELIVERY", { defaultValue: "false" }).trim().toLowerCase(),
+
+  /** Fase 3.5A — WhatsApp central (mock por padrão). */
+  s7WhatsAppMode: getEnv("S7_WHATSAPP_MODE", { defaultValue: "mock" }).trim().toLowerCase(),
+  /** WHATSAPP_PROVIDER tem precedência sobre S7_WHATSAPP_PROVIDER (3.5C.1.A1). */
+  s7WhatsAppProvider: (
+    getEnv("WHATSAPP_PROVIDER", { defaultValue: "" }).trim() ||
+    getEnv("S7_WHATSAPP_PROVIDER", { defaultValue: "mock" }).trim()
+  ).toLowerCase(),
+  s7WhatsAppSandboxWhitelist: getEnv("S7_WHATSAPP_SANDBOX_WHITELIST", { defaultValue: "" }).trim(),
+  /** Fase 3.5C.1 — Z-API live controlado (base = .../instances/{id}/token/{token}). */
+  s7ZapiBaseUrl: getEnv("S7_ZAPI_BASE_URL", { defaultValue: "" }).trim(),
+  s7ZapiToken: getEnv("S7_ZAPI_TOKEN", { defaultValue: "" }).trim() || getEnv("ZAPI_TOKEN", { defaultValue: "" }).trim(),
+  s7ProviderSmokeEnabled: getEnv("S7_PROVIDER_SMOKE_ENABLED", { defaultValue: "false" }).trim().toLowerCase(),
+  s7ProviderSmokeSeller: getEnv("S7_PROVIDER_SMOKE_SELLER", { defaultValue: "" }).trim(),
+  s7ProviderSmokePhone: getEnv("S7_PROVIDER_SMOKE_PHONE", { defaultValue: "" }).trim(),
+  zapiToken: getEnv("ZAPI_TOKEN", { defaultValue: "" }).trim(),
+  evolutionApiKey: getEnv("EVOLUTION_API_KEY", { defaultValue: "" }).trim(),
+  metaWhatsAppToken: getEnv("META_WHATSAPP_TOKEN", { defaultValue: "" }).trim(),
+  twilioAuthToken: getEnv("TWILIO_AUTH_TOKEN", { defaultValue: "" }).trim(),
+
+  internalNotificationSecret:
+    getEnv("S7_INTERNAL_NOTIFICATION_SECRET") ||
+    getEnv("JOB_SECRET") ||
+    getEnv("DEV_JOB_SECRET") ||
+    getEnv("S7_DEV_JOB_SECRET"),
+
+  /** Fase 4A.2 — observabilidade de ingestão em GET /api/customers (summary.ingestion_health). */
+  customersIngestionHealthEnabled:
+    getEnv("CUSTOMERS_INGESTION_HEALTH_ENABLED", { defaultValue: "false" }).trim().toLowerCase() === "true",
+
+  /** Fase 4A.3 — qualidade de dados em GET /api/customers (summary.data_quality_overview). */
+  customersDataQualityEnabled:
+    getEnv("CUSTOMERS_DATA_QUALITY_ENABLED", { defaultValue: "false" }).trim().toLowerCase() === "true",
 };
 

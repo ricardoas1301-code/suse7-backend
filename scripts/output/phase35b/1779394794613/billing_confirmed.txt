@@ -1,0 +1,6 @@
+✅ Suse7
+
+Seu pagamento do plano Plano Pro (sandbox 3.5B) foi confirmado.
+
+Abra:
+http://localhost:5173/perfil/assinatura/historico

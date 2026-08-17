@@ -1,0 +1,6 @@
+🚨 Suse7
+
+Integração Mercado Livre precisa de atenção.
+
+Abra:
+http://localhost:5173/perfil/integracoes/mercado-livre

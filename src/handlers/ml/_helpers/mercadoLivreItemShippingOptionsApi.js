@@ -9,6 +9,10 @@ import {
   PRICING_LOG_LEVEL,
   PRICING_EVENT_CODE,
 } from "../../../domain/pricing/pricingInconsistencyLog.js";
+import {
+  escolherCandidatoFreteSellerOficialMl,
+  gerarCandidatosFreteSellerMl,
+} from "../../../domain/pricing/mercadoLivreOfficialShippingCandidate.js";
 import Decimal from "decimal.js";
 
 const ML_API = "https://api.mercadolibre.com";
@@ -188,29 +192,17 @@ export async function fetchMercadoLivreItemShippingOptions(accessToken, itemId, 
 }
 
 /**
- * Extrai custo de envio **para o seller**, subsídio logístico ML e contexto do comprador.
- * Prioriza opção `display === "recommended"`; senão a primeira.
- *
- * @param {Record<string, unknown> | null} json — resposta GET shipping_options
- * @param {Record<string, unknown> | null | undefined} listing — item ML (free_shipping, etc.)
- * @returns {{
- *   seller_shipping_cost_brl: string | null;
- *   shipping_subsidy_amount_brl: string | null;
- *   shipping_context: "buyer_pays" | "free_for_buyer";
- *   option_id: string | number | null;
- * } | null}
+ * Extrai campos brutos da opção recomendada de shipping_options (auditoria ML).
+ * @param {Record<string, unknown> | null} json
  */
-export function parseMercadoLivreItemShippingOptionsForScenario(json, listing) {
+export function extrairCamposBrutosShippingOptionsMl(json) {
   if (!json || typeof json !== "object") return null;
   const opts = json.options;
   if (!Array.isArray(opts) || opts.length === 0) return null;
-
-  /** @type {Record<string, unknown> | undefined} */
   const optRaw =
     /** @type {Record<string, unknown> | undefined} */ (
       opts.find((o) => o && typeof o === "object" && /** @type {Record<string, unknown>} */ (o).display === "recommended")
     ) ?? (opts[0] && typeof opts[0] === "object" ? /** @type {Record<string, unknown>} */ (opts[0]) : undefined);
-
   if (!optRaw || typeof optRaw !== "object") return null;
 
   const listCost = dMoney(optRaw.list_cost);
@@ -222,22 +214,71 @@ export function parseMercadoLivreItemShippingOptionsForScenario(json, listing) {
       : null;
   const promoted = disc ? dMoney(disc.promoted_amount) : null;
 
-  /** Custo seller: list_cost − subsídio ML (quando aplicável), alinhado à simulação shipping_options/free. */
-  let sellerPay = null;
-  if (listCost != null && promoted != null && promoted.gt(0) && listCost.gt(0) && promoted.lt(listCost)) {
-    sellerPay = listCost.minus(promoted);
-  } else if (listCost != null && listCost.gte(0)) {
-    sellerPay = listCost;
-  } else if (baseCost != null && baseCost.gte(0)) {
-    sellerPay = baseCost;
-  }
+  return {
+    option_id: optRaw.id != null ? optRaw.id : null,
+    list_cost: listCost != null ? decStr2(listCost) : null,
+    buyer_cost: buyerCost != null ? decStr2(buyerCost) : null,
+    base_cost: baseCost != null ? decStr2(baseCost) : null,
+    promoted_amount: promoted != null ? decStr2(promoted) : null,
+    listCost,
+    buyerCost,
+    baseCost,
+    promoted,
+    optRaw,
+  };
+}
 
+/**
+ * Extrai custo de envio **para o seller**, subsídio logístico ML e contexto do comprador.
+ * Escolhe candidato alinhado ao payout/logística oficial quando informados.
+ *
+ * @param {Record<string, unknown> | null} json — resposta GET shipping_options
+ * @param {Record<string, unknown> | null | undefined} listing — item ML (free_shipping, etc.)
+ * @param {{
+ *   salePriceDec?: Decimal | null;
+ *   feeAmountDec?: Decimal | null;
+ *   listingPricesLogisticsDec?: Decimal | null;
+ *   listingPricesPayoutDec?: Decimal | null;
+ * }} [opts]
+ * @returns {{
+ *   seller_shipping_cost_brl: string | null;
+ *   seller_shipping_cost_source: string | null;
+ *   shipping_subsidy_amount_brl: string | null;
+ *   shipping_context: "buyer_pays" | "free_for_buyer";
+ *   option_id: string | number | null;
+ *   pick_reason?: string | null;
+ *   raw_fields?: Record<string, unknown> | null;
+ * } | null}
+ */
+export function parseMercadoLivreItemShippingOptionsForScenario(json, listing, opts = {}) {
+  const bruto = extrairCamposBrutosShippingOptionsMl(json);
+  if (bruto == null) return null;
+
+  const { listCost, buyerCost, promoted, optRaw } = bruto;
+  const candidates = gerarCandidatosFreteSellerMl({ listCost, buyerCost, promoted });
+  const picked = escolherCandidatoFreteSellerOficialMl({
+    candidates,
+    salePriceDec: opts.salePriceDec ?? null,
+    feeAmountDec: opts.feeAmountDec ?? null,
+    listingPricesLogisticsDec: opts.listingPricesLogisticsDec ?? null,
+    listingPricesPayoutDec: opts.listingPricesPayoutDec ?? null,
+  });
+
+  let sellerPay = picked?.amount ?? null;
+  let sellerPaySource = picked?.source ?? "unresolved";
+
+  if ((sellerPay == null || sellerPay.lte(0)) && bruto.baseCost != null && bruto.baseCost.gte(0)) {
+    sellerPay = bruto.baseCost;
+    sellerPaySource = "base_cost";
+  }
   if (sellerPay != null && sellerPay.lt(0)) sellerPay = new Decimal(0);
 
   /** Comprador: cost === 0 → grátis para o comprador (frete exibido ao buyer). */
-  let shipping_context = /** @type {"buyer_pays" | "free_for_buyer"} */ ("buyer_pays");
+  let shipping_context = picked?.context ?? /** @type {"buyer_pays" | "free_for_buyer"} */ ("buyer_pays");
   if (buyerCost != null && buyerCost.isZero()) {
     shipping_context = "free_for_buyer";
+  } else if (buyerCost != null && buyerCost.gt(0)) {
+    shipping_context = "buyer_pays";
   } else {
     const sh = listing?.shipping && typeof listing.shipping === "object" ? listing.shipping : null;
     if (sh?.free_shipping === true && (buyerCost == null || buyerCost.isZero())) {
@@ -250,8 +291,21 @@ export function parseMercadoLivreItemShippingOptionsForScenario(json, listing) {
 
   return {
     seller_shipping_cost_brl: sellerPay != null ? decStr2(sellerPay) : null,
+    seller_shipping_cost_source: sellerPaySource,
     shipping_subsidy_amount_brl: subsidyStr,
     shipping_context,
     option_id: optRaw.id != null ? optRaw.id : null,
+    pick_reason: picked?.pick_reason ?? null,
+    raw_fields: {
+      list_cost: bruto.list_cost,
+      buyer_cost: bruto.buyer_cost,
+      base_cost: bruto.base_cost,
+      promoted_amount: bruto.promoted_amount,
+      candidates: candidates.map((c) => ({
+        amount_brl: decStr2(c.amount),
+        source: c.source,
+        context: c.context,
+      })),
+    },
   };
 }
