@@ -51,20 +51,17 @@ function runServerlessCors(origin, method = "GET", acrh = null) {
 
 /**
  * @param {string} origin
- * @param {string} method
+ * @param {string} path
+ * @param {string} requestMethod
  * @param {string | null} [acrh]
  */
-function runEdgeOptions(origin, method = "OPTIONS", acrh = "authorization,content-type") {
-  const req = new Request("https://suse7-backend-dev.vercel.app/api/dashboard/operational-tasks", {
-    method,
+function runEdgeOptions(origin, path, requestMethod = "GET", acrh = "authorization,content-type") {
+  const req = new Request(`https://suse7-backend-dev.vercel.app${path}`, {
+    method: "OPTIONS",
     headers: {
       Origin: origin,
-      ...(method === "OPTIONS"
-        ? {
-            "Access-Control-Request-Method": "GET",
-            "Access-Control-Request-Headers": acrh,
-          }
-        : {}),
+      "Access-Control-Request-Method": requestMethod,
+      "Access-Control-Request-Headers": acrh,
     },
   });
   const res = edgeMiddleware(req);
@@ -118,7 +115,7 @@ if (!optFinish.finished || optFinish.statusCode !== 204) {
 
 // Edge middleware — preflight (causa raiz F0.1B)
 for (const [label, origin] of Object.entries(origins)) {
-  const edge = runEdgeOptions(origin);
+  const edge = runEdgeOptions(origin, "/api/dashboard/operational-tasks", "GET");
   if (label === "unknown") {
     if (edge.acao) fail(`edge_${label}_bloqueado`, edge);
   } else {
@@ -129,6 +126,20 @@ for (const [label, origin] of Object.entries(origins)) {
     }
   }
 }
+
+// Signup complete-birth — regressão macro checkpoint (P0 CORS)
+const signupBirthEdge = runEdgeOptions(
+  origins.frontendDev,
+  "/api/signup/complete-birth",
+  "POST",
+  "authorization,content-type",
+);
+if (signupBirthEdge.status !== 204) fail("edge_signup_complete_birth_status", signupBirthEdge);
+if (signupBirthEdge.acao !== origins.frontendDev) {
+  fail("edge_signup_complete_birth_acao", signupBirthEdge);
+}
+const signupBirthSrv = runServerlessCors(origins.frontendDev, "OPTIONS", "authorization,content-type");
+if (signupBirthSrv.acao !== origins.frontendDev) fail("serverless_signup_complete_birth_acao", signupBirthSrv);
 
 // SSOT resolvePermittedOrigin
 if (resolvePermittedOrigin(origins.frontendDev, null) !== origins.frontendDev) {
@@ -165,6 +176,8 @@ console.log(
         "edge_options_frontend_dev",
         "edge_options_prod",
         "edge_unknown_blocked",
+        "edge_signup_complete_birth_frontend_dev",
+        "serverless_signup_complete_birth_frontend_dev",
         "ssot_no_wildcard",
       ],
     },
