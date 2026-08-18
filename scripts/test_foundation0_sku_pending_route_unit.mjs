@@ -2,7 +2,11 @@
 /**
  * Foundation 0 — contrato mínimo GET /api/ml/listings/sku-pending
  */
-import handleMlListingsSkuPending from "../src/handlers/ml/listingsSkuPending.js";
+process.env.SUPABASE_URL = process.env.SUPABASE_URL || "https://alkelcaoexxbamqddaqv.supabase.co";
+process.env.SUPABASE_SERVICE_ROLE_KEY =
+  process.env.SUPABASE_SERVICE_ROLE_KEY || "test-service-role-key-not-used";
+
+const { default: handleMlListingsSkuPending } = await import("../src/handlers/ml/listingsSkuPending.js");
 
 /** @type {Array<{ name: string; detail: unknown }>} */
 const failures = [];
