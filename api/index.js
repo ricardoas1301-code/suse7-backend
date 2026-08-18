@@ -577,6 +577,10 @@ export default async function handler(req, res) {
       const mod = await import("../src/handlers/ml/listingSkuLookup.js");
       return await mod.default(req, res);
     }
+    if (path === "/api/ml/listings/sku-pending" && req.method === "GET") {
+      const mod = await import("../src/handlers/ml/listingsSkuPending.js");
+      return await mod.default(req, res);
+    }
     if (path === "/api/ml/listings/pricing-scenarios") {
       const mod = await import("../src/handlers/ml/listingPricingScenarios.js");
       return await mod.default(req, res);
