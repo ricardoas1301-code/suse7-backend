@@ -72,7 +72,7 @@ async function listSubscriptionsWithPendingScheduledRenewal(supabase, now) {
   const { data, error } = await supabase
     .from("billing_subscriptions")
     .select(
-      "id, user_id, plan_id, status, current_period_start, current_period_end, next_due_date, metadata, billing_cycle_anchor, amount"
+      "id, user_id, plan_id, status, current_period_start, current_period_end, next_due_date, metadata, amount"
     )
     .eq("status", SUBSCRIPTION_STATUS.ACTIVE)
     .not("metadata", "is", null)
