@@ -37,7 +37,7 @@
 import { requireAuthUser } from "../ml/_helpers/requireAuthUser.js";
 import { ML_MARKETPLACE_SLUG } from "../ml/_helpers/mlMarketplace.js";
 import { ATTENTION_REASON_SKU_PENDING_ML } from "../ml/_helpers/mlItemSkuExtract.js";
-import { executeBulkSetSku } from "./bulkSetSkuService.js";
+import { executeBulkSetSku, executeBulkSetSkuV2 } from "./bulkSetSkuService.js";
 
 const MAX_LISTING_IDS = Math.min(
   200,
@@ -84,6 +84,26 @@ export default async function handleListingsBulkSetSku(req, res) {
       error: "Marketplace inválido ou não suportado nesta versão.",
       supported: [ML_MARKETPLACE_SLUG, "mercadolivre"],
     });
+  }
+
+  if (Array.isArray(body.items)) {
+    if (body.items.length === 0) {
+      return res.status(400).json({ ok: false, error: "items deve ser um array não vazio." });
+    }
+    if (body.items.length > MAX_LISTING_IDS) {
+      return res.status(400).json({
+        ok: false,
+        error: `Limite de ${MAX_LISTING_IDS} anúncios por operação.`,
+        max: MAX_LISTING_IDS,
+      });
+    }
+    const { user, supabase } = auth;
+    const result = await executeBulkSetSkuV2({
+      supabase,
+      userId: user.id,
+      items: body.items,
+    });
+    return res.status(200).json({ ...result, marketplace: canonicalMarketplace });
   }
 
   const skuRaw = body.sku != null ? String(body.sku).trim() : "";

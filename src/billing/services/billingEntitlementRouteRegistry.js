@@ -83,6 +83,7 @@ export const BILLING_ENTITLEMENT_ENDPOINT_INVENTORY = [
   row("/api/ml/listings/detail", "GET", "anuncios", "detail", "sales_detail", { ARCHIVE: true }),
   row("/api/ml/listings/accumulated-performance", "GET", "anuncios", "executive", "executive_cards", { EXECUTIVE: true, ARCHIVE: true }),
   row("/api/ml/listings/catalog-pricing-health-buckets", "GET", "anuncios", "aux", "pricing_list", { ARCHIVE: true }),
+  row("/api/ml/listings/sku-pending", "GET", "anuncios", "aux", "listings_list", { ARCHIVE: true }),
   row("/api/ml/listings/seller-promotions-grid", "GET", "anuncios", "detail", "sales_detail", { ARCHIVE: true }),
   row("/api/ml/listings/sku-lookup", "GET", "anuncios", "aux", "filters_search", { ARCHIVE: true }),
   row("/api/ml/listings/set-sku", "POST", "anuncios", "write", "marketplace_ops"),

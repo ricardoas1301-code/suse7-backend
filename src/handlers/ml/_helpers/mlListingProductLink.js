@@ -459,6 +459,7 @@ export async function batchEnsureProductsForListings(supabase, userId, entries, 
     listings_update_applied: 0,
     listings_entries_invalid: 0,
     products_enriched: 0,
+    entry_results: /** @type {{ listing_id: string; ok: boolean; product_id?: string; code?: string; created?: boolean }[]} */ ([]),
     errors: /** @type {object[]} */ ([]),
   };
 
@@ -726,6 +727,11 @@ export async function batchEnsureProductsForListings(supabase, userId, entries, 
       tracePush(opts, "batch_link_missing_product_id", { listingId: p.listingId, norm: p.norm });
       log("batch_link_missing_product_id", { listingId: p.listingId, norm: p.norm });
       out.errors.push({ stage: "missing_product_id", listingId: p.listingId, norm: p.norm });
+      out.entry_results.push({
+        listing_id: p.listingId,
+        ok: false,
+        code: "missing_product_id",
+      });
       continue;
     }
     const applied = await applyListingProductLinkAndFinancialFlag(supabase, userId, p.listingId, productId);
@@ -743,6 +749,12 @@ export async function batchEnsureProductsForListings(supabase, userId, entries, 
       } else {
         out.listings_linked_new_product += 1;
       }
+      out.entry_results.push({
+        listing_id: p.listingId,
+        ok: true,
+        product_id: productId,
+        created: !normsExistingBeforeCreate.has(p.norm),
+      });
     } else {
       tracePush(opts, "marketplace_listing_product_id_failed", {
         listingId: p.listingId,
@@ -759,6 +771,12 @@ export async function batchEnsureProductsForListings(supabase, userId, entries, 
         listingId: p.listingId,
         productId,
         reason: applied.reason,
+      });
+      out.entry_results.push({
+        listing_id: p.listingId,
+        ok: false,
+        product_id: productId,
+        code: applied.reason || "listing_product_update",
       });
     }
   }

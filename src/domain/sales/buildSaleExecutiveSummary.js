@@ -18,6 +18,7 @@ import {
 } from "./executiveRankingImageUrl.js";
 import { resolveExecutiveRankingListingId } from "./saleExecutiveListingKey.js";
 import { computeExecutiveLineRealProfit } from "./saleExecutiveLineRealResult.js";
+import { resolveMarketplaceSettlementCreditsFromItemFinancial } from "./saleExecutiveSettlementCredits.js";
 import {
   buildExecutiveMinimalUiRowsFromItems,
   isExecutiveSummaryDevAutoDebugEnabled,
@@ -32,7 +33,6 @@ import {
   logExecutiveSummaryBuildReady,
   logExecutiveSummarySourceReady,
 } from "./saleExecutiveSummaryTelemetry.js";
-import { hydrateExecutiveSummaryRankingRows } from "../../handlers/sales/list.js";
 import { createExecutiveSummaryPerf } from "./saleExecutiveSummaryPerf.js";
 import {
   fetchExternalListingProductMap,
@@ -118,6 +118,8 @@ export function buildEmptyExecutiveSummaryPayload(filters = {}) {
       operation_packaging_cost_brl: null,
       operational_costs_brl: null,
       internal_costs_brl: null,
+      nominal_costs_brl: null,
+      marketplace_settlement_credits_brl: null,
       total_costs_brl: null,
       you_receive_brl: "0.00",
       visits_count: null,
@@ -159,11 +161,17 @@ export function buildEmptyExecutiveSummaryPayload(filters = {}) {
  *   period: { start_ms: number | null; end_ms_exclusive: number | null; start_date: string | null; end_date: string | null; preset: string };
  *   ranking_limit?: number;
  * }} filters
- * @param {{ startedAt?: number; perf?: ReturnType<typeof createExecutiveSummaryPerf> }} [options]
+ * @param {{
+ *   startedAt?: number;
+ *   perf?: ReturnType<typeof createExecutiveSummaryPerf>;
+ *   mode?: 'executive' | 'top10';
+ * }} [options]
  */
 export async function buildSaleExecutiveSummary(supabase, userId, filters, options = {}) {
   const startedAt = options.startedAt;
   const perf = options.perf ?? createExecutiveSummaryPerf(startedAt ?? Date.now());
+  const summaryMode = options.mode === "top10" ? "top10" : "executive";
+  perf.log("build_start", { mode: summaryMode, seller_id: userId });
   const listingRankingLimit = Math.min(10, Math.max(1, filters.ranking_limit ?? 10));
   const productRankingLimit =
     filters.product_ranking_limit != null
@@ -253,6 +261,7 @@ export async function buildSaleExecutiveSummary(supabase, userId, filters, optio
   let hasOperationPackagingData = false;
   let operationalCostsTotal = new Decimal(0);
   let hasOperationalCostsData = false;
+  let settlementCreditsTotal = new Decimal(0);
 
   let negativeCount = 0;
   let lowMarginCount = 0;
@@ -330,27 +339,30 @@ export async function buildSaleExecutiveSummary(supabase, userId, filters, optio
         profitCalcStarted = true;
       }
 
-      /** @type {Record<string, unknown>[]} */
-      let uiRows = [];
+      /**
+       * Hidratação enxuta: snapshots do item + product_id do mapa de listings
+       * (já carregado 1x). Evita N round-trips por lote (listings/products/SKU)
+       * que estouravam o timeout do frontend (~45s) em períodos amplos.
+       */
       if (!hydrationStarted) {
         perf.mark("hydration_start");
         hydrationStarted = true;
       }
-      try {
-        uiRows = await hydrateExecutiveSummaryRankingRows(
-          supabase,
-          userId,
-          eligibleItems,
-          batchOrdersById,
-        );
-      } catch (hydrateErr) {
-        hydrationDegraded = true;
-        console.warn("[S7_EXEC_SUMMARY_HYDRATION_DEGRADED]", {
-          message: hydrateErr?.message ?? String(hydrateErr),
-          eligibleItems: eligibleItems.length,
-        });
-        uiRows = buildExecutiveMinimalUiRowsFromItems(eligibleItems);
-      }
+      const uiRows = buildExecutiveMinimalUiRowsFromItems(eligibleItems).map((row, idx) => {
+        const it = eligibleItems[idx];
+        const ext =
+          it?.external_listing_id != null ? String(it.external_listing_id).trim() : "";
+        const productIdFromMap =
+          listingProductMap && ext && listingProductMap.has(ext)
+            ? listingProductMap.get(ext) ?? null
+            : null;
+        return {
+          ...row,
+          product_id: productIdFromMap,
+          listing_id_display: ext || null,
+          external_listing_id: ext || null,
+        };
+      });
 
       hydratedRowsCount += uiRows.length;
       if (firstHydratedRow == null && uiRows.length > 0) {
@@ -400,6 +412,10 @@ export async function buildSaleExecutiveSummary(supabase, userId, filters, optio
         }
         if (typeof itemFin?.estimated === "boolean") {
           snapshotEstimatedSet.add(itemFin.estimated);
+        }
+        const lineSettlementCredits = resolveMarketplaceSettlementCreditsFromItemFinancial(itemFin);
+        if (lineSettlementCredits.gt(0)) {
+          settlementCreditsTotal = settlementCreditsTotal.plus(lineSettlementCredits);
         }
         const oid = row.sales_order_id != null ? String(row.sales_order_id) : "";
         const order = oid ? batchOrdersById.get(oid) ?? null : null;
@@ -751,13 +767,27 @@ export async function buildSaleExecutiveSummary(supabase, userId, filters, optio
   const summaryEstimated = snapshotEstimatedSet.size === 1 ? [...snapshotEstimatedSet][0] : null;
   const summaryHealthStatus =
     needsAttentionCount > 0 ? "attention" : negativeCount > 0 ? "critical" : "healthy";
-  const totalCosts =
-    hasFeeData || hasShippingData || hasTaxData || hasAdsData
-      ? (hasFeeData ? feeTotal : new Decimal(0))
-          .plus(hasShippingData ? shippingTotal : new Decimal(0))
-          .plus(hasTaxData ? taxTotal : new Decimal(0))
-          .plus(hasAdsData ? adsTotal : new Decimal(0))
-      : null;
+
+  /** @type {Decimal | null} */
+  let nominalCosts = null;
+  /** @type {Decimal[]} */
+  const nominalCostParts = [];
+  if (hasProductCostData) nominalCostParts.push(productCostTotal);
+  if (hasFeeData) nominalCostParts.push(feeTotal);
+  if (hasShippingData) nominalCostParts.push(shippingTotal);
+  if (hasTaxData) nominalCostParts.push(taxTotal);
+  if (hasOperationPackagingData) nominalCostParts.push(operationPackagingTotal);
+  if (hasAdsData) nominalCostParts.push(adsTotal);
+  if (hasOperationalCostsData) nominalCostParts.push(operationalCostsTotal);
+  if (nominalCostParts.length > 0) {
+    nominalCosts = nominalCostParts.reduce((acc, part) => acc.plus(part), new Decimal(0));
+  }
+
+  /** @type {Decimal | null} */
+  let totalCostsEffective = null;
+  if (nominalCosts != null) {
+    totalCostsEffective = nominalCosts.minus(settlementCreditsTotal);
+  }
 
   /** @type {Decimal | null} */
   let internalCostsGrouped = null;
@@ -1116,7 +1146,11 @@ export async function buildSaleExecutiveSummary(supabase, userId, filters, optio
       internal_costs_brl: hasInternalCostsGrouped
         ? moneyDecimal(internalCostsGrouped) ?? "0.00"
         : null,
-      total_costs_brl: totalCosts != null ? moneyDecimal(totalCosts) ?? null : null,
+      nominal_costs_brl: nominalCosts != null ? moneyDecimal(nominalCosts) ?? null : null,
+      marketplace_settlement_credits_brl:
+        nominalCosts != null ? moneyDecimal(settlementCreditsTotal) ?? "0.00" : null,
+      total_costs_brl:
+        totalCostsEffective != null ? moneyDecimal(totalCostsEffective) ?? null : null,
       you_receive_brl: moneyDecimal(netTotal) ?? "0.00",
       snapshot_origin: summarySnapshotOrigin,
       snapshot_quality: summarySnapshotQuality,

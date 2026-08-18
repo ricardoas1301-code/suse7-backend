@@ -30,6 +30,7 @@ import {
  *   profile: Record<string, unknown> | null;
  *   companies: readonly Record<string, unknown>[];
  *   legalAcceptance: Record<string, unknown> | null;
+ *   marketplaceAccounts?: readonly Record<string, unknown>[];
  * }} ContextoConfiguracaoInicial
  */
 
@@ -40,6 +41,7 @@ export function resolveConfigurationSnapshot(ctx) {
   const profile = ctx?.profile ?? null;
   const companies = ctx?.companies ?? [];
   const legalAcceptance = ctx?.legalAcceptance ?? null;
+  const marketplaceAccounts = ctx?.marketplaceAccounts ?? [];
 
   const { company: primaryCompany, ambiguous: companyAmbiguous, reason: companyReason } =
     resolverEmpresaPrincipalOnboarding(companies);
@@ -56,7 +58,10 @@ export function resolveConfigurationSnapshot(ctx) {
     [MILESTONE_IDS.TAX_RATE]: avaliarMilestoneAliquotaImposto(primaryCompany),
     [MILESTONE_IDS.OPERATIONAL_COST]: avaliarMilestoneCustoOperacional(primaryCompany),
     [MILESTONE_IDS.OPERATIONAL_CYCLE]: avaliarMilestoneCicloOperacional(profile),
-    [MILESTONE_IDS.FIRST_MARKETPLACE_CONNECTION]: avaliarMilestonePrimeiraIntegracaoMarketplace(profile),
+    [MILESTONE_IDS.FIRST_MARKETPLACE_CONNECTION]: avaliarMilestonePrimeiraIntegracaoMarketplace(
+      profile,
+      marketplaceAccounts,
+    ),
   };
 
   const latchedComplete =

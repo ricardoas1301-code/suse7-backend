@@ -834,8 +834,19 @@ export default async function handleSalesList(req, res) {
 
   const from = (page - 1) * pageSize;
   const to = from + pageSize - 1;
+  const requestStartedAt = Date.now();
+  /** @type {Record<string, number | null>} */
+  const perfMarks = {
+    auth_ms: null,
+    list_query_ms: null,
+    hydration_ms: null,
+    distinct_orders_ms: null,
+    total_ms: null,
+  };
+  perfMarks.auth_ms = Date.now() - requestStartedAt;
 
   try {
+    const listQueryStartedAt = Date.now();
     const ITEM_ORDER_EMBED =
       "*,sales_orders!inner(id,date_created_marketplace,date_closed_marketplace,paid_at,created_at,user_id)";
 
@@ -905,50 +916,103 @@ export default async function handleSalesList(req, res) {
      * }} f
      */
     async function resolveDistinctOrdersTotal(f) {
-      const SCAN_PAGE_SIZE = 2000;
-      const SCAN_MAX_PAGES = 200;
-      /** @type {Set<string>} */
-      const orderIds = new Set();
-      let truncatedScan = false;
+      /**
+       * Contagem por pedidos (sales_orders) — bem mais barata que varrer itens.
+       * Mantém scan por itens somente quando busca textual ou escopo de produto exige.
+       */
+      const needsItemScopedScan =
+        (f.qNormalized != null && String(f.qNormalized).trim() !== "") ||
+        (Array.isArray(f.productListingIds) && f.productListingIds.length > 0);
 
-      for (let pageIndex = 0; pageIndex < SCAN_MAX_PAGES; pageIndex += 1) {
-        const rangeFrom = pageIndex * SCAN_PAGE_SIZE;
-        const rangeTo = rangeFrom + SCAN_PAGE_SIZE - 1;
-        const { data, error } = await applySalesItemListFilters(
-          supabase
-            .from("sales_order_items")
-            .select(
-              "id,sales_order_id,sales_orders!inner(id,date_created_marketplace,user_id,order_status,order_substatus,raw_json)",
-            ),
-          f,
-        )
-          .order("sales_order_id", { ascending: true })
-          .order("id", { ascending: true })
-          .range(rangeFrom, rangeTo);
+      if (needsItemScopedScan) {
+        const SCAN_PAGE_SIZE = 2000;
+        const SCAN_MAX_PAGES = 80;
+        /** @type {Set<string>} */
+        const orderIds = new Set();
+        let truncatedScan = false;
 
-        if (error) throw error;
+        for (let pageIndex = 0; pageIndex < SCAN_MAX_PAGES; pageIndex += 1) {
+          const rangeFrom = pageIndex * SCAN_PAGE_SIZE;
+          const rangeTo = rangeFrom + SCAN_PAGE_SIZE - 1;
+          const { data, error } = await applySalesItemListFilters(
+            supabase
+              .from("sales_order_items")
+              .select(
+                "id,sales_order_id,sales_orders!inner(id,date_created_marketplace,user_id,order_status,order_substatus,raw_json)",
+              ),
+            f,
+          )
+            .order("sales_order_id", { ascending: true })
+            .order("id", { ascending: true })
+            .range(rangeFrom, rangeTo);
 
-        const rows = Array.isArray(data) ? data : [];
-        for (const row of rows) {
-          const order =
-            row?.sales_orders != null && typeof row.sales_orders === "object"
-              ? /** @type {Record<string, unknown>} */ (row.sales_orders)
-              : null;
-          if (!isExecutiveSummaryEligibleOrderRow(order)) {
-            continue;
+          if (error) throw error;
+
+          const rows = Array.isArray(data) ? data : [];
+          for (const row of rows) {
+            const order =
+              row?.sales_orders != null && typeof row.sales_orders === "object"
+                ? /** @type {Record<string, unknown>} */ (row.sales_orders)
+                : null;
+            if (!isExecutiveSummaryEligibleOrderRow(order)) continue;
+            if (row?.sales_order_id != null && String(row.sales_order_id).trim() !== "") {
+              orderIds.add(String(row.sales_order_id));
+            }
           }
-          if (row?.sales_order_id != null && String(row.sales_order_id).trim() !== "") {
-            orderIds.add(String(row.sales_order_id));
+
+          if (rows.length < SCAN_PAGE_SIZE) {
+            return { total: orderIds.size, truncated_scan: false };
           }
         }
 
-        if (rows.length < SCAN_PAGE_SIZE) {
+        truncatedScan = true;
+        return { total: orderIds.size, truncated_scan: truncatedScan };
+      }
+
+      const ORDER_PAGE_SIZE = 1000;
+      const ORDER_MAX_PAGES = 100;
+      /** @type {Set<string>} */
+      const orderIds = new Set();
+
+      for (let pageIndex = 0; pageIndex < ORDER_MAX_PAGES; pageIndex += 1) {
+        const rangeFrom = pageIndex * ORDER_PAGE_SIZE;
+        const rangeTo = rangeFrom + ORDER_PAGE_SIZE - 1;
+        let q = supabase
+          .from("sales_orders")
+          .select("id,order_status,order_substatus,marketplace,marketplace_account_id,raw_json")
+          .eq("user_id", f.userId)
+          .order("id", { ascending: true })
+          .range(rangeFrom, rangeTo);
+
+        if (f.marketplace) q = q.eq("marketplace", f.marketplace);
+        if (f.marketplaceAccountId) q = q.eq("marketplace_account_id", f.marketplaceAccountId);
+        if (f.executivePeriod?.start_ms != null) {
+          q = q.gte("date_created_marketplace", new Date(f.executivePeriod.start_ms).toISOString());
+        }
+        if (f.executivePeriod?.end_ms_exclusive != null) {
+          q = q.lt(
+            "date_created_marketplace",
+            new Date(f.executivePeriod.end_ms_exclusive).toISOString(),
+          );
+        }
+
+        const { data, error } = await q;
+        if (error) throw error;
+
+        const rows = Array.isArray(data) ? data : [];
+        for (const order of rows) {
+          if (!isExecutiveSummaryEligibleOrderRow(order)) continue;
+          if (order?.id != null && String(order.id).trim() !== "") {
+            orderIds.add(String(order.id));
+          }
+        }
+
+        if (rows.length < ORDER_PAGE_SIZE) {
           return { total: orderIds.size, truncated_scan: false };
         }
       }
 
-      truncatedScan = true;
-      return { total: orderIds.size, truncated_scan: truncatedScan };
+      return { total: orderIds.size, truncated_scan: true };
     }
 
     const filterCtx = {
@@ -1140,8 +1204,34 @@ export default async function handleSalesList(req, res) {
     if (listSource !== "rpc_v1") {
       sortSalesOrderItemsForVendasList(itemRows, ordersById);
     }
+    perfMarks.list_query_ms = Date.now() - listQueryStartedAt;
 
+    const hydrateStartedAt = Date.now();
     const rows = await hydrateAndBuildRows(itemRows, ordersById, supabase, user.id);
+    perfMarks.hydration_ms = Date.now() - hydrateStartedAt;
+
+    const distinctOrdersPromise = (async () => {
+      const t0 = Date.now();
+      try {
+        const distinctOrders = await resolveDistinctOrdersTotal(filterCtx);
+        return {
+          ordersTotal: Number.isFinite(distinctOrders?.total) ? Number(distinctOrders.total) : 0,
+          truncated: Boolean(distinctOrders?.truncated_scan),
+          ms: Date.now() - t0,
+          error: null,
+        };
+      } catch (distinctError) {
+        console.warn("[S7][sales-list] distinct_orders_count_failed", {
+          message: distinctError?.message ?? String(distinctError),
+        });
+        return {
+          ordersTotal: Number.isFinite(total) ? Number(total) : rows.length,
+          truncated: false,
+          ms: Date.now() - t0,
+          error: String(distinctError?.message ?? distinctError),
+        };
+      }
+    })();
 
     const distinctAcct = [...new Set(rows.map((r) => r?.marketplace_account_id).filter(Boolean).map(String))];
     console.info("[sales/list] account_join_summary", {
@@ -1226,19 +1316,21 @@ export default async function handleSalesList(req, res) {
       });
     }
 
-    let ordersTotal = 0;
-    let ordersTotalTruncatedScan = false;
-    try {
-      const distinctOrders = await resolveDistinctOrdersTotal(filterCtx);
-      ordersTotal = Number.isFinite(distinctOrders?.total) ? Number(distinctOrders.total) : 0;
-      ordersTotalTruncatedScan = Boolean(distinctOrders?.truncated_scan);
-    } catch (distinctError) {
-      console.warn("[S7][sales-list] distinct_orders_count_failed", {
-        message: distinctError?.message ?? String(distinctError),
-      });
-      ordersTotal = Number.isFinite(total) ? Number(total) : rows.length;
-      ordersTotalTruncatedScan = false;
-    }
+    const distinctResult = await distinctOrdersPromise;
+    const ordersTotal = distinctResult.ordersTotal;
+    const ordersTotalTruncatedScan = distinctResult.truncated;
+    perfMarks.distinct_orders_ms = distinctResult.ms;
+    perfMarks.total_ms = Date.now() - requestStartedAt;
+    console.info("[S7_SALES_LIST_PERF]", {
+      seller_id: user.id,
+      list_source: listSource,
+      page,
+      page_size: pageSize,
+      rows: rows.length,
+      items_total: total,
+      orders_total: ordersTotal,
+      ...perfMarks,
+    });
 
     const pag = buildPaginationMeta(page, pageSize, total);
     const pagination = {

@@ -11,6 +11,16 @@ import {
   findDuplicateRecipientSlot,
   normalizeAndValidateRecipientDestination,
 } from "./sellerNotificationRecipientValidation.js";
+import {
+  DEFAULT_RECIPIENT_ERROR,
+  isPrimaryCompanyRecipientRow,
+  isRecipientLabelCustomized,
+  mergeRecipientMetadata,
+} from "../recipients/defaultRecipientPolicy.js";
+import {
+  ensurePrimaryCompanyDefaultRecipient,
+  isPrimaryCompanyRecipientGroupRows,
+} from "../recipients/primaryCompanyDefaultRecipientService.js";
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -19,16 +29,23 @@ const UUID_RE =
  * @param {Array<Record<string, unknown>>} rows
  */
 export function aggregateRecipientGroups(rows) {
-  /** @type {Map<string, { group_id: string, label: string, role_tag: string | null, is_active: boolean, channels: Record<string, unknown> }>} */
+  /** @type {Map<string, { group_id: string, label: string, role_tag: string | null, is_active: boolean, is_primary: boolean, seller_company_id: string | null, metadata: Record<string, unknown>, channels: Record<string, unknown> }>} */
   const map = new Map();
 
   for (const row of rows) {
     const gid = String(row.recipient_group_id ?? row.id);
+    const rowMeta =
+      row.metadata != null && typeof row.metadata === "object" && !Array.isArray(row.metadata)
+        ? /** @type {Record<string, unknown>} */ (row.metadata)
+        : {};
     const entry = map.get(gid) ?? {
       group_id: gid,
       label: String(row.label ?? ""),
       role_tag: row.role_tag != null ? String(row.role_tag) : null,
       is_active: row.is_active !== false,
+      is_primary: isPrimaryCompanyRecipientRow(row),
+      seller_company_id: row.seller_company_id != null ? String(row.seller_company_id) : null,
+      metadata: { ...rowMeta },
       channels: {},
     };
 
@@ -40,10 +57,23 @@ export function aggregateRecipientGroups(rows) {
     };
     if (!entry.label && row.label) entry.label = String(row.label);
     entry.is_active = entry.is_active || row.is_active !== false;
+    entry.is_primary = entry.is_primary || isPrimaryCompanyRecipientRow(row);
+    if (row.seller_company_id != null) {
+      entry.seller_company_id = String(row.seller_company_id);
+    }
+    if (Object.keys(rowMeta).length) {
+      entry.metadata = { ...entry.metadata, ...rowMeta };
+    }
+    if (row.role_tag != null && String(row.role_tag).trim() !== "") {
+      entry.role_tag = String(row.role_tag);
+    }
     map.set(gid, entry);
   }
 
-  return [...map.values()].sort((a, b) => a.label.localeCompare(b.label));
+  return [...map.values()].sort((a, b) => {
+    if (a.is_primary !== b.is_primary) return a.is_primary ? -1 : 1;
+    return a.label.localeCompare(b.label);
+  });
 }
 
 /**
@@ -81,6 +111,8 @@ async function loadScopesByRecipientIds(supabase, recipientIds) {
  * @param {string} sellerId
  */
 export async function listSellerNotificationRecipientGroups(supabase, sellerId) {
+  await ensurePrimaryCompanyDefaultRecipient(supabase, sellerId);
+
   const { data, error } = await supabase
     .from("s7_notification_recipients")
     .select("*")
@@ -220,6 +252,16 @@ export async function patchSellerNotificationRecipientGroup(supabase, sellerId, 
     return { ok: false, error: "NOT_FOUND", message: "Destinatário não encontrado." };
   }
 
+  if (isPrimaryCompanyRecipientGroupRows(existingRows)) {
+    if (body.email !== undefined || body.whatsapp !== undefined) {
+      return {
+        ok: false,
+        error: DEFAULT_RECIPIENT_ERROR.PRIMARY_CONTACT_LOCKED,
+        message: "E-mail e WhatsApp do destinatário padrão são gerenciados em Dados da Empresa.",
+      };
+    }
+  }
+
   const label =
     body.label != null ? String(body.label).trim().slice(0, 120) : String(existingRows[0].label);
   const role_tag =
@@ -298,9 +340,27 @@ export async function patchSellerNotificationRecipientGroup(supabase, sellerId, 
       }
     }
   } else {
+    const isPrimary = isPrimaryCompanyRecipientGroupRows(existingRows);
+    const now = new Date().toISOString();
+    /** @type {Record<string, unknown>} */
+    const updatePayload = { label, role_tag, is_active, updated_at: now };
+
+    if (isPrimary && body.label !== undefined) {
+      const prevLabel = String(existingRows[0]?.label ?? "");
+      if (label !== prevLabel) {
+        const baseMeta =
+          existingRows[0]?.metadata != null &&
+          typeof existingRows[0].metadata === "object" &&
+          !Array.isArray(existingRows[0].metadata)
+            ? /** @type {Record<string, unknown>} */ (existingRows[0].metadata)
+            : {};
+        updatePayload.metadata = mergeRecipientMetadata(baseMeta, { label_customized: true });
+      }
+    }
+
     await supabase
       .from("s7_notification_recipients")
-      .update({ label, role_tag, is_active, updated_at: new Date().toISOString() })
+      .update(updatePayload)
       .eq("seller_id", sellerId)
       .eq("recipient_group_id", groupId);
   }
@@ -321,6 +381,25 @@ export async function patchSellerNotificationRecipientGroup(supabase, sellerId, 
 export async function deleteSellerNotificationRecipientGroup(supabase, sellerId, groupId) {
   if (!UUID_RE.test(groupId)) {
     return { ok: false, error: "INVALID_ID", message: "Grupo inválido." };
+  }
+
+  const { data: existingRows, error: findErr } = await supabase
+    .from("s7_notification_recipients")
+    .select("*")
+    .eq("seller_id", sellerId)
+    .eq("recipient_group_id", groupId);
+
+  if (findErr) throw findErr;
+  if (!existingRows?.length) {
+    return { ok: false, error: "NOT_FOUND", message: "Destinatário não encontrado." };
+  }
+
+  if (isPrimaryCompanyRecipientGroupRows(existingRows)) {
+    return {
+      ok: false,
+      error: DEFAULT_RECIPIENT_ERROR.PRIMARY_DELETE_FORBIDDEN,
+      message: "O destinatário padrão da empresa principal não pode ser removido.",
+    };
   }
 
   const { error } = await supabase

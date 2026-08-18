@@ -9,6 +9,7 @@
 import dotenv from "dotenv";
 import { createClient } from "@supabase/supabase-js";
 import { getValidMLToken } from "../src/handlers/ml/_helpers/mlToken.js";
+import { OPERATIONAL_ORIGIN_EXTENDED } from "../src/domain/sales/financialSnapshotProvenanceV2.js";
 import { enrichMercadoLivreSaleFinancialSnapshot } from "../src/services/marketplace/mercadoLivreSaleFinancialEnrichment.js";
 
 dotenv.config({ path: ".env.vercel" });
@@ -245,7 +246,9 @@ async function run() {
         salesOrderId: orderRef.order_id,
         logContext: "backfill_recent_cost_snapshots",
         force: true,
-        snapshotOrigin: "post_suse7_sale",
+        snapshotOrigin: OPERATIONAL_ORIGIN_EXTENDED.MANUAL_BACKFILL,
+        isInitialCanonicalPersist: false,
+        saleCreatedAt: order.raw_json?.date_created ?? null,
       });
 
       const afterItems = await loadOrderItems(orderRef.order_id, orderRef.user_id);

@@ -77,6 +77,16 @@ export async function handleLegalRoutes(req, res, path) {
     }
 
     const body = await readRequestJson(req);
+
+    if (body?.user_id != null && String(body.user_id).trim()) {
+      return fail(
+        res,
+        { code: "FORBIDDEN", message: "Identidade do aceite deve vir da sessão autenticada." },
+        403,
+        traceId
+      );
+    }
+
     const documentType = String(body?.document_type || "").trim();
     const documentVersion = String(body?.document_version || "").trim();
     const documentHash = String(body?.document_hash || "").trim().toLowerCase();
@@ -107,6 +117,53 @@ export async function handleLegalRoutes(req, res, path) {
     }
 
     const { user, supabase } = auth;
+
+    const { data: existingAcceptance, error: existingError } = await supabase
+      .from("legal_document_acceptances")
+      .select("id")
+      .eq("user_id", user.id)
+      .eq("document_type", documentType)
+      .eq("document_version", documentVersion)
+      .maybeSingle();
+
+    if (existingError) {
+      const missingTable =
+        existingError.code === "42P01" ||
+        /legal_document_acceptances/i.test(String(existingError.message ?? "")) &&
+          /does not exist|relation.*not found/i.test(String(existingError.message ?? ""));
+
+      if (missingTable) {
+        return fail(
+          res,
+          {
+            code: "SCHEMA_NOT_READY",
+            message: "Persistência de aceite jurídico indisponível. Migration pendente no ambiente.",
+          },
+          503,
+          traceId
+        );
+      }
+
+      console.error("[legal/document-acceptances] lookup failed", existingError);
+      return fail(
+        res,
+        { code: "PERSISTENCE_ERROR", message: "Não foi possível registrar o aceite do documento." },
+        500,
+        traceId
+      );
+    }
+
+    if (existingAcceptance?.id) {
+      return ok(res, {
+        ok: true,
+        acceptance_id: existingAcceptance.id,
+        already_accepted: true,
+        document_type: documentType,
+        document_version: documentVersion,
+        traceId,
+      });
+    }
+
     const row = {
       user_id: user.id,
       document_type: documentType,
@@ -119,6 +176,45 @@ export async function handleLegalRoutes(req, res, path) {
 
     const { data, error } = await supabase.from("legal_document_acceptances").insert(row).select("id").maybeSingle();
     if (error) {
+      if (error.code === "23505") {
+        const { data: racedAcceptance } = await supabase
+          .from("legal_document_acceptances")
+          .select("id")
+          .eq("user_id", user.id)
+          .eq("document_type", documentType)
+          .eq("document_version", documentVersion)
+          .maybeSingle();
+
+        if (racedAcceptance?.id) {
+          return ok(res, {
+            ok: true,
+            acceptance_id: racedAcceptance.id,
+            already_accepted: true,
+            document_type: documentType,
+            document_version: documentVersion,
+            traceId,
+          });
+        }
+      }
+
+      const missingTable =
+        error.code === "42P01" ||
+        /legal_document_acceptances/i.test(String(error.message ?? "")) &&
+          /does not exist|relation.*not found/i.test(String(error.message ?? ""));
+
+      if (missingTable) {
+        return fail(
+          res,
+          {
+            code: "SCHEMA_NOT_READY",
+            message: "Persistência de aceite jurídico indisponível. Migration pendente no ambiente.",
+          },
+          503,
+          traceId
+        );
+      }
+
+      console.error("[legal/document-acceptances] insert failed", error);
       return fail(
         res,
         { code: "PERSISTENCE_ERROR", message: "Não foi possível registrar o aceite do documento." },

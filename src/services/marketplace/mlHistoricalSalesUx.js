@@ -188,6 +188,11 @@ export function buildMlHistoricalSalesUxState(jobRows, coverageRollup) {
   const status = String(agg.status || "").toLowerCase();
   const isActive = status === "running" || status === "pending";
 
+  const emptyHistory =
+    status === "done" &&
+    savedHint <= 0 &&
+    (apiHint == null || !Number.isFinite(Number(apiHint)) || Number(apiHint) <= 0);
+
   const processingTitle = "Importando histórico disponível de vendas…";
   const historical_total_period_line = formatHistoricalTotalPeriodLine(histStart, histEnd);
   const current_window_period_line = formatCurrentWindowPeriodLine(dateFrom, dateTo);
@@ -228,16 +233,20 @@ export function buildMlHistoricalSalesUxState(jobRows, coverageRollup) {
     else if (processedLine) checklistDetailLines.push(processedLine);
     else if (!current_window_period_line) checklistDetailLines.push("Aguardando primeira página de resultados…");
   } else if (status === "done") {
-    if (periodFrom && periodTo) {
-      checklistDetailLines.push(`Período importado: ${formatPtDateShort(periodFrom)} até ${formatPtDateShort(periodTo)}`);
+    if (emptyHistory) {
+      checklistDetailLines.push("Nenhum histórico adicional encontrado.");
+    } else {
+      if (periodFrom && periodTo) {
+        checklistDetailLines.push(`Período importado: ${formatPtDateShort(periodFrom)} até ${formatPtDateShort(periodTo)}`);
+      }
+      if (apiHint != null && Number.isFinite(apiHint) && apiHint > 0) {
+        checklistDetailLines.push(`Vendas localizadas na API: ${Math.round(apiHint)}`);
+      }
+      if (savedHint > 0) {
+        checklistDetailLines.push(`Vendas salvas no Suse7: ${Math.round(savedHint)}`);
+      }
+      checklistDetailLines.push("Cobertura disponível importada.");
     }
-    if (apiHint != null && Number.isFinite(apiHint) && apiHint > 0) {
-      checklistDetailLines.push(`Vendas localizadas na API: ${Math.round(apiHint)}`);
-    }
-    if (savedHint > 0) {
-      checklistDetailLines.push(`Vendas salvas no Suse7: ${Math.round(savedHint)}`);
-    }
-    checklistDetailLines.push("Cobertura disponível importada.");
   } else if (status === "error") {
     checklistDetailLines.push("Toque em suporte ou reative a sincronização para tentar novamente.");
   }
@@ -270,11 +279,18 @@ export function buildMlHistoricalSalesUxState(jobRows, coverageRollup) {
     coverage_api_total_hint: apiHint,
     coverage_saved_total_hint: savedHint,
     divergence_notice: showDivergence ? ML_HISTORICAL_DIVERGENCE_NOTICE : null,
-    checklist_primary: isActive ? processingTitle : status === "done" ? "Histórico disponível (Mercado Livre)" : "Histórico de vendas",
+    checklist_primary: isActive
+      ? processingTitle
+      : status === "done"
+        ? emptyHistory
+          ? "Histórico de vendas"
+          : "Histórico disponível (Mercado Livre)"
+        : "Histórico de vendas",
     checklist_detail_lines: checklistDetailLines,
     hide_raw_progress_fraction: true,
     /** Metadados para o cliente sem depender de cópia embutida */
     state: status,
+    empty_history: emptyHistory,
     windows_total: windowsTotal,
     windows_done: agg.windows_done,
     focal_date_from: dateFrom,

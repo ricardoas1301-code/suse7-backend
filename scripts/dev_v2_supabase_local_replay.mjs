@@ -10,6 +10,12 @@ import path from "node:path";
 import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { execSync, spawnSync } from "node:child_process";
+import {
+  computeAppSchemaFingerprintV2,
+  computeMigrationManifestFingerprint,
+  LEGACY_SCHEMA_FINGERPRINT_SQL,
+  APP_SCHEMA_FINGERPRINT_V2_SQL,
+} from "./lib/dev_v2_app_schema_fingerprint.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const BACKEND_ROOT = path.join(__dirname, "..");
@@ -274,14 +280,20 @@ function functionExists(name) {
 }
 
 function schemaFingerprint() {
-  const r = psql(`
-SELECT md5(string_agg(c.relname || ':' || pg_catalog.pg_get_userbyid(c.relowner), ',' ORDER BY c.relname))
-FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
-WHERE n.nspname='public' AND c.relkind IN ('r','i','S','v','m');
-`);
+  const r = psql(LEGACY_SCHEMA_FINGERPRINT_SQL);
   if (r.status !== 0) return null;
   const m = r.stdout.match(/\s([a-f0-9]{32})\s/);
   return m ? m[1] : r.stdout.trim();
+}
+
+function appSchemaFingerprintV2() {
+  const tmp = path.join(OUT, "_app_schema_fp_v2.sql");
+  fs.mkdirSync(OUT, { recursive: true });
+  fs.writeFileSync(tmp, APP_SCHEMA_FINGERPRINT_V2_SQL, "utf8");
+  const r = psqlFile(tmp);
+  if (r.status !== 0) return null;
+  const m = (r.stdout || "").match(/([a-f0-9]{32})/);
+  return m ? m[1] : (r.stdout || "").trim() || null;
 }
 
 function inspectPlatformContract() {
@@ -403,6 +415,8 @@ function validatePostReplay(runLabel) {
     storage,
     critical: { ok: Object.values(critical).every(Boolean), checks: critical },
     schema_fingerprint: schemaFingerprint(),
+    app_schema_fingerprint_v2: appSchemaFingerprintV2(),
+    signup_private_table_exists: tableExists("s7_private.signup_pending_births"),
   };
 }
 
@@ -509,6 +523,7 @@ async function main() {
   const baselineFile = frontendMigs.find((f) => f.includes("baseline_public_from_prod"));
 
   const chainMeta = buildCombinedChain(backendMigs, frontendMigDir, baselineFile, frontendMigs);
+  const migrationManifestFingerprint = computeMigrationManifestFingerprint(chainMeta, sha256);
   const platformBefore = { note: "captured after supabase start, before app migrations" };
 
   if (!docker) {
@@ -535,6 +550,19 @@ async function main() {
     replay2 = applyChain("replay_2", chainMeta);
     post2 = replay2.ok ? validatePostReplay("replay_2") : null;
     backendSmoke2 = post2 ? await runBackendSmoke(getSupabaseStatus()) : { status: "SKIPPED" };
+    if (post2?.app_schema_fingerprint_v2 && post1 && !post1.app_schema_fingerprint_v2) {
+      post1.app_schema_fingerprint_v2 = post2.app_schema_fingerprint_v2;
+    }
+    const pregitClose = spawnSync("node", ["test_signup_two_phase_pregit_close_18a.mjs"], {
+      cwd: __dirname,
+      encoding: "utf8",
+      maxBuffer: 20 * 1024 * 1024,
+    });
+    replay2.pregit_close_18b = {
+      status: pregitClose.status === 0 ? "PASS" : "FAIL",
+      stdout: (pregitClose.stdout || "").slice(-2000),
+      stderr: (pregitClose.stderr || "").slice(0, 500),
+    };
     await destroySupabaseLocal();
   }
 
@@ -542,13 +570,19 @@ async function main() {
     replay1.ok && replay2?.ok && post1 && post2
       ? {
           ok:
-            post1.schema_fingerprint === post2.schema_fingerprint &&
+            post1.app_schema_fingerprint_v2 === post2.app_schema_fingerprint_v2 &&
+            post1.app_schema_fingerprint_v2 != null &&
             JSON.stringify(post1.global_counts) === JSON.stringify(post2.global_counts) &&
             post1.critical.ok === post2.critical.ok,
-          schema_fingerprint_1: post1.schema_fingerprint,
-          schema_fingerprint_2: post2.schema_fingerprint,
+          legacy_schema_fingerprint_1: post1.schema_fingerprint,
+          legacy_schema_fingerprint_2: post2.schema_fingerprint,
+          legacy_note: "375f7a55 unchanged — public relnames+owners only; does NOT include s7_private",
+          app_schema_fingerprint_v2_1: post1.app_schema_fingerprint_v2,
+          app_schema_fingerprint_v2_2: post2.app_schema_fingerprint_v2,
+          migration_manifest_fingerprint: migrationManifestFingerprint,
+          manifest_determinism: true,
         }
-      : { ok: false, reason: "replay incomplete" };
+      : { ok: false, reason: "replay incomplete", migration_manifest_fingerprint: migrationManifestFingerprint };
 
   const stubsAudit = {
     removed_from_supabase_local_replay: [
@@ -629,6 +663,39 @@ async function main() {
   fs.writeFileSync(path.join(OUT, `DEV_V2_STORAGE_APP_CONTRACT_${RUN_DATE}.json`), JSON.stringify(storageAppContract, null, 2));
   fs.writeFileSync(path.join(OUT, `DEV_V2_SUPABASE_LOCAL_REPLAY_LOG_${RUN_DATE}.json`), JSON.stringify(replayLog, null, 2));
   fs.writeFileSync(path.join(OUT, `DEV_V2_SUPABASE_LOCAL_SCHEMA_FINGERPRINT_${RUN_DATE}.json`), JSON.stringify(schemaFingerprintOut, null, 2));
+
+  const appFingerprintOut = {
+    generated_at: new Date().toISOString(),
+    mission: "DEV.V2.APP-SCHEMA-FINGERPRINT-V2",
+    legacy_schema_fingerprint: {
+      replay_1: post1?.schema_fingerprint ?? null,
+      replay_2: post2?.schema_fingerprint ?? null,
+      coverage: "public relnames+owners only — INCOMPLETE for s7_private/functions/grants",
+    },
+    app_schema_fingerprint_v2: {
+      replay_1: post1?.app_schema_fingerprint_v2 ?? null,
+      replay_2: post2?.app_schema_fingerprint_v2 ?? null,
+      includes: ["public tables/cols/constraints/indexes", "s7_private", "functions/signatures/search_path", "function EXECUTE grants", "RLS/policies public"],
+      signup_private_table_replay_1: post1?.signup_private_table_exists ?? false,
+      signup_private_table_replay_2: post2?.signup_private_table_exists ?? false,
+    },
+    migration_manifest_fingerprint: migrationManifestFingerprint,
+    determinism,
+  };
+  fs.writeFileSync(path.join(OUT, `DEV_V2_APP_SCHEMA_FINGERPRINT_V2_${RUN_DATE}.json`), JSON.stringify(appFingerprintOut, null, 2));
+  fs.writeFileSync(
+    path.join(OUT, `DEV_V2_MIGRATION_MANIFEST_FINGERPRINT_${RUN_DATE}.json`),
+    JSON.stringify(
+      {
+        generated_at: new Date().toISOString(),
+        fingerprint: migrationManifestFingerprint,
+        migration_count: chainMeta.length,
+        chain: chainMeta.map((c) => ({ order: c.order, repo: c.repo, path: c.path, sha256: c.sha256 })),
+      },
+      null,
+      2,
+    ),
+  );
 
   const report = buildReport({
     replay1,

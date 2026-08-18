@@ -122,14 +122,34 @@ export function avaliarMilestoneCicloOperacional(profile) {
 }
 
 /**
- * @param {Record<string, unknown> | null | undefined} profile
+ * Conta ativa ML pertencente ao tenant — SSOT para milestone M6 (além do latch em profiles).
+ * @param {readonly Record<string, unknown>[]} marketplaceAccounts
  */
-export function avaliarMilestonePrimeiraIntegracaoMarketplace(profile) {
+export function contarContasMercadoLivreAtivas(marketplaceAccounts) {
+  const rows = Array.isArray(marketplaceAccounts) ? marketplaceAccounts : [];
+  return rows.filter((row) => {
+    const mp = String(row?.marketplace ?? "").trim().toLowerCase();
+    if (mp !== "mercado_livre" && mp !== "ml") return false;
+    const status = row?.status != null ? String(row.status).trim().toLowerCase() : "";
+    return status !== "removed";
+  }).length;
+}
+
+/**
+ * @param {Record<string, unknown> | null | undefined} profile
+ * @param {readonly Record<string, unknown>[]} [marketplaceAccounts]
+ */
+export function avaliarMilestonePrimeiraIntegracaoMarketplace(profile, marketplaceAccounts = []) {
   const latchedAt = profile?.first_marketplace_connected_at;
-  if (latchedAt == null || String(latchedAt).trim() === "") {
-    return { completed: false, reason: "FIRST_MARKETPLACE_NOT_LATCHED" };
+  if (latchedAt != null && String(latchedAt).trim() !== "") {
+    return { completed: true, reason: "FIRST_MARKETPLACE_LATCHED" };
   }
-  return { completed: true, reason: null };
+
+  if (contarContasMercadoLivreAtivas(marketplaceAccounts) > 0) {
+    return { completed: true, reason: "ACTIVE_MARKETPLACE_ACCOUNT" };
+  }
+
+  return { completed: false, reason: "FIRST_MARKETPLACE_NOT_CONNECTED" };
 }
 
 /**

@@ -20,6 +20,14 @@ export function describeCommunicationRecipientsGovernance() {
       note: "Sininho — sem destinatário externo; seller_id implícito.",
     },
     primary_flag: "is_primary",
+    primary_company_kind: "metadata.recipient_kind = PRIMARY_COMPANY",
+    primary_company_ssot: {
+      company_table: "seller_companies",
+      company_selector: "is_primary DESC, created_at DESC LIMIT 1",
+      email: "seller_companies.contact_email (fallback profiles.email)",
+      whatsapp: "seller_companies.whatsapp",
+      label_initial: "seller_companies.trade_name",
+    },
     additional: "destinatários ativos no mesmo canal",
     fallback: {
       email: "profiles.email",

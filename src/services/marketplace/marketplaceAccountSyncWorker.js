@@ -25,6 +25,11 @@ import {
   ML_CUSTOMERS_TYPES,
 } from "./createMlInitialSyncJobs.js";
 import {
+  resolveMlInitialSyncPrerequisiteBlockReason,
+  pipelineStepRank,
+} from "./mlInitialSyncPrerequisites.js";
+import { resolveMlSalesHistoryWindow } from "./mlSalesHistoryWindow.js";
+import {
   ensureMarketplaceSyncJobRunning,
   patchMarketplaceSyncJob,
   completeMarketplaceSyncJob,
@@ -36,6 +41,9 @@ import { runMlInitialFeesSyncTurn } from "./mlFeesSyncService.js";
 import { upsertMarketplaceSalesImportCoverage } from "./marketplaceSalesImportCoverageService.js";
 import { advanceMlSalesWatermark } from "./mlSalesAccountWatermark.js";
 import { runIncrementalMlSalesPollWave } from "./mlIncrementalSalesPoll.js";
+import {
+  tryFinalizeEmptyHistoricalBackfillIfProven,
+} from "./mlHistoricalEmptyBackfillFinalize.js";
 import {
   evaluateDevGlobalMaintenanceGate,
   DEV_GLOBAL_MAINTENANCE_REASON,
@@ -135,27 +143,7 @@ function resolveBatchDetails(opts, salesPageLimit) {
   return Math.min(80, Math.max(4, salesPageLimit));
 }
 
-/** Janela máx. pedida ao ML no job “histórico” (API não garante além de ~12 meses). */
-const ML_INITIAL_ORDERS_LOOKBACK_DAYS = Math.min(
-  400,
-  Math.max(1, parseInt(process.env.ML_INITIAL_ORDERS_LOOKBACK_DAYS || "365", 10) || 365)
-);
-
-/** Desempate entre jobs mesma prioridade UX — menor = mais “à frente” no pipeline. */
-const PIPELINE_STEP_RANK = {
-  ml_initial_sales_recent: 1,
-  ml_initial_sales_history: 1,
-  ml_historical_sales_backfill: 2,
-  ml_initial_listings_current: 3,
-  ml_initial_listings: 3,
-  ml_initial_fees: 4,
-  ml_initial_products: 5,
-  ml_initial_customers_recent: 6,
-  ml_initial_customers: 6,
-  ml_historical_customers_backfill: 7,
-  ml_sales_enrichment_backfill: 8,
-  ml_enable_webhook_monitoring: 9,
-};
+/** Desempate entre jobs mesma prioridade UX — importado de mlInitialSyncPrerequisites.js */
 const ORDER_PROCESS_TIMEOUT_MS = Math.min(
   180000,
   Math.max(5000, parseInt(process.env.ML_INITIAL_SALES_ORDER_PROCESS_TIMEOUT_MS || "45000", 10) || 45000)
@@ -202,9 +190,35 @@ async function tryWriteSalesImportCoverage(supabase, row) {
   }
 }
 
-/** @param {string} jobType */
-function pipelineStepRank(jobType) {
-  return PIPELINE_STEP_RANK[jobType] ?? 50;
+/** @param {string} jobType — reexport wrapper */
+function pipelineStepRankLocal(jobType) {
+  return pipelineStepRank(jobType);
+}
+
+/** @param {Record<string, unknown>} job @param {Record<string, string>} statusMap */
+function prerequisiteBlockReason(job, statusMap) {
+  return resolveMlInitialSyncPrerequisiteBlockReason(job, statusMap);
+}
+
+/** @param {Record<string, unknown>} metaJob */
+function resolveHotSalesRangeFromMetadata(metaJob) {
+  const win =
+    metaJob.sales_history_window && typeof metaJob.sales_history_window === "object"
+      ? metaJob.sales_history_window
+      : resolveMlSalesHistoryWindow();
+  const hotStart =
+    metaJob.hot_start_iso != null && String(metaJob.hot_start_iso).trim() !== ""
+      ? String(metaJob.hot_start_iso).trim()
+      : metaJob.date_from != null && String(metaJob.date_from).trim() !== ""
+        ? String(metaJob.date_from).trim()
+        : win.hot_start_iso;
+  const hotEnd =
+    metaJob.hot_end_iso != null && String(metaJob.hot_end_iso).trim() !== ""
+      ? String(metaJob.hot_end_iso).trim()
+      : metaJob.target_history_end_iso != null && String(metaJob.target_history_end_iso).trim() !== ""
+        ? String(metaJob.target_history_end_iso).trim()
+        : win.hot_end_iso;
+  return { rangeFrom: hotStart, rangeTo: hotEnd };
 }
 
 /** @param {Record<string, unknown>} job */
@@ -315,8 +329,35 @@ async function withTimeout(promise, timeoutMs, label) {
   }
 }
 
+async function maybeFinalizeEmptyHistoricalBackfill(supabase, ctx) {
+  try {
+    const { data: allJobs, error } = await supabase
+      .from("marketplace_account_sync_jobs")
+      .select("*")
+      .eq("marketplace_account_id", ctx.accountId)
+      .in("job_type", ML_ALL_ACCOUNT_SYNC_JOB_TYPES)
+      .limit(400);
+    if (error) {
+      console.warn("[ML_HISTORICAL_EMPTY_BACKFILL_RELOAD_WARN]", { message: error.message });
+      return { finalized: 0 };
+    }
+    return await tryFinalizeEmptyHistoricalBackfillIfProven(supabase, {
+      accountId: ctx.accountId,
+      sellerId: ctx.sellerId,
+      accessToken: ctx.accessToken,
+      allJobRows: allJobs ?? [],
+      reason: ctx.reason,
+    });
+  } catch (e) {
+    console.warn("[ML_HISTORICAL_EMPTY_BACKFILL_FINALIZE_WARN]", {
+      marketplace_account_id: ctx.accountId,
+      message: e?.message ?? String(e),
+    });
+    return { finalized: 0 };
+  }
+}
+
 /**
- * Move jobs running "órfãos" para erro para não ficar infinito.
  * @param {import("@supabase/supabase-js").SupabaseClient} supabase
  */
 async function markStaleRunningJobsAsError(supabase) {
@@ -410,68 +451,6 @@ async function loadLatestJobStatusMap(supabase, accountIds) {
   }
 
   return map;
-}
-
-/**
- * Pipeline onboarding: cada etapa só roda quando as anteriores estão `done`.
- * @param {Record<string, unknown>} job
- * @param {Record<string, string>} statusMap
- */
-/**
- * Motivo pelo qual o job não entra na fila elegível (null = pode rodar).
- * @param {Record<string, unknown>} job
- * @param {Record<string, string>} statusMap
- * @returns {string | null}
- */
-function prerequisiteBlockReason(job, statusMap) {
-  const acc = String(job.marketplace_account_id || "");
-  const needDone = (jt) => statusMap[`${acc}:${jt}`] === "done";
-  const salesHotDone = () => ML_SALES_HOT_TYPES.some((jt) => needDone(jt));
-  const listingsDone = () => ML_LISTINGS_TYPES.some((jt) => needDone(jt));
-  const customersHotDone = () => ML_CUSTOMERS_TYPES.some((jt) => needDone(jt));
-
-  const t = String(job.job_type || "");
-  if (t === "ml_initial_sales_recent" || t === "ml_initial_sales_history") return null;
-
-  if (t === "ml_initial_listings_current" || t === "ml_initial_listings") {
-    return salesHotDone() ? null : "blocked_until_ml_sales_hot_done";
-  }
-  if (t === "ml_initial_fees") {
-    if (!salesHotDone()) return "blocked_until_ml_sales_hot_done";
-    if (!listingsDone()) return "blocked_until_ml_listings_done";
-    return null;
-  }
-  if (t === "ml_initial_products") {
-    if (!salesHotDone()) return "blocked_until_ml_sales_hot_done";
-    if (!listingsDone()) return "blocked_until_ml_listings_done";
-    if (!needDone("ml_initial_fees")) return "blocked_until_ml_initial_fees_done";
-    return null;
-  }
-  if (t === "ml_initial_customers_recent" || t === "ml_initial_customers") {
-    if (!salesHotDone()) return "blocked_until_ml_sales_hot_done";
-    if (!listingsDone()) return "blocked_until_ml_listings_done";
-    if (!needDone("ml_initial_fees")) return "blocked_until_ml_initial_fees_done";
-    if (!needDone("ml_initial_products")) return "blocked_until_ml_initial_products_done";
-    return null;
-  }
-  if (t === "ml_enable_webhook_monitoring") {
-    if (!salesHotDone()) return "blocked_until_ml_sales_hot_done";
-    if (!listingsDone()) return "blocked_until_ml_listings_done";
-    if (!needDone("ml_initial_fees")) return "blocked_until_ml_initial_fees_done";
-    if (!needDone("ml_initial_products")) return "blocked_until_ml_initial_products_done";
-    if (!customersHotDone()) return "blocked_until_ml_customers_hot_done";
-    return null;
-  }
-  if (t === "ml_historical_sales_backfill") {
-    return salesHotDone() ? null : "blocked_until_ml_sales_hot_done";
-  }
-  if (t === "ml_historical_customers_backfill") {
-    return customersHotDone() ? null : "blocked_until_ml_customers_hot_done";
-  }
-  if (t === "ml_sales_enrichment_backfill") {
-    return salesHotDone() ? null : "blocked_until_ml_sales_hot_done";
-  }
-  return `unsupported_or_unknown_job_type:${t || "empty"}`;
 }
 
 /**
@@ -784,18 +763,23 @@ async function processMlSalesBatchJob(supabase, job, opts) {
       return { stopped: true, processedInThisRun: 0 };
     }
   } else if (salesJobType === "ml_initial_sales_recent") {
-    const rd = resolveMlInitialRecentDays();
-    rangeFrom = new Date(Date.now() - rd * 86400000).toISOString();
+    const hot = resolveHotSalesRangeFromMetadata(metaJob);
+    rangeFrom = hot.rangeFrom;
+    rangeTo = hot.rangeTo;
   } else if (salesJobType === "ml_initial_sales_history") {
+    const win = resolveMlSalesHistoryWindow();
     if (metaJob.import_full_history === true) {
-      rangeFrom = new Date(Date.now() - ML_INITIAL_ORDERS_LOOKBACK_DAYS * 86400000).toISOString();
+      rangeFrom = win.target_history_start_iso;
+      rangeTo = win.target_history_end_iso;
     } else {
-      const rd = resolveMlInitialRecentDays();
-      rangeFrom = new Date(Date.now() - rd * 86400000).toISOString();
+      const hot = resolveHotSalesRangeFromMetadata(metaJob);
+      rangeFrom = hot.rangeFrom;
+      rangeTo = hot.rangeTo;
     }
   } else {
-    const rd = resolveMlInitialRecentDays();
-    rangeFrom = new Date(Date.now() - rd * 86400000).toISOString();
+    const hot = resolveHotSalesRangeFromMetadata(metaJob);
+    rangeFrom = hot.rangeFrom;
+    rangeTo = hot.rangeTo;
   }
 
   console.info("[ML_ORDERS_FETCH_RANGE]", {
@@ -1168,6 +1152,28 @@ async function processMlSalesBatchJob(supabase, job, opts) {
             job_id: jRow.id,
             marketplace_account_id: accountId,
             message: e?.message ?? String(e),
+          });
+        }
+        const savedAfterHot = Number(metaDone.ml_sales_import_saved) || 0;
+        const apiAfterHot = Number(metaDone.ml_sales_import_api_total) || 0;
+        if (savedAfterHot <= 0 && apiAfterHot <= 0) {
+          await maybeFinalizeEmptyHistoricalBackfill(supabase, {
+            accountId,
+            sellerId,
+            accessToken,
+            reason: "worker_after_empty_hot_enqueue",
+          });
+        }
+      }
+      if (salesJobType === "ml_historical_sales_backfill") {
+        const savedWindow = Number(metaDone.ml_sales_import_saved) || 0;
+        const apiWindow = Number(metaDone.ml_sales_import_api_total) || 0;
+        if (savedWindow <= 0 && apiWindow <= 0) {
+          await maybeFinalizeEmptyHistoricalBackfill(supabase, {
+            accountId,
+            sellerId,
+            accessToken,
+            reason: "worker_after_empty_historical_window",
           });
         }
       }

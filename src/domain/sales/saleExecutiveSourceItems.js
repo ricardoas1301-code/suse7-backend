@@ -459,7 +459,33 @@ export async function* iterateExecutiveSummaryBatches(supabase, userId, filters)
     orderIdsForSearch = [...new Set([...fromOrders, ...fromItems])];
   }
 
-  const allOrderIds = await fetchAllExecutiveSummaryOrderIdsByPeriod(supabase, userId, filters);
+  /** @type {string[]} */
+  let allOrderIds;
+  const restrictExternal =
+    Array.isArray(filters.restrict_external_order_ids) && filters.restrict_external_order_ids.length > 0
+      ? filters.restrict_external_order_ids.map(String).filter(Boolean)
+      : null;
+
+  if (restrictExternal) {
+    allOrderIds = [];
+    for (const extChunk of chunkIds(restrictExternal, EXECUTIVE_SUMMARY_ORDER_IDS_IN_CHUNK_SIZE)) {
+      let q = supabase.from("sales_orders").select("id").eq("user_id", userId).in("external_order_id", extChunk);
+      if (filters.marketplace) q = q.eq("marketplace", filters.marketplace);
+      if (filters.marketplace_account_id) {
+        q = q.eq("marketplace_account_id", filters.marketplace_account_id);
+      }
+      if (filters.seller_company_id) q = q.eq("seller_company_id", filters.seller_company_id);
+      const { data, error } = await q;
+      if (error) throw error;
+      for (const row of data ?? []) {
+        const id = row?.id != null ? String(row.id) : "";
+        if (id) allOrderIds.push(id);
+      }
+    }
+    allOrderIds = [...new Set(allOrderIds)];
+  } else {
+    allOrderIds = await fetchAllExecutiveSummaryOrderIdsByPeriod(supabase, userId, filters);
+  }
   if (allOrderIds.length === 0) return;
 
   const chunks = chunkIds(allOrderIds, EXECUTIVE_SUMMARY_ORDER_IDS_IN_CHUNK_SIZE);

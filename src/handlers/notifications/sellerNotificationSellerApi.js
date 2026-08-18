@@ -29,11 +29,14 @@ import {
 } from "../../domain/notifications/central/sales/dailySalesSummaryAutomationRuleService.js";
 import { logNotificationUi } from "../../domain/notifications/central/seller/sellerNotificationObservability.js";
 import { RECIPIENT_ERROR } from "../../domain/notifications/central/seller/sellerNotificationRecipientValidation.js";
+import { DEFAULT_RECIPIENT_ERROR } from "../../domain/notifications/central/recipients/defaultRecipientPolicy.js";
 
 /** @param {string | undefined} errorCode */
 function recipientErrorStatus(errorCode) {
   if (errorCode === "NOT_FOUND") return 404;
   if (errorCode === RECIPIENT_ERROR.DUPLICATE_RECIPIENT) return 409;
+  if (errorCode === DEFAULT_RECIPIENT_ERROR.PRIMARY_DELETE_FORBIDDEN) return 403;
+  if (errorCode === DEFAULT_RECIPIENT_ERROR.PRIMARY_CONTACT_LOCKED) return 403;
   return 400;
 }
 

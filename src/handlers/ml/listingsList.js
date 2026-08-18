@@ -51,6 +51,7 @@ import {
   saleDetailMoneyToDecimal,
   saleDetailToQty,
 } from "../../domain/sales/saleDetailInternalCosts.js";
+import { projectSkuDependencyPending } from "../../domain/listings/skuDependencyPending.js";
 import { isExecutiveSummaryEligibleOrderRow } from "../../domain/sales/saleExecutiveOrderValidity.js";
 import { orderMatchesExecutivePeriod } from "../../domain/sales/saleExecutivePeriod.js";
 import { iterateExecutiveSummaryBatches } from "../../domain/sales/saleExecutiveSourceItems.js";
@@ -480,6 +481,7 @@ export default async function handleMlListingsList(req, res) {
       if (accountMeta?.logoUrl != null) {
         row.account_logo_url = accountMeta.logoUrl;
       }
+      Object.assign(row, projectSkuDependencyPending(l));
       return row;
     });
 

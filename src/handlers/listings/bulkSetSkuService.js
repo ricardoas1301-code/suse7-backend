@@ -8,8 +8,16 @@
 
 import { ML_MARKETPLACE_LISTING_ALIASES, ML_MARKETPLACE_SLUG } from "../ml/_helpers/mlMarketplace.js";
 import { normalizeSkuForDbLookup } from "../../domain/productCatalogCompleteness.js";
-import { findProductIdByNormalizedSku } from "../ml/_helpers/mlListingProductLink.js";
+import {
+  batchEnsureProductsForListings,
+  findProductIdByNormalizedSku,
+} from "../ml/_helpers/mlListingProductLink.js";
 import { syncListingHealthProductSnapshot } from "../ml/_helpers/syncListingHealthProductSnapshot.js";
+import {
+  finalizeListingSkuLink,
+  loadProductCandidatesByNormalizedSkus,
+  prepareListingSkuLink,
+} from "./createOrLinkListingSkuService.js";
 
 /** @param {Record<string, unknown> | null | undefined} p */
 function isListingFinancialBlocked(p) {
@@ -104,7 +112,7 @@ async function insertBulkLinkAuditEvent(supabase, userId, listingId, marketplace
  * @param {string} token
  * @param {Map<string, Record<string, unknown>>} [uuidRowMap] — opcional: linhas já carregadas por `.in('id', …)`
  */
-async function resolveOneListingToken(supabase, userId, token, uuidRowMap) {
+export async function resolveOneListingToken(supabase, userId, token, uuidRowMap) {
   const t = String(token ?? "").trim();
   if (!t) {
     return { ok: false, reason: "empty_token" };
@@ -155,6 +163,287 @@ async function resolveOneListingToken(supabase, userId, token, uuidRowMap) {
     return { ok: false, reason: "ambiguous_external", count: rows.length };
   }
   return { ok: true, row: /** @type {Record<string, unknown>} */ (rows[0]) };
+}
+
+function canonicalV2Status(result) {
+  if (result?.ok) return "SUCCESS";
+  const code = String(result?.code || "");
+  if (code === "CONFLICT") return "CONFLICT";
+  if (code === "NOT_FOUND_OR_DENIED" || code === "NOT_FOUND") return "NOT_FOUND";
+  if (code === "FORBIDDEN") return "FORBIDDEN";
+  if (
+    code === "INVALID_LISTING_ID" ||
+    code === "INVALID_SKU" ||
+    code === "SELECTED_PRODUCT_SKU_MISMATCH"
+  ) {
+    return "VALIDATION_ERROR";
+  }
+  return "ERROR";
+}
+
+async function runLimited(entries, concurrency, worker) {
+  for (let offset = 0; offset < entries.length; offset += concurrency) {
+    await Promise.all(entries.slice(offset, offset + concurrency).map(worker));
+  }
+}
+
+/**
+ * Modo v2 aditivo: cada item tem SKU próprio e resultado isolado.
+ * @param {{
+ *  supabase: import("@supabase/supabase-js").SupabaseClient;
+ *  userId: string;
+ *  items: { listing_id: unknown; sku: unknown; selected_product_id?: unknown }[];
+ * }} ctx
+ */
+export async function executeBulkSetSkuV2(ctx) {
+  const { supabase, userId, items } = ctx;
+  const results = new Array(items.length);
+  const resolved = [];
+
+  for (let index = 0; index < items.length; index += 1) {
+    const input = items[index] || {};
+    const token = String(input.listing_id || "").trim();
+    const requestedSku = String(input.sku || "").trim();
+    if (!token) {
+      results[index] = {
+        ok: false,
+        listing_id: null,
+        code: "INVALID_LISTING_ID",
+        message: "Informe listing_id.",
+      };
+      continue;
+    }
+    const listing = await resolveOneListingToken(supabase, userId, token);
+    if (!listing.ok || !listing.row) {
+      results[index] = {
+        ok: false,
+        listing_id: token,
+        sku: requestedSku || null,
+        code: listing.reason === "ambiguous_external" ? "CONFLICT" : "NOT_FOUND_OR_DENIED",
+        message:
+          listing.reason === "ambiguous_external"
+            ? "Identificador externo ambíguo; use o UUID interno."
+            : "Anúncio não encontrado ou não pertence ao usuário.",
+      };
+      continue;
+    }
+    const sku = String(
+      requestedSku || listing.row.seller_custom_field || listing.row.seller_sku || "",
+    ).trim();
+    const normalizedSku = normalizeSkuForDbLookup(sku);
+    if (!normalizedSku) {
+      results[index] = {
+        ok: false,
+        listing_id: token,
+        code: "INVALID_SKU",
+        message: "Informe um SKU válido.",
+      };
+      continue;
+    }
+    resolved.push({
+      index,
+      token,
+      sku,
+      normalizedSku,
+      selectedProductId: String(input.selected_product_id || "").trim(),
+      row: listing.row,
+    });
+  }
+
+  const byListingId = new Map();
+  for (const entry of resolved) {
+    const key = String(entry.row.id);
+    if (!byListingId.has(key)) byListingId.set(key, []);
+    byListingId.get(key).push(entry);
+  }
+
+  const primaryGroups = [];
+  const setGroupResult = (group, result) => {
+    const primary = group[0];
+    results[primary.index] = {
+      ...result,
+      listing_id: primary.token,
+      internal_listing_id: primary.row.id,
+    };
+    for (const duplicate of group.slice(1)) {
+      results[duplicate.index] = {
+        ...result,
+        listing_id: duplicate.token,
+        internal_listing_id: duplicate.row.id,
+        deduplicated: true,
+        duplicate_of: primary.index,
+      };
+    }
+  };
+
+  for (const group of byListingId.values()) {
+    const skuNorms = new Set(group.map((entry) => entry.normalizedSku));
+    const selectedProductIds = new Set(
+      group.map((entry) => entry.selectedProductId).filter(Boolean),
+    );
+    if (skuNorms.size > 1 || selectedProductIds.size > 1) {
+      setGroupResult(group, {
+        ok: false,
+        sku: group[0].sku,
+        code: "CONFLICT",
+        message:
+          skuNorms.size > 1
+            ? "O mesmo anúncio recebeu SKUs conflitantes na mesma requisição."
+            : "O mesmo anúncio recebeu produtos selecionados conflitantes na mesma requisição.",
+      });
+      continue;
+    }
+    primaryGroups.push({
+      group,
+      primary: group[0],
+      selectedProductId: [...selectedProductIds][0] || "",
+    });
+  }
+
+  let candidatesByNorm;
+  try {
+    candidatesByNorm = await loadProductCandidatesByNormalizedSkus(
+      supabase,
+      userId,
+      primaryGroups.map(({ primary }) => primary.normalizedSku),
+    );
+  } catch {
+    candidatesByNorm = null;
+  }
+
+  const directLinks = [];
+  const missingProductLinks = [];
+  for (const entry of primaryGroups) {
+    if (!candidatesByNorm) {
+      setGroupResult(entry.group, {
+        ok: false,
+        code: "CATALOG_QUERY_FAILED",
+        message: "Falha ao consultar catálogo.",
+      });
+      continue;
+    }
+    const prepared = prepareListingSkuLink({
+      row: entry.primary.row,
+      skuRaw: entry.primary.sku,
+      selectedProductId: entry.selectedProductId,
+      candidates: candidatesByNorm.get(entry.primary.normalizedSku) || [],
+    });
+    if (!prepared.ok) {
+      setGroupResult(entry.group, prepared);
+    } else if (prepared.productId) {
+      directLinks.push({ ...entry, prepared });
+    } else {
+      missingProductLinks.push({ ...entry, prepared });
+    }
+  }
+
+  await runLimited(directLinks, 8, async (entry) => {
+    let result;
+    try {
+      result = await finalizeListingSkuLink({
+        supabase,
+        userId,
+        ...entry.prepared,
+        auditReason: "bulk_set_sku_v2",
+      });
+    } catch (error) {
+      result = {
+        ok: false,
+        status: 500,
+        code: "UNEXPECTED_ITEM_ERROR",
+        message: error?.message || "Falha inesperada ao processar este anúncio.",
+      };
+    }
+    setGroupResult(entry.group, result);
+  });
+
+  if (missingProductLinks.length > 0) {
+    const batchEnsure =
+      ctx.batchEnsureProductsForListingsFn || batchEnsureProductsForListings;
+    let stats;
+    try {
+      stats = await batchEnsure(
+        supabase,
+        userId,
+        missingProductLinks.map(({ prepared }) => ({
+          listingId: String(prepared.row.id),
+          item: prepared.item,
+          description: null,
+        })),
+        { log: () => {} },
+      );
+    } catch (error) {
+      stats = {
+        entry_results: [],
+        errors: [{ stage: "batch_unexpected", message: error?.message || String(error) }],
+      };
+    }
+    const batchEntryByListingId = new Map(
+      (stats.entry_results || []).map((entry) => [String(entry.listing_id), entry]),
+    );
+    await runLimited(missingProductLinks, 8, async (entry) => {
+      const batchEntry = batchEntryByListingId.get(String(entry.prepared.row.id));
+      if (!batchEntry?.ok || !batchEntry.product_id) {
+        setGroupResult(entry.group, {
+          ok: false,
+          code: "CREATE_OR_LINK_FAILED",
+          message: "Não foi possível criar ou vincular o produto para este SKU.",
+          product_link: stats,
+        });
+        return;
+      }
+      let result;
+      try {
+        result = await finalizeListingSkuLink({
+          supabase,
+          userId,
+          ...entry.prepared,
+          productId: batchEntry.product_id,
+          created: batchEntry.created,
+          linkAlreadyApplied: true,
+          auditReason: "bulk_set_sku_v2",
+        });
+      } catch (error) {
+        result = {
+          ok: false,
+          code: "UNEXPECTED_ITEM_ERROR",
+          message: error?.message || "Falha inesperada ao finalizar este anúncio.",
+        };
+      }
+      setGroupResult(entry.group, result);
+    });
+  }
+
+  for (let index = 0; index < results.length; index += 1) {
+    results[index] = {
+      ...results[index],
+      status: canonicalV2Status(results[index]),
+    };
+  }
+  const totalSucceeded = results.filter((result) => result?.ok).length;
+  const totalFailed = results.length - totalSucceeded;
+  const errors = results
+    .map((result, index) => ({ ...result, index }))
+    .filter((result) => !result.ok)
+    .map(({ index, listing_id, status, code, message }) => ({
+      index,
+      listing_id,
+      status,
+      code,
+      message,
+    }));
+  return {
+    ok: true,
+    version: 2,
+    total_received: items.length,
+    total_succeeded: totalSucceeded,
+    total_failed: totalFailed,
+    total_updated: totalSucceeded,
+    total_skipped: totalFailed,
+    partial_success: totalSucceeded > 0 && totalFailed > 0,
+    errors,
+    results,
+  };
 }
 
 /**
