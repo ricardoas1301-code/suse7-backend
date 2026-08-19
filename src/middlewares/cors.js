@@ -146,7 +146,7 @@ export function applyCors(req, res) {
   // ---------------------------------------
   if (originPermitida) {
     res.setHeader("Access-Control-Allow-Origin", originPermitida);
-  } else if (req.method === "OPTIONS") {
+  } else if (req.method === "OPTIONS" && process.env.S7_CORS_OPTIONS_WILDCARD_FALLBACK === "1") {
     /**
      * Hotfix DEV: alguns clientes (e alguns proxies) podem omitir `Origin` no preflight.
      * Sem Allow-Origin o browser aborta o request real (especialmente quando há Authorization header).
@@ -159,7 +159,7 @@ export function applyCors(req, res) {
   // Headers CORS padrão para API com token
   // ---------------------------------------
   res.setHeader("Vary", "Origin");
-  if (!(req.method === "OPTIONS" && !originPermitida)) {
+  if (originPermitida) {
     res.setHeader("Access-Control-Allow-Credentials", "true");
   }
   res.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS");
