@@ -384,10 +384,23 @@ export async function handleBillingRoutes(req, res, path) {
       return fail(res, { code: "METHOD_NOT_ALLOWED", message: "Use GET" }, 405, traceId);
     }
     const auth = await requireAuthUser(req);
+    let supabase;
     if (auth.error) {
-      return fail(res, { code: "UNAUTHORIZED", message: auth.error.message }, auth.error.status, traceId);
+      if (!config.supabaseUrl?.trim() || !config.supabaseServiceRoleKey?.trim()) {
+        return fail(
+          res,
+          { code: "SERVICE_UNAVAILABLE", message: "Catálogo de planos indisponível." },
+          503,
+          traceId,
+        );
+      }
+      const { createClient } = await import("@supabase/supabase-js");
+      supabase = createClient(config.supabaseUrl, config.supabaseServiceRoleKey, {
+        auth: { autoRefreshToken: false, persistSession: false },
+      });
+    } else {
+      supabase = auth.supabase;
     }
-    const { supabase } = auth;
     const plans = await listActivePlans(supabase);
     const normalizedPlans = plans.map((plan) => ({
       ...plan,
