@@ -21,7 +21,7 @@ console.log("[S7 API Router] boot — ML OAuth diag: GET /api/ml/oauth-config");
 console.log("[S7 API Router] boot — billing: GET /api/billing/ping · GET /api/billing/plans · POST /api/billing/checkout/card · POST /api/billing/checkout/start · GET /api/billing/webhooks/asaas/health · POST /api/billing/webhooks/asaas · POST /api/jobs/billing-renewal-engine · POST /api/jobs/billing-consistency-check · POST /api/billing/renewals/:id/pay");
 console.log("[S7 API Router] boot — legal: GET /api/legal/documents · GET /api/legal/documents/terms-of-use · GET /api/legal/documents/privacy-policy · POST /api/legal/document-acceptances");
 console.log("[S7 API Router] boot — signup: POST /api/signup/pending-birth · bind · abort · complete-birth");
-console.log("[S7 API Router] boot — onboarding: GET /api/onboarding/configuration-snapshot");
+console.log("[S7 API Router] boot — onboarding: GET /api/onboarding/configuration-snapshot · PATCH /api/onboarding/operational-cycle");
 console.log("[S7 API Router] boot — notifications: POST /api/jobs/daily-sales-summary-automation");
 console.log("[S7 API Router] boot — competition: POST /api/jobs/competition-daily-snapshot");
 console.log("[S7 API Router] boot — pricing: POST /api/jobs/pricing-current-state-backfill");
@@ -741,6 +741,13 @@ export default async function handler(req, res) {
     if (path === "/api/onboarding/configuration-snapshot" && req.method === "GET") {
       const mod = await import("../src/handlers/onboarding/configurationSnapshot.js");
       return mod.handleOnboardingConfigurationSnapshot(req, res);
+    }
+    if (
+      path === "/api/onboarding/operational-cycle" &&
+      (req.method === "PATCH" || req.method === "POST")
+    ) {
+      const mod = await import("../src/handlers/onboarding/operationalCycleSave.js");
+      return mod.handleOnboardingOperationalCycleSave(req, res);
     }
     if (/^\/api\/products\/[^/]+\/images\/sync-listings\/?$/.test(path)) {
       const mod = await import("../src/handlers/products/productImageSync.js");
