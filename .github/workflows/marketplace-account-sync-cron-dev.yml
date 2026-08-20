@@ -7,8 +7,9 @@ name: Marketplace Account Sync Cron (DEV)
 # Vercel DEV: DEV_JOB_SECRET ou JOB_SECRET com o mesmo valor do GitHub.
 
 on:
-  schedule:
-    - cron: "*/1 * * * *"
+  # PAUSA TEMPORÁRIA P0.2 homologação runtime (2026-08-20) — reativar schedule após handoff Local→Hosted validado.
+  # schedule:
+  #   - cron: "*/1 * * * *"
   workflow_dispatch: {}
 
 jobs:
