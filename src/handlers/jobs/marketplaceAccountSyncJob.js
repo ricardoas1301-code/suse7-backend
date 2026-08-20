@@ -21,7 +21,7 @@
 
 import { createClient } from "@supabase/supabase-js";
 import { config } from "../../infra/config.js";
-import { runMarketplaceAccountSyncWorker } from "../../services/marketplace/marketplaceAccountSyncWorker.js";
+import { runMarketplaceAccountSyncWorker, runScopedMarketplaceSyncJobDrain } from "../../services/marketplace/marketplaceAccountSyncWorker.js";
 
 function resolveSupabaseHostForLog() {
   const raw =
@@ -194,7 +194,9 @@ export async function handleJobsMarketplaceAccountSync(req, res) {
   }
 
   const rawLimit = body.limit ?? req.query?.limit;
-  /** @type {{ maxChunks?: number }} */
+  const rawJobId = body.job_id ?? body.jobId ?? req.query?.job_id ?? req.query?.jobId;
+  const rawBudgetMs = body.budget_ms ?? body.budgetMs ?? req.query?.budget_ms ?? req.query?.budgetMs;
+  /** @type {{ maxChunks?: number; jobId?: string; budgetMs?: number }} */
   const workerOpts = {};
   if (rawLimit != null && String(rawLimit).trim() !== "") {
     const n = parseInt(String(rawLimit), 10);
@@ -202,13 +204,26 @@ export async function handleJobsMarketplaceAccountSync(req, res) {
       workerOpts.maxChunks = Math.max(1, Math.min(50, n));
     }
   }
+  if (rawJobId != null && String(rawJobId).trim() !== "") {
+    workerOpts.jobId = String(rawJobId).trim();
+  }
+  if (rawBudgetMs != null && String(rawBudgetMs).trim() !== "") {
+    const n = parseInt(String(rawBudgetMs), 10);
+    if (Number.isFinite(n)) workerOpts.budgetMs = Math.max(15_000, Math.min(300_000, n));
+  }
 
   try {
     logSyncCheckpoint(4, { stage: "worker_dispatch_start", worker_opts: workerOpts });
-    const out = await runMarketplaceAccountSyncWorker(supabase, workerOpts);
+    const out =
+      workerOpts.jobId != null
+        ? await runScopedMarketplaceSyncJobDrain(supabase, workerOpts.jobId, {
+            budgetMs: workerOpts.budgetMs ?? 120_000,
+          })
+        : await runMarketplaceAccountSyncWorker(supabase, workerOpts);
     logSyncCheckpoint(5, {
       stage: "worker_dispatch_done",
-      chunks_processed: out?.chunks_processed ?? 0,
+      chunks_processed: out?.chunks_processed ?? (out?.ok ? 1 : 0),
+      scoped_job_id: workerOpts.jobId ?? null,
     });
     logSyncCheckpoint(6, {
       stage: "incremental_sales_poll_done",
@@ -224,10 +239,13 @@ export async function handleJobsMarketplaceAccountSync(req, res) {
     });
     return res.status(200).json({
       ok: true,
-      ...(Object.keys(workerOpts).length ? { requested_limit_chunks: workerOpts.maxChunks } : {}),
+      ...(Object.keys(workerOpts).length ? { worker_opts: workerOpts } : {}),
+      ...(workerOpts.maxChunks != null ? { requested_limit_chunks: workerOpts.maxChunks } : {}),
       ...out,
       auth_mode: auth.mode === "none" ? "none" : auth.mode,
-      hint: "Agende este endpoint em cron (ex.: Vercel/GitHub Actions) com X-Job-Secret.",
+      hint: workerOpts.jobId
+        ? "Scoped drain: job_id processado exclusivamente (requer X-Job-Secret)."
+        : "Agende este endpoint em cron (ex.: Vercel/GitHub Actions) com X-Job-Secret.",
     });
   } catch (e) {
     console.error("[jobs/marketplace-account-sync] fatal", {

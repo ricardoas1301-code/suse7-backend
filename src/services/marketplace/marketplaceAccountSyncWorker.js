@@ -11,6 +11,7 @@ import {
   resolveMlOrdersSearchSort,
   searchSellerOrdersPage,
   snapshotMlDrainRequestMetrics,
+  setMlExternalAwaitHeartbeatHook,
 } from "../../handlers/ml/_helpers/mercadoLibreOrdersApi.js";
 import { getValidMLToken } from "../../handlers/ml/_helpers/mlToken.js";
 import { ML_MARKETPLACE_SLUG } from "../../handlers/ml/_helpers/mlMarketplace.js";
@@ -18,17 +19,24 @@ import { applyMlOrderDetailToMarketplaceSales } from "../../modules/marketplaces
 import { ingestCustomersFromSales } from "../customers/customerIngestionService.js";
 import {
   ML_ALL_ACCOUNT_SYNC_JOB_TYPES,
-  enqueueHistoricalSalesBackfillJobs,
   resolveMlInitialRecentDays,
   ML_SALES_HOT_TYPES,
   ML_LISTINGS_TYPES,
   ML_CUSTOMERS_TYPES,
 } from "./createMlInitialSyncJobs.js";
 import {
+  resolveMlInitialSyncPrerequisiteBlockReason,
+  pipelineStepRank,
+} from "./mlInitialSyncPrerequisites.js";
+import { resolveMlSalesHistoryWindow } from "./mlSalesHistoryWindow.js";
+import { runMlSalesHotJobPostCompletion, shouldEnqueueHistoricalAfterHotSalesComplete } from "./mlSalesHotJobPostCompletion.js";
+import {
   ensureMarketplaceSyncJobRunning,
   patchMarketplaceSyncJob,
   completeMarketplaceSyncJob,
   failMarketplaceSyncJob,
+  heartbeatMarketplaceSyncJob,
+  resolveMarketplaceSyncJobAlreadyComplete,
 } from "./marketplaceSyncJobHelpers.js";
 import { runMlInitialListingsSyncJobTurn } from "../../handlers/ml/_helpers/mlInitialOnboardingListingsSync.js";
 import { runMlInitialProductsSyncJobTurn } from "../../handlers/ml/_helpers/mlInitialOnboardingProductsSync.js";
@@ -37,9 +45,24 @@ import { upsertMarketplaceSalesImportCoverage } from "./marketplaceSalesImportCo
 import { advanceMlSalesWatermark } from "./mlSalesAccountWatermark.js";
 import { runIncrementalMlSalesPollWave } from "./mlIncrementalSalesPoll.js";
 import {
+  tryFinalizeEmptyHistoricalBackfillIfProven,
+} from "./mlHistoricalEmptyBackfillFinalize.js";
+import {
   evaluateDevGlobalMaintenanceGate,
   DEV_GLOBAL_MAINTENANCE_REASON,
 } from "../../domain/dev/devGlobalMaintenanceMode.js";
+import {
+  recoverStaleMarketplaceSyncJobs,
+  tryClaimMarketplaceSyncJob,
+  isJobLeaseExpired,
+  readJobLeaseMeta,
+  readJobMetadataObject,
+  resolveSyncExecutorId,
+  resolveStaleRecoveryThresholdMs,
+  resolveLeaseDurationMs,
+  resolveHeartbeatIntervalMs,
+  resolveHeartbeatOrderBatch,
+} from "./marketplaceSyncJobLease.js";
 
 function resolveSalesSearchPageLimit() {
   return Math.min(
@@ -116,10 +139,22 @@ function resolveEffectiveWaveParallelism(slotsLeft) {
 }
 
 function resolveSalesProgressHeartbeatEvery() {
-  return Math.min(
-    50,
-    Math.max(1, parseInt(process.env.MARKETPLACE_SYNC_SALES_PROGRESS_HEARTBEAT_EVERY || "8", 10) || 8)
-  );
+  return resolveHeartbeatOrderBatch();
+}
+
+/**
+ * Heartbeat híbrido: volume OU tempo (o que ocorrer primeiro).
+ * @param {{ ordersSinceHeartbeat: number; lastHeartbeatMs: number; nowMs?: number }} ctx
+ */
+function shouldFlushHybridHeartbeat(ctx) {
+  const nowMs = ctx.nowMs ?? Date.now();
+  const batch = resolveHeartbeatOrderBatch();
+  if (ctx.ordersSinceHeartbeat >= batch) return true;
+  const interval = resolveHeartbeatIntervalMs();
+  if (!ctx.lastHeartbeatMs || !Number.isFinite(ctx.lastHeartbeatMs)) {
+    return ctx.ordersSinceHeartbeat > 0;
+  }
+  return nowMs - ctx.lastHeartbeatMs >= interval;
 }
 
 function resolveBatchDetails(opts, salesPageLimit) {
@@ -135,34 +170,10 @@ function resolveBatchDetails(opts, salesPageLimit) {
   return Math.min(80, Math.max(4, salesPageLimit));
 }
 
-/** Janela máx. pedida ao ML no job “histórico” (API não garante além de ~12 meses). */
-const ML_INITIAL_ORDERS_LOOKBACK_DAYS = Math.min(
-  400,
-  Math.max(1, parseInt(process.env.ML_INITIAL_ORDERS_LOOKBACK_DAYS || "365", 10) || 365)
-);
-
-/** Desempate entre jobs mesma prioridade UX — menor = mais “à frente” no pipeline. */
-const PIPELINE_STEP_RANK = {
-  ml_initial_sales_recent: 1,
-  ml_initial_sales_history: 1,
-  ml_historical_sales_backfill: 2,
-  ml_initial_listings_current: 3,
-  ml_initial_listings: 3,
-  ml_initial_fees: 4,
-  ml_initial_products: 5,
-  ml_initial_customers_recent: 6,
-  ml_initial_customers: 6,
-  ml_historical_customers_backfill: 7,
-  ml_sales_enrichment_backfill: 8,
-  ml_enable_webhook_monitoring: 9,
-};
+/** Desempate entre jobs mesma prioridade UX — importado de mlInitialSyncPrerequisites.js */
 const ORDER_PROCESS_TIMEOUT_MS = Math.min(
   180000,
   Math.max(5000, parseInt(process.env.ML_INITIAL_SALES_ORDER_PROCESS_TIMEOUT_MS || "45000", 10) || 45000)
-);
-const RUNNING_STALE_TIMEOUT_MS = Math.min(
-  24 * 60 * 60 * 1000,
-  Math.max(60 * 1000, parseInt(process.env.ML_INITIAL_SYNC_RUNNING_STALE_TIMEOUT_MS || "900000", 10) || 900000)
 );
 /**
  * @param {string} event
@@ -202,9 +213,35 @@ async function tryWriteSalesImportCoverage(supabase, row) {
   }
 }
 
-/** @param {string} jobType */
-function pipelineStepRank(jobType) {
-  return PIPELINE_STEP_RANK[jobType] ?? 50;
+/** @param {string} jobType — reexport wrapper */
+function pipelineStepRankLocal(jobType) {
+  return pipelineStepRank(jobType);
+}
+
+/** @param {Record<string, unknown>} job @param {Record<string, string>} statusMap */
+function prerequisiteBlockReason(job, statusMap) {
+  return resolveMlInitialSyncPrerequisiteBlockReason(job, statusMap);
+}
+
+/** @param {Record<string, unknown>} metaJob */
+function resolveHotSalesRangeFromMetadata(metaJob) {
+  const win =
+    metaJob.sales_history_window && typeof metaJob.sales_history_window === "object"
+      ? metaJob.sales_history_window
+      : resolveMlSalesHistoryWindow();
+  const hotStart =
+    metaJob.hot_start_iso != null && String(metaJob.hot_start_iso).trim() !== ""
+      ? String(metaJob.hot_start_iso).trim()
+      : metaJob.date_from != null && String(metaJob.date_from).trim() !== ""
+        ? String(metaJob.date_from).trim()
+        : win.hot_start_iso;
+  const hotEnd =
+    metaJob.hot_end_iso != null && String(metaJob.hot_end_iso).trim() !== ""
+      ? String(metaJob.hot_end_iso).trim()
+      : metaJob.target_history_end_iso != null && String(metaJob.target_history_end_iso).trim() !== ""
+        ? String(metaJob.target_history_end_iso).trim()
+        : win.hot_end_iso;
+  return { rangeFrom: hotStart, rangeTo: hotEnd };
 }
 
 /** @param {Record<string, unknown>} job */
@@ -315,67 +352,32 @@ async function withTimeout(promise, timeoutMs, label) {
   }
 }
 
-/**
- * Move jobs running "órfãos" para erro para não ficar infinito.
- * @param {import("@supabase/supabase-js").SupabaseClient} supabase
- */
-async function markStaleRunningJobsAsError(supabase) {
-  const cutoffIso = new Date(Date.now() - RUNNING_STALE_TIMEOUT_MS).toISOString();
-  const { data: rows, error } = await supabase
-    .from("marketplace_account_sync_jobs")
-    .select("id,job_type,marketplace_account_id,updated_at")
-    .eq("marketplace", ML_MARKETPLACE_SLUG)
-    .eq("status", "running")
-    .lt("updated_at", cutoffIso)
-    .limit(100);
-  if (error) {
-    console.warn("[ML_INITIAL_SYNC_STALE_RUNNING_SCAN_WARN]", { message: error.message });
-    return 0;
-  }
-  const staleRows = Array.isArray(rows) ? rows : [];
-  let moved = 0;
-  for (const row of staleRows) {
-    const nowIso = new Date().toISOString();
-    const msg = `stale_running_timeout>${RUNNING_STALE_TIMEOUT_MS}ms`;
-    const { error: updErr } = await supabase
+async function maybeFinalizeEmptyHistoricalBackfill(supabase, ctx) {
+  try {
+    const { data: allJobs, error } = await supabase
       .from("marketplace_account_sync_jobs")
-      .update({
-        status: "error",
-        finished_at: nowIso,
-        updated_at: nowIso,
-        error_message: msg,
-      })
-      .eq("id", row.id)
-      .eq("status", "running");
-    if (updErr) {
-      console.warn("[ML_INITIAL_SYNC_STALE_RUNNING_UPDATE_WARN]", {
-        job_id: row.id,
-        message: updErr.message,
-      });
-      continue;
+      .select("*")
+      .eq("marketplace_account_id", ctx.accountId)
+      .in("job_type", ML_ALL_ACCOUNT_SYNC_JOB_TYPES)
+      .limit(400);
+    if (error) {
+      console.warn("[ML_HISTORICAL_EMPTY_BACKFILL_RELOAD_WARN]", { message: error.message });
+      return { finalized: 0 };
     }
-    moved += 1;
-    logS7Drain("marketplace-sync-drain-stale-recovered", {
-      jobId: row.id ?? null,
-      jobType: row.job_type ?? null,
-      marketplaceAccountId: row.marketplace_account_id ?? null,
-      sellerCompanyId: null,
-      status: "error",
-      progress_current: null,
-      progress_total: null,
-      cursor: null,
-      elapsedMs: 0,
-      stale_timeout_ms: RUNNING_STALE_TIMEOUT_MS,
+    return await tryFinalizeEmptyHistoricalBackfillIfProven(supabase, {
+      accountId: ctx.accountId,
+      sellerId: ctx.sellerId,
+      accessToken: ctx.accessToken,
+      allJobRows: allJobs ?? [],
+      reason: ctx.reason,
     });
-    console.warn("[ML_INITIAL_SYNC_STALE_RUNNING_MARKED_ERROR]", {
-      job_id: row.id,
-      job_type: row.job_type ?? null,
-      marketplace_account_id: row.marketplace_account_id ?? null,
-      updated_at: row.updated_at ?? null,
-      stale_timeout_ms: RUNNING_STALE_TIMEOUT_MS,
+  } catch (e) {
+    console.warn("[ML_HISTORICAL_EMPTY_BACKFILL_FINALIZE_WARN]", {
+      marketplace_account_id: ctx.accountId,
+      message: e?.message ?? String(e),
     });
+    return { finalized: 0 };
   }
-  return moved;
 }
 
 /**
@@ -410,68 +412,6 @@ async function loadLatestJobStatusMap(supabase, accountIds) {
   }
 
   return map;
-}
-
-/**
- * Pipeline onboarding: cada etapa só roda quando as anteriores estão `done`.
- * @param {Record<string, unknown>} job
- * @param {Record<string, string>} statusMap
- */
-/**
- * Motivo pelo qual o job não entra na fila elegível (null = pode rodar).
- * @param {Record<string, unknown>} job
- * @param {Record<string, string>} statusMap
- * @returns {string | null}
- */
-function prerequisiteBlockReason(job, statusMap) {
-  const acc = String(job.marketplace_account_id || "");
-  const needDone = (jt) => statusMap[`${acc}:${jt}`] === "done";
-  const salesHotDone = () => ML_SALES_HOT_TYPES.some((jt) => needDone(jt));
-  const listingsDone = () => ML_LISTINGS_TYPES.some((jt) => needDone(jt));
-  const customersHotDone = () => ML_CUSTOMERS_TYPES.some((jt) => needDone(jt));
-
-  const t = String(job.job_type || "");
-  if (t === "ml_initial_sales_recent" || t === "ml_initial_sales_history") return null;
-
-  if (t === "ml_initial_listings_current" || t === "ml_initial_listings") {
-    return salesHotDone() ? null : "blocked_until_ml_sales_hot_done";
-  }
-  if (t === "ml_initial_fees") {
-    if (!salesHotDone()) return "blocked_until_ml_sales_hot_done";
-    if (!listingsDone()) return "blocked_until_ml_listings_done";
-    return null;
-  }
-  if (t === "ml_initial_products") {
-    if (!salesHotDone()) return "blocked_until_ml_sales_hot_done";
-    if (!listingsDone()) return "blocked_until_ml_listings_done";
-    if (!needDone("ml_initial_fees")) return "blocked_until_ml_initial_fees_done";
-    return null;
-  }
-  if (t === "ml_initial_customers_recent" || t === "ml_initial_customers") {
-    if (!salesHotDone()) return "blocked_until_ml_sales_hot_done";
-    if (!listingsDone()) return "blocked_until_ml_listings_done";
-    if (!needDone("ml_initial_fees")) return "blocked_until_ml_initial_fees_done";
-    if (!needDone("ml_initial_products")) return "blocked_until_ml_initial_products_done";
-    return null;
-  }
-  if (t === "ml_enable_webhook_monitoring") {
-    if (!salesHotDone()) return "blocked_until_ml_sales_hot_done";
-    if (!listingsDone()) return "blocked_until_ml_listings_done";
-    if (!needDone("ml_initial_fees")) return "blocked_until_ml_initial_fees_done";
-    if (!needDone("ml_initial_products")) return "blocked_until_ml_initial_products_done";
-    if (!customersHotDone()) return "blocked_until_ml_customers_hot_done";
-    return null;
-  }
-  if (t === "ml_historical_sales_backfill") {
-    return salesHotDone() ? null : "blocked_until_ml_sales_hot_done";
-  }
-  if (t === "ml_historical_customers_backfill") {
-    return customersHotDone() ? null : "blocked_until_ml_customers_hot_done";
-  }
-  if (t === "ml_sales_enrichment_backfill") {
-    return salesHotDone() ? null : "blocked_until_ml_sales_hot_done";
-  }
-  return `unsupported_or_unknown_job_type:${t || "empty"}`;
 }
 
 /**
@@ -537,6 +477,7 @@ async function fetchActiveMlJobCountsByAccount(supabase, accountIds) {
  * @param {Record<string, number>} [webhookBacklogByAccount]
  */
 function sortEligibleJobs(rows, statusMap, webhookBacklogByAccount = {}) {
+  const staleHalfThreshold = resolveStaleRecoveryThresholdMs() / 2;
   const webhookPenaltyFor = (job) => {
     const aid = job.marketplace_account_id != null ? String(job.marketplace_account_id).trim() : "";
     const backlog = aid ? webhookBacklogByAccount[aid] || 0 : 0;
@@ -555,10 +496,14 @@ function sortEligibleJobs(rows, statusMap, webhookBacklogByAccount = {}) {
     if (penaltyA !== penaltyB) return penaltyA - penaltyB;
     const sa = String(a.status || "").toLowerCase();
     const sb = String(b.status || "").toLowerCase();
-    const ua = new Date(/** @type {string} */ (a.updated_at || a.created_at || 0)).getTime();
-    const ub = new Date(/** @type {string} */ (b.updated_at || b.created_at || 0)).getTime();
-    const staleA = sa === "running" && Number.isFinite(ua) ? Date.now() - ua > RUNNING_STALE_TIMEOUT_MS / 2 : false;
-    const staleB = sb === "running" && Number.isFinite(ub) ? Date.now() - ub > RUNNING_STALE_TIMEOUT_MS / 2 : false;
+    const leaseA = readJobLeaseMeta(a);
+    const leaseB = readJobLeaseMeta(b);
+    const hbA = leaseA.heartbeat_at || a.updated_at || a.created_at;
+    const hbB = leaseB.heartbeat_at || b.updated_at || b.created_at;
+    const ua = new Date(/** @type {string} */ (hbA || 0)).getTime();
+    const ub = new Date(/** @type {string} */ (hbB || 0)).getTime();
+    const staleA = sa === "running" && (isJobLeaseExpired(a) || (Number.isFinite(ua) && Date.now() - ua > staleHalfThreshold));
+    const staleB = sb === "running" && (isJobLeaseExpired(b) || (Number.isFinite(ub) && Date.now() - ub > staleHalfThreshold));
     const statusRank = (status, stale) => {
       if (status === "running" && stale) return 0;
       if (status === "running") return 1;
@@ -604,27 +549,11 @@ function pickJobsDistinctAccounts(sortedEligible, maxPick) {
  * @param {Record<string, unknown>} metaPatch
  */
 async function completeStubJob(supabase, job, metaPatch) {
-  const nowIso = new Date().toISOString();
-  const metaBase =
-    typeof job.metadata === "object" && job.metadata && !Array.isArray(job.metadata)
-      ? /** @type {Record<string, unknown>} */ (job.metadata)
-      : {};
-
-  const { error } = await supabase
-    .from("marketplace_account_sync_jobs")
-    .update({
-      status: "done",
-      finished_at: nowIso,
-      updated_at: nowIso,
-      progress_current: 1,
-      progress_total: 1,
-      metadata: { ...metaBase, ...metaPatch },
-    })
-    .eq("id", job.id);
-
-  if (error) {
-    console.error("[marketplaceAccountSyncWorker] complete_stub_failed", error);
-  }
+  await completeMarketplaceSyncJob(supabase, String(job.id), {
+    progress_current: 1,
+    progress_total: 1,
+    metadata: metaPatch,
+  }, { existingJob: job });
 }
 
 /**
@@ -642,6 +571,158 @@ async function processMlSalesBatchJob(supabase, job, opts) {
   const accountId = String(job.marketplace_account_id || "");
   const userId = String(job.user_id || "");
   let jRow = await ensureMarketplaceSyncJobRunning(supabase, job);
+  if (!jRow?.id) {
+    console.info("[S7][marketplace-sync-job-claim-skipped-dispatch]", {
+      job_id: job.id ?? null,
+      marketplace_account_id: job.marketplace_account_id ?? null,
+      job_type: job.job_type ?? null,
+    });
+    return { stopped: true, processedInThisRun: 0, claim_skipped: true };
+  }
+
+  const leaseAtStart = readJobLeaseMeta(jRow);
+  let lastHeartbeatMs = leaseAtStart.heartbeat_at ? Date.parse(leaseAtStart.heartbeat_at) : Date.now();
+
+  if (resolveMarketplaceSyncJobAlreadyComplete(jRow)) {
+    const metaRow =
+      typeof jRow.metadata === "object" && jRow.metadata && !Array.isArray(jRow.metadata)
+        ? /** @type {Record<string, unknown>} */ ({ ...jRow.metadata })
+        : {};
+    await completeMarketplaceSyncJob(
+      supabase,
+      String(jRow.id),
+      {
+        progress_current: Number(jRow.progress_current),
+        progress_total: Number(jRow.progress_total),
+        last_cursor: jRow.last_cursor ?? null,
+        last_synced_at: new Date().toISOString(),
+        metadata: {
+          ...metaRow,
+          resume_complete_without_reimport: true,
+          phase: "sales_recent",
+          sync_job_kind: String(jRow.job_type || ""),
+        },
+      },
+      { existingJob: jRow }
+    );
+    console.info("[S7][marketplace-sync-job-resume-complete]", {
+      job_id: jRow.id,
+      marketplace_account_id: jRow.marketplace_account_id ?? null,
+      job_type: jRow.job_type ?? null,
+      progress_current: jRow.progress_current ?? null,
+      progress_total: jRow.progress_total ?? null,
+    });
+    const postCompletion = await runMlSalesHotJobPostCompletion(supabase, {
+      jobId: String(jRow.id),
+      jobType: String(jRow.job_type || ""),
+      userId,
+      marketplaceAccountId: accountId,
+      sellerCompanyId: jRow.seller_company_id ?? null,
+      marketplace: ML_MARKETPLACE_SLUG,
+      metadata: metaRow,
+      progressCurrent: Number(jRow.progress_current),
+      completionPath: "resume_complete",
+      finalizeEmptyHistorical: (args) =>
+        maybeFinalizeEmptyHistoricalBackfill(supabase, {
+          accountId: args.accountId,
+          sellerId: args.sellerId,
+          accessToken: args.accessToken,
+          reason: args.reason,
+        }),
+    });
+    return {
+      stopped: true,
+      done: true,
+      processedInThisRun: 0,
+      already_complete: true,
+      post_completion: postCompletion,
+    };
+  }
+
+  setMlExternalAwaitHeartbeatHook(async () => {
+    if (!jRow?.id) return;
+    await heartbeatMarketplaceSyncJob(supabase, jRow, { ml_external_await: true });
+    lastHeartbeatMs = Date.now();
+  });
+
+  try {
+  return await processMlSalesBatchJobInner(supabase, {
+    job,
+    jRow,
+    deadlineMs,
+    batchDetails,
+    pageLimit,
+    heartbeatEvery,
+    processedInThisRun,
+    ordersSinceHeartbeat,
+    lastHeartbeatMs,
+    accountId,
+    userId,
+    getState: () => ({ jRow, processedInThisRun, ordersSinceHeartbeat, lastHeartbeatMs }),
+    setState: (s) => {
+      if (s.jRow) jRow = s.jRow;
+      if (s.processedInThisRun != null) processedInThisRun = s.processedInThisRun;
+      if (s.ordersSinceHeartbeat != null) ordersSinceHeartbeat = s.ordersSinceHeartbeat;
+      if (s.lastHeartbeatMs != null) lastHeartbeatMs = s.lastHeartbeatMs;
+    },
+  });
+  } finally {
+    setMlExternalAwaitHeartbeatHook(null);
+  }
+}
+
+/**
+ * @param {import("@supabase/supabase-js").SupabaseClient} supabase
+ * @param {Record<string, unknown>} ctx
+ */
+async function processMlSalesBatchJobInner(supabase, ctx) {
+  let {
+    job,
+    jRow,
+    deadlineMs,
+    batchDetails,
+    pageLimit,
+    heartbeatEvery,
+    processedInThisRun,
+    ordersSinceHeartbeat,
+    lastHeartbeatMs,
+    accountId,
+    userId,
+  } = ctx;
+
+  const metaRowBase = () =>
+    typeof jRow.metadata === "object" && jRow.metadata && !Array.isArray(jRow.metadata)
+      ? /** @type {Record<string, unknown>} */ ({ ...jRow.metadata })
+      : {};
+
+  const maybeFlushHybridHeartbeat = async (reason, progressPatch = {}) => {
+    if (
+      !shouldFlushHybridHeartbeat({
+        ordersSinceHeartbeat,
+        lastHeartbeatMs,
+      })
+    ) {
+      return;
+    }
+    await patchMarketplaceSyncJob(
+      supabase,
+      String(jRow.id),
+      {
+        ...progressPatch,
+        metadata: {
+          ...metaRowBase(),
+          ...(progressPatch.metadata && typeof progressPatch.metadata === "object"
+            ? progressPatch.metadata
+            : {}),
+          last_heartbeat_reason: reason,
+        },
+      },
+      { existingJob: jRow }
+    );
+    lastHeartbeatMs = Date.now();
+    ordersSinceHeartbeat = 0;
+    ctx.setState({ lastHeartbeatMs, ordersSinceHeartbeat, jRow });
+  };
 
   console.info("[sales-sync] job_start", {
     marketplace: ML_MARKETPLACE_SLUG,
@@ -784,18 +865,23 @@ async function processMlSalesBatchJob(supabase, job, opts) {
       return { stopped: true, processedInThisRun: 0 };
     }
   } else if (salesJobType === "ml_initial_sales_recent") {
-    const rd = resolveMlInitialRecentDays();
-    rangeFrom = new Date(Date.now() - rd * 86400000).toISOString();
+    const hot = resolveHotSalesRangeFromMetadata(metaJob);
+    rangeFrom = hot.rangeFrom;
+    rangeTo = hot.rangeTo;
   } else if (salesJobType === "ml_initial_sales_history") {
+    const win = resolveMlSalesHistoryWindow();
     if (metaJob.import_full_history === true) {
-      rangeFrom = new Date(Date.now() - ML_INITIAL_ORDERS_LOOKBACK_DAYS * 86400000).toISOString();
+      rangeFrom = win.target_history_start_iso;
+      rangeTo = win.target_history_end_iso;
     } else {
-      const rd = resolveMlInitialRecentDays();
-      rangeFrom = new Date(Date.now() - rd * 86400000).toISOString();
+      const hot = resolveHotSalesRangeFromMetadata(metaJob);
+      rangeFrom = hot.rangeFrom;
+      rangeTo = hot.rangeTo;
     }
   } else {
-    const rd = resolveMlInitialRecentDays();
-    rangeFrom = new Date(Date.now() - rd * 86400000).toISOString();
+    const hot = resolveHotSalesRangeFromMetadata(metaJob);
+    rangeFrom = hot.rangeFrom;
+    rangeTo = hot.rangeTo;
   }
 
   console.info("[ML_ORDERS_FETCH_RANGE]", {
@@ -831,7 +917,22 @@ async function processMlSalesBatchJob(supabase, job, opts) {
 
   const safePatchProgress = async (patch, reason) => {
     try {
-      await patchMarketplaceSyncJob(supabase, String(jRow.id), patch);
+      await patchMarketplaceSyncJob(supabase, String(jRow.id), patch, { existingJob: jRow });
+      if (patch.metadata && typeof patch.metadata === "object") {
+        jRow = {
+          ...jRow,
+          metadata: { ...metaRowBase(), ...patch.metadata },
+        };
+        ctx.setState({ jRow });
+      }
+      if (
+        shouldFlushHybridHeartbeat({ ordersSinceHeartbeat, lastHeartbeatMs }) &&
+        (patch.progress_current != null || patch.last_cursor != null)
+      ) {
+        lastHeartbeatMs = Date.now();
+        ordersSinceHeartbeat = 0;
+        ctx.setState({ lastHeartbeatMs, ordersSinceHeartbeat });
+      }
     } catch (e) {
       console.warn("[ML_INITIAL_SALES_SYNC_PROGRESS_PATCH_WARN]", {
         job_id: jRow.id,
@@ -840,11 +941,6 @@ async function processMlSalesBatchJob(supabase, job, opts) {
       });
     }
   };
-
-  const metaRowBase = () =>
-    typeof jRow.metadata === "object" && jRow.metadata && !Array.isArray(jRow.metadata)
-      ? /** @type {Record<string, unknown>} */ ({ ...jRow.metadata })
-      : {};
 
   const buildCoverageRow = (status, finishedAt) => {
     const dup = Number(summaryStub.updated_count) || 0;
@@ -885,6 +981,7 @@ async function processMlSalesBatchJob(supabase, job, opts) {
   };
 
   while (Date.now() < deadlineMs) {
+    await maybeFlushHybridHeartbeat("time_or_volume_tick");
     await safePatchProgress(
       {
         metadata: {
@@ -1151,23 +1248,41 @@ async function processMlSalesBatchJob(supabase, job, opts) {
           processed_total: processedTotal,
         }
       );
-      const enqueueHistoricalAfterHot =
-        salesJobType !== "ml_historical_sales_backfill" &&
-        (salesJobType === "ml_initial_sales_recent" ||
-          (salesJobType === "ml_initial_sales_history" && metaJob.import_full_history !== true));
+      const enqueueHistoricalAfterHot = shouldEnqueueHistoricalAfterHotSalesComplete(
+        salesJobType,
+        metaDone
+      );
       if (enqueueHistoricalAfterHot) {
-        try {
-          await enqueueHistoricalSalesBackfillJobs(supabase, {
-            userId,
-            marketplaceAccountId: accountId,
-            sellerCompanyId: sellerCompanyFromAcc,
-            marketplace: ML_MARKETPLACE_SLUG,
-          });
-        } catch (e) {
-          console.warn("[ML_HISTORICAL_SALES_BACKFILL_ENQUEUE_WARN]", {
-            job_id: jRow.id,
-            marketplace_account_id: accountId,
-            message: e?.message ?? String(e),
+        await runMlSalesHotJobPostCompletion(supabase, {
+          jobId: String(jRow.id),
+          jobType: salesJobType,
+          userId,
+          marketplaceAccountId: accountId,
+          sellerCompanyId: sellerCompanyFromAcc,
+          marketplace: ML_MARKETPLACE_SLUG,
+          metadata: metaDone,
+          progressCurrent: processedTotal,
+          completionPath: "normal_batch",
+          sellerId,
+          accessToken,
+          finalizeEmptyHistorical: (args) =>
+            maybeFinalizeEmptyHistoricalBackfill(supabase, {
+              accountId: args.accountId,
+              sellerId: args.sellerId,
+              accessToken: args.accessToken,
+              reason: args.reason,
+            }),
+        });
+      }
+      if (salesJobType === "ml_historical_sales_backfill") {
+        const savedWindow = Number(metaDone.ml_sales_import_saved) || 0;
+        const apiWindow = Number(metaDone.ml_sales_import_api_total) || 0;
+        if (savedWindow <= 0 && apiWindow <= 0) {
+          await maybeFinalizeEmptyHistoricalBackfill(supabase, {
+            accountId,
+            sellerId,
+            accessToken,
+            reason: "worker_after_empty_historical_window",
           });
         }
       }
@@ -1333,7 +1448,8 @@ async function processMlSalesBatchJob(supabase, job, opts) {
         if (progressTotal != null && processedTotal > progressTotal) processedTotal = progressTotal;
         ordersSinceHeartbeat += 1;
         const flushHb =
-          ordersSinceHeartbeat >= heartbeatEvery || oid === slice[slice.length - 1];
+          shouldFlushHybridHeartbeat({ ordersSinceHeartbeat, lastHeartbeatMs }) ||
+          oid === slice[slice.length - 1];
         if (flushHb) {
           await safePatchProgress(
             {
@@ -1432,7 +1548,8 @@ async function processMlSalesBatchJob(supabase, job, opts) {
           ? /** @type {Record<string, unknown>} */ (jRow.metadata)
           : {};
       const flushHeartbeat =
-        ordersSinceHeartbeat >= heartbeatEvery || oid === slice[slice.length - 1];
+        shouldFlushHybridHeartbeat({ ordersSinceHeartbeat, lastHeartbeatMs }) ||
+        oid === slice[slice.length - 1];
       if (flushHeartbeat) {
         await safePatchProgress({
           progress_total: progressTotal,
@@ -1579,12 +1696,6 @@ async function processCustomersJob(supabase, job) {
       saleDateFrom,
     });
 
-    const nowIso = new Date().toISOString();
-    const metaBase =
-      typeof j.metadata === "object" && j.metadata && !Array.isArray(j.metadata)
-        ? /** @type {Record<string, unknown>} */ (j.metadata)
-        : {};
-
     const processed = Number(ingestion?.processedOrders ?? 0) || 0;
     const created = Number(ingestion?.createdCustomers ?? 0) || 0;
     const updated = Number(ingestion?.updatedCustomers ?? 0) || 0;
@@ -1602,17 +1713,11 @@ async function processCustomersJob(supabase, job) {
       warnings,
     };
 
-    await supabase
-      .from("marketplace_account_sync_jobs")
-      .update({
-        status: "done",
-        finished_at: nowIso,
-        updated_at: nowIso,
-        progress_current: processed || 1,
-        progress_total: processed || 1,
-        metadata: { ...metaBase, ingestion_summary: ingestion, step_result: stepResult },
-      })
-      .eq("id", j.id);
+    await completeMarketplaceSyncJob(supabase, String(j.id), {
+      progress_current: processed || 1,
+      progress_total: processed || 1,
+      metadata: { ingestion_summary: ingestion, step_result: stepResult },
+    }, { existingJob: j });
 
     console.info("[ML_INITIAL_CUSTOMERS_DONE]", { job_id: j.id, ingestion });
   } catch (e) {
@@ -1711,6 +1816,18 @@ const MULTI_TURN_RESUMABLE_JOB_TYPES = new Set([
  * @param {{ deadlineMs: number; batchDetails: number; salesPageLimit: number }} runtime
  */
 async function dispatchJobChunk(supabase, job, runtime) {
+  const claimed = await tryClaimMarketplaceSyncJob(supabase, job);
+  if (!claimed?.id) {
+    console.info("[S7][marketplace-sync-drain-claim-skipped]", {
+      job_id: job.id ?? null,
+      marketplace_account_id: job.marketplace_account_id ?? null,
+      job_type: job.job_type ?? null,
+      prior_status: job.status ?? null,
+    });
+    return { stopped: true, processedInThisRun: 0, claim_skipped: true };
+  }
+  job = claimed;
+
   const t = String(job.job_type || "");
   const accountId = job.marketplace_account_id != null ? String(job.marketplace_account_id).trim() : "";
   const externalSellerId =
@@ -1947,17 +2064,20 @@ export async function runMarketplaceAccountSyncWorker(supabase, opts = {}) {
     budget_ms: budgetMs,
     batch_details: batchDetails,
     sales_page_limit: salesPageLimit,
+    sync_executor_id: resolveSyncExecutorId(),
+    lease_duration_ms: resolveLeaseDurationMs(),
+    stale_recovery_threshold_ms: resolveStaleRecoveryThresholdMs(),
     build_fingerprint: {
       vercel_git_commit: process.env.VERCEL_GIT_COMMIT ?? null,
       vercel_deployment_id: process.env.VERCEL_DEPLOYMENT_ID ?? null,
     },
   });
 
-  const staleMoved = await markStaleRunningJobsAsError(supabase);
-  if (staleMoved > 0) {
-    console.warn("[ML_INITIAL_SYNC_STALE_RUNNING_SWEEP_DONE]", {
-      moved_to_error: staleMoved,
-      stale_timeout_ms: RUNNING_STALE_TIMEOUT_MS,
+  const staleStats = await recoverStaleMarketplaceSyncJobs(supabase);
+  if (staleStats.running_requeued > 0 || staleStats.error_requeued > 0 || staleStats.terminal > 0) {
+    console.warn("[S7][marketplace-sync-stale-recovery-sweep]", {
+      ...staleStats,
+      stale_recovery_threshold_ms: resolveStaleRecoveryThresholdMs(),
     });
   }
 
@@ -2295,4 +2415,71 @@ export async function runMarketplaceAccountSyncWorker(supabase, opts = {}) {
   });
 
   return { ok: true, chunks_processed: chunks.length, chunks, incremental_sales_poll };
+}
+
+/**
+ * Drain scoped — um job_id (homologação; não altera pool/scheduler).
+ * @param {import("@supabase/supabase-js").SupabaseClient} supabase
+ * @param {string} jobId
+ * @param {{ budgetMs?: number; batchDetails?: number; salesPageLimit?: number }} [opts]
+ */
+export async function runScopedMarketplaceSyncJobDrain(supabase, jobId, opts = {}) {
+  const budgetMs = opts.budgetMs ?? 120000;
+  const { data: job, error } = await supabase
+    .from("marketplace_account_sync_jobs")
+    .select("*")
+    .eq("id", jobId)
+    .maybeSingle();
+  if (error) throw error;
+  if (!job?.id) return { ok: false, reason: "job_not_found", job_id: jobId };
+
+  const claimed = await tryClaimMarketplaceSyncJob(supabase, job);
+  if (!claimed?.id) {
+    return {
+      ok: false,
+      reason: "claim_skipped",
+      job_id: jobId,
+      status: job.status ?? null,
+      executor_id: resolveSyncExecutorId(),
+    };
+  }
+
+  const leaseAfterClaim = readJobLeaseMeta(claimed);
+  const runtime = {
+    deadlineMs: Date.now() + budgetMs,
+    batchDetails: opts.batchDetails ?? 50,
+    salesPageLimit: opts.salesPageLimit ?? 50,
+  };
+
+  const jobType = String(claimed.job_type || "");
+  /** @type {Record<string, unknown> | null} */
+  let drainOut = null;
+  if (
+    jobType === "ml_initial_sales_recent" ||
+    jobType === "ml_initial_sales_history" ||
+    jobType === "ml_historical_sales_backfill"
+  ) {
+    drainOut = await processMlSalesBatchJob(supabase, claimed, runtime);
+  } else {
+    drainOut = await dispatchJobChunk(supabase, claimed, runtime);
+  }
+
+  const { data: fresh } = await supabase
+    .from("marketplace_account_sync_jobs")
+    .select("*")
+    .eq("id", jobId)
+    .maybeSingle();
+  const leaseFinal = readJobLeaseMeta(fresh ?? {});
+
+  return {
+    ok: true,
+    job_id: jobId,
+    executor_id: resolveSyncExecutorId(),
+    claim: leaseAfterClaim,
+    lease_final: leaseFinal,
+    progress_current: fresh?.progress_current ?? null,
+    progress_total: fresh?.progress_total ?? null,
+    last_cursor: fresh?.last_cursor ?? null,
+    drain_out: drainOut,
+  };
 }

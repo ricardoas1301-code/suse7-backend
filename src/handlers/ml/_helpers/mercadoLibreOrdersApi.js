@@ -16,16 +16,36 @@ const LOG_PREFIX = "[ml/orders]";
 /** @type {{ rateLimitCount: number; retryCount: number; timeoutCount: number }} */
 let drainRequestMetrics = { rateLimitCount: 0, retryCount: 0, timeoutCount: 0 };
 
+/** Heartbeat durante backoff/retry ML (worker registra hook por job). */
+/** @type {(() => void | Promise<void>) | null} */
+let externalAwaitHeartbeatHook = null;
+
+export function setMlExternalAwaitHeartbeatHook(fn) {
+  externalAwaitHeartbeatHook = typeof fn === "function" ? fn : null;
+}
+
+async function invokeExternalAwaitHeartbeatHook() {
+  if (!externalAwaitHeartbeatHook) return;
+  try {
+    await externalAwaitHeartbeatHook();
+  } catch (e) {
+    console.warn("[S7][ml-external-await-heartbeat-warn]", {
+      message: e?.message ? String(e.message) : String(e),
+    });
+  }
+}
+
+async function sleep(ms) {
+  await invokeExternalAwaitHeartbeatHook();
+  return new Promise((r) => setTimeout(r, ms));
+}
+
 export function resetMlDrainRequestMetrics() {
   drainRequestMetrics = { rateLimitCount: 0, retryCount: 0, timeoutCount: 0 };
 }
 
 export function snapshotMlDrainRequestMetrics() {
   return { ...drainRequestMetrics };
-}
-
-function sleep(ms) {
-  return new Promise((r) => setTimeout(r, ms));
 }
 
 function resolveMlTimeoutMs() {

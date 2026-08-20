@@ -4,7 +4,6 @@
 
 import { requireAuthUser } from "../ml/_helpers/requireAuthUser.js";
 import { ML_MARKETPLACE_SLUG } from "../ml/_helpers/mlMarketplace.js";
-import { config } from "../../infra/config.js";
 import {
   ML_HOT_SYNC_JOB_TYPES_ORDERED,
   ML_ALL_ACCOUNT_SYNC_JOB_TYPES,
@@ -36,30 +35,17 @@ import {
   tryFinalizeEmptyHistoricalBackfillIfProven,
 } from "../../services/marketplace/mlHistoricalEmptyBackfillFinalize.js";
 import { getValidMLToken } from "../ml/_helpers/mlToken.js";
+import {
+  computeSyncStatusOperationalSignals,
+  resolveSyncStatusThresholdMs,
+  resolveSyncStatusOverall,
+} from "./accountSyncStatusSignals.js";
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const STALE_PROGRESS_MS = Math.min(
-  24 * 60 * 60 * 1000,
-  Math.max(30 * 1000, parseInt(process.env.ML_SYNC_STATUS_STALE_MS || "90000", 10) || 90000)
-);
+const STALE_PROGRESS_MS = resolveSyncStatusThresholdMs(process.env.ML_SYNC_STATUS_STALE_MS, 90_000);
 const BACKFILL_JOB_TYPE_SET = new Set(ML_BACKFILL_JOB_TYPES);
 
-const PENDING_QUEUE_WARNING_MS = Math.min(
-  24 * 60 * 60 * 1000,
-  Math.max(30 * 1000, parseInt(process.env.ML_SYNC_PENDING_QUEUE_WARNING_MS || "120000", 10) || 120000)
-);
-
-/** Cooldown entre POSTs de “acordar drain” por conta (evita tempestade se o job endpoint falhar ou o cliente polir 4s). */
-const DRAIN_NUDGE_COOLDOWN_MS = Math.min(
-  30 * 60 * 1000,
-  Math.max(60 * 1000, parseInt(process.env.ML_SYNC_DRAIN_NUDGE_COOLDOWN_MS || "120000", 10) || 120000)
-);
-/** Log de skip no máximo 1x por janela por conta (não poluir logs). */
-const DRAIN_NUDGE_SKIP_LOG_COOLDOWN_MS = 5 * 60 * 1000;
-/** @type {Map<string, number>} */
-const drainNudgeLastPostAtMs = new Map();
-/** @type {Map<string, number>} */
-const drainNudgeSkipLogAtMs = new Map();
+const PENDING_QUEUE_WARNING_MS = resolveSyncStatusThresholdMs(process.env.ML_SYNC_PENDING_QUEUE_WARNING_MS, 120_000);
 
 /** Labels UX estágio inicial ML (ordem = pipeline). */
 const INITIAL_PIPELINE_STAGE_LABELS = /** @type {Record<string, string>} */ ({
@@ -358,37 +344,18 @@ export default async function handleMarketplaceAccountSyncStatus(req, res, path)
     });
     const runningRows = rows.filter((r) => String(r.status || "") === "running");
     const pendingRows = rows.filter((r) => String(r.status || "") === "pending");
-    const latestRunningTs = runningRows
-      .map((r) => Date.parse(String(r.updated_at ?? r.created_at ?? "")))
-      .filter((n) => Number.isFinite(n))
-      .sort((a, b) => b - a)[0];
-    const staleRunning =
-      runningRows.length > 0 &&
-      Number.isFinite(latestRunningTs) &&
-      Date.now() - Number(latestRunningTs) > STALE_PROGRESS_MS;
-    const oldestPendingTs = pendingRows
-      .map((r) => Date.parse(String(r.updated_at ?? r.created_at ?? "")))
-      .filter((n) => Number.isFinite(n))
-      .sort((a, b) => a - b)[0];
-    const queuedTooLong =
-      pendingRows.length > 0 &&
-      Number.isFinite(oldestPendingTs) &&
-      Date.now() - Number(oldestPendingTs) > PENDING_QUEUE_WARNING_MS;
+    const { staleRunning, queuedTooLong } = computeSyncStatusOperationalSignals({
+      runningRows,
+      pendingRows,
+      staleProgressMs: STALE_PROGRESS_MS,
+      pendingQueueWarningMs: PENDING_QUEUE_WARNING_MS,
+    });
 
-    let overall = "idle";
-    if (!hasEngagedInitialSync) {
-      overall = "awaiting_start";
-    } else if (typedStatuses.length === 0) {
-      overall = "no_jobs";
-    } else if (anyError) {
-      overall = "error";
-    } else if (allDone && hasPartialWarnings) {
-      overall = "completed_with_errors";
-    } else if (allDone) {
-      overall = "done";
-    } else {
-      overall = "running";
-    }
+    const overall = resolveSyncStatusOverall({
+      hasEngagedInitialSync,
+      typedStatuses,
+      hasPartialWarnings,
+    });
 
     const integration_stage = resolveIntegrationStage({
       checklist: checklistWithUx,
@@ -410,58 +377,6 @@ export default async function handleMarketplaceAccountSyncStatus(req, res, path)
       (overall === "running" || overall === "awaiting_start") && queuedTooLong
         ? "Sincronização enfileirada. Estamos aguardando o processamento em segundo plano."
         : null;
-
-    // Fallback serverless (Hobby sem cron por minuto):
-    // quando detectar fila estagnada/pendente por muito tempo, tenta acordar 1 ciclo do drain.
-    const shouldNudgeDrain =
-      overall === "running" &&
-      (staleRunning || queuedTooLong || pendingRows.length > 0);
-    const host = req.headers?.host != null ? String(req.headers.host) : "";
-    const protoHeader = req.headers?.["x-forwarded-proto"] != null ? String(req.headers["x-forwarded-proto"]) : "";
-    const proto = protoHeader.includes("https") ? "https" : "http";
-    const drainLimitParsed = parseInt(process.env.MARKETPLACE_SYNC_MAX_JOBS_PER_DRAIN || "24", 10);
-    const drainLimit = Number.isFinite(drainLimitParsed) ? Math.min(100, Math.max(1, drainLimitParsed)) : 24;
-    const dispatchUrl = host ? `${proto}://${host}/api/jobs/marketplace-account-sync?limit=${drainLimit}` : null;
-    if (shouldNudgeDrain && dispatchUrl && (config.jobSecret || config.cronSecret)) {
-      const nowMs = Date.now();
-      const lastPost = drainNudgeLastPostAtMs.get(accountId) ?? 0;
-      if (nowMs - lastPost < DRAIN_NUDGE_COOLDOWN_MS) {
-        const lastSkipLog = drainNudgeSkipLogAtMs.get(accountId) ?? 0;
-        if (nowMs - lastSkipLog >= DRAIN_NUDGE_SKIP_LOG_COOLDOWN_MS) {
-          drainNudgeSkipLogAtMs.set(accountId, nowMs);
-          console.info("[S7][marketplace-sync-drain-nudge-skipped-cooldown]", {
-            marketplace_account_id: accountId,
-            cooldown_ms: DRAIN_NUDGE_COOLDOWN_MS,
-            pending_count: pendingRows.length,
-          });
-        }
-      } else {
-        drainNudgeLastPostAtMs.set(accountId, nowMs);
-        const headers = {};
-        if (config.jobSecret) headers["x-job-secret"] = config.jobSecret;
-        else if (config.cronSecret) headers.Authorization = `Bearer ${config.cronSecret}`;
-        Promise.resolve()
-          .then(async () => {
-            try {
-              const r = await fetch(dispatchUrl, { method: "POST", headers });
-              console.info("[S7][marketplace-sync-drain-nudge]", {
-                marketplace_account_id: accountId,
-                overall,
-                staleRunning,
-                queuedTooLong,
-                pending_count: pendingRows.length,
-                drain_http_status: r.status,
-              });
-            } catch (nudgeErr) {
-              console.warn("[S7][marketplace-sync-drain-nudge-warn]", {
-                marketplace_account_id: accountId,
-                message: nudgeErr?.message ?? String(nudgeErr),
-              });
-            }
-          })
-          .catch(() => {});
-      }
-    }
 
     const historicalBackfillActive = Boolean(
       (historicalSalesAgg &&

@@ -43,6 +43,13 @@
     "ssot:guard": "node ./scripts/ssot_guard_check.mjs",
     "test:signup-social-bootstrap": "node ./scripts/test_signup_social_bootstrap_unit.mjs",
     "test:ml-webhook-orphan-account": "node ./scripts/test_ml_webhook_orphan_account_unit.mjs",
+    "test:marketplace-sync-job-lease": "node ./scripts/test_marketplace_sync_job_lease_unit.mjs",
+    "test:marketplace-sync-job-metadata-merge": "node ./scripts/test_marketplace_sync_job_metadata_merge_unit.mjs",
+    "test:sync-status-read-only": "node ./scripts/test_sync_status_read_only_unit.mjs",
+    "test:marketplace-sync-job-resume-complete": "node ./scripts/test_marketplace_sync_job_resume_complete_unit.mjs",
+    "test:marketplace-sync-job-post-completion": "node ./scripts/test_marketplace_sync_job_post_completion_unit.mjs",
+    "test:historical-grid-reconciliation": "node ./scripts/test_historical_grid_reconciliation_unit.mjs",
+    "test:historical-window-unique-db-dev": "node ./scripts/test_historical_window_unique_db_dev.mjs",
     "test:snapshot-immutability-stress": "node ./scripts/prove_snapshot_immutability_stress_concurrent.mjs",
     "test": "npm run test:listing-health-buckets && npm run test:product-health-buckets && npm run test:competition-health-buckets && npm run test:pricing-health-buckets",
     "backfill:recent-cost-snapshots": "node ./scripts/backfill_recent_cost_snapshots_dev.mjs"
