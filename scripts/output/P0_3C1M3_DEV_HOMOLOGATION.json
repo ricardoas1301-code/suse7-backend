@@ -1,0 +1,87 @@
+{
+  "ok": true,
+  "project_ref": "alkelcaoexxbamqddaqv",
+  "migration_version": "20260821200000",
+  "timestamp": "2026-08-21T20:28:07.892Z",
+  "pre_snapshot": {
+    "admission_distribution": [
+      {
+        "admission_result": "EXPIRED",
+        "cnt": 2
+      },
+      {
+        "admission_result": "PENDING_MANUAL_REVIEW",
+        "cnt": 100
+      }
+    ],
+    "rf_pending": [
+      {
+        "cycle_key": "p0_3c1b-t20-mt3bxnw5_4",
+        "external_order_id": "2000018053992512",
+        "id": "3c94b4f2-c025-4ac4-a1c0-127b2cedbc59"
+      },
+      {
+        "cycle_key": "p0_3c1b-t20-mt3bxnw5_4",
+        "external_order_id": "2000018040503820",
+        "id": "058edc71-4dbd-4fb8-8167-8160dc9dc94b"
+      },
+      {
+        "cycle_key": "p0_3c1b-t20-mt3bxnw5_4",
+        "external_order_id": "2000018038839852",
+        "id": "3302438b-72ca-47ab-a43a-fb9e6cf824b1"
+      },
+      {
+        "cycle_key": "p0_3c1b-t20-mt3bxnw5_4",
+        "external_order_id": "2000018037118698",
+        "id": "c3569727-e926-47f7-956c-9b1bb0936417"
+      },
+      {
+        "cycle_key": "p0_3c1b-t20-mt3bxnw5_4",
+        "external_order_id": "2000018050953590",
+        "id": "7394ea7a-28da-42ad-bb74-f3e6713f7ae8"
+      },
+      {
+        "cycle_key": "p0_3c1b-t20-mt3bxnw5_4",
+        "external_order_id": "2000018032949392",
+        "id": "a843c92e-b669-4ae9-90e1-d117a33c2622"
+      },
+      {
+        "cycle_key": "p0_3c1b-t20-mt3bxnw5_4",
+        "external_order_id": "2000018032559544",
+        "id": "c820b2b3-9bc7-45dc-847b-16dd3a8512e4"
+      },
+      {
+        "cycle_key": "p0_3c1b-t20-mt3bxnw5_4",
+        "external_order_id": "2000018031307152",
+        "id": "17802411-c323-407e-ab8d-159a0ea740b7"
+      },
+      {
+        "cycle_key": "p0_3c1b-t20-mt3bxnw5_4",
+        "external_order_id": "2000018030147554",
+        "id": "c2ed2586-6608-4ebb-b1e5-b1bbc27ad81f"
+      }
+    ],
+    "rf_pending_count": 9,
+    "cycle_key_nullable": "YES",
+    "migration_applied": true
+  },
+  "post_snapshot": {
+    "cycle_key_nullable": "YES",
+    "rf_pending_count": 9,
+    "rf_witness": {
+      "sales": 1
+    },
+    "rf_witness_pending": {
+      "pending": 1
+    },
+    "reserved_rf": 0,
+    "watermark": "2026-08-21 19:05:07+00",
+    "migration_applied": true
+  },
+  "tests": {
+    "static": "PASS",
+    "sql_assertions": "PASS",
+    "concurrency": "PASS"
+  },
+  "skipped_apply": true
+}
