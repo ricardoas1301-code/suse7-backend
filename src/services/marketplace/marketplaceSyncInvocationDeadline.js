@@ -1,7 +1,5 @@
 /**
  * SSOT — soft/hard deadline para invocações serverless do marketplace sync.
- *
- * P0.2-N.1: MARKETPLACE_SYNC_DRAIN_TIMEBOX_MS limita orquestração, não o job.
  * effective_budget = MIN(requested_budget, platform_max - shutdown_margin)
  */
 
@@ -39,51 +37,6 @@ export function computeEffectiveBudgetMs(requestedBudgetMs, opts = {}) {
     Math.min(120000, Number.isFinite(Number(requestedBudgetMs)) ? Number(requestedBudgetMs) : 120000)
   );
   return Math.min(requested, platformSafeWorkMs);
-}
-
-/**
- * Budget da invocation HTTP — NÃO usar MARKETPLACE_SYNC_DRAIN_TIMEBOX_MS aqui.
- * @param {{ budgetMs?: number }} [opts]
- */
-export function resolveInvocationRequestedBudgetMs(opts = {}) {
-  if (opts.budgetMs != null && Number.isFinite(Number(opts.budgetMs))) {
-    return Math.max(3000, Number(opts.budgetMs));
-  }
-  const invocationRaw = process.env.MARKETPLACE_SYNC_INVOCATION_BUDGET_MS;
-  if (invocationRaw != null && String(invocationRaw).trim() !== "") {
-    return Math.min(
-      300000,
-      Math.max(3000, parseInt(String(invocationRaw), 10) || 120000)
-    );
-  }
-  const legacyRaw = parseInt(String(process.env.ML_MARKETPLACE_SYNC_BUDGET_MS || ""), 10);
-  if (Number.isFinite(legacyRaw) && legacyRaw >= 60000) {
-    return Math.min(300000, Math.max(3000, legacyRaw));
-  }
-  return 120000;
-}
-
-/**
- * Teto opcional da fase de orquestração (pool/selector) — não limita job work.
- */
-export function resolveDrainOrchestrationTimeboxMs() {
-  const raw =
-    process.env.MARKETPLACE_SYNC_DRAIN_ORCHESTRATION_MS ??
-    process.env.MARKETPLACE_SYNC_DRAIN_TIMEBOX_MS ??
-    "15000";
-  return Math.min(120000, Math.max(3000, parseInt(String(raw), 10) || 15000));
-}
-
-export function resolveMinimumUsefulJobStartMs() {
-  const raw = parseInt(process.env.MARKETPLACE_SYNC_MIN_USEFUL_JOB_START_MS || "0", 10);
-  if (Number.isFinite(raw) && raw > 0) {
-    return Math.min(60000, Math.max(1000, raw));
-  }
-  const mlTimeout = Math.min(
-    120000,
-    Math.max(3000, parseInt(process.env.ML_REQUEST_TIMEOUT_MS || "28000", 10) || 28000)
-  );
-  return Math.min(mlTimeout + 2000, resolveMinExternalWorkMs() + 4000);
 }
 
 /**
@@ -143,16 +96,7 @@ export function createInvocationDeadline(opts = {}) {
     },
     getElapsedMs: () => nowFn() - startedAtMs,
     getRemainingSoftMs: () => Math.max(0, softDeadlineMs - nowFn()),
-    getRemainingSafeMs: () => Math.max(0, softDeadlineMs - nowFn()),
     getRemainingHardMs: () => Math.max(0, hardDeadlineMs - nowFn()),
-    hasBudgetForExternalWork: (estimatedMs = resolveMinExternalWorkMs()) => {
-      const est = Math.max(0, Number(estimatedMs) || 0);
-      const remainingSoft = softDeadlineMs - nowFn();
-      const remainingHard = hardDeadlineMs - nowFn();
-      if (remainingHard <= shutdownMarginMs) return false;
-      if (remainingSoft <= 0) return false;
-      return remainingSoft >= est;
-    },
     isSoftExpired: () => nowFn() >= softDeadlineMs,
     isHardExpired: () => nowFn() >= hardDeadlineMs,
     shouldStopBeforeNextExternalWork: (estimatedMs = resolveMinExternalWorkMs()) => {

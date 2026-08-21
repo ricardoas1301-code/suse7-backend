@@ -9,6 +9,7 @@ import {
   nextOrdersSearchOffset,
   resetMlDrainRequestMetrics,
   resolveMlOrdersSearchSort,
+  resolveMlTimeoutMs,
   searchSellerOrdersPage,
   snapshotMlDrainRequestMetrics,
   setMlExternalAwaitHeartbeatHook,
@@ -66,9 +67,6 @@ import {
 } from "./marketplaceSyncJobLease.js";
 import {
   createInvocationDeadline,
-  resolveDrainOrchestrationTimeboxMs,
-  resolveInvocationRequestedBudgetMs,
-  resolveMinimumUsefulJobStartMs,
   resolveMinExternalWorkMs,
 } from "./marketplaceSyncInvocationDeadline.js";
 import {
@@ -88,14 +86,16 @@ function resolveSalesSearchPageLimit() {
   );
 }
 
-/** Estimativa para busca paginada ML antes de iniciar request. */
-function resolveOrdersSearchWorkEstimateMs() {
-  return resolveMinimumUsefulJobStartMs();
-}
-
-/** @deprecated Use resolveInvocationRequestedBudgetMs — drain timebox é só orquestração. */
 function resolveDrainTimeboxMs(opts = {}) {
-  return resolveInvocationRequestedBudgetMs(opts);
+  const raw =
+    opts.budgetMs ??
+    process.env.MARKETPLACE_SYNC_DRAIN_TIMEBOX_MS ??
+    process.env.ML_MARKETPLACE_SYNC_BUDGET_MS ??
+    "10000";
+  return Math.min(
+    120000,
+    Math.max(3000, parseInt(String(raw), 10) || 10000)
+  );
 }
 
 function resolveMaxJobsPerDrain(opts = {}) {
@@ -196,36 +196,9 @@ function resolveOrderWorkEstimateMs() {
   return Math.min(ORDER_PROCESS_TIMEOUT_MS, 12000);
 }
 
-/**
- * @param {ReturnType<typeof createInvocationDeadline> | null | undefined} deadline
- * @param {string} jobType
- */
-function resolveMinimumBudgetToStartJobMs(deadline, jobType) {
-  const t = String(jobType || "");
-  if (
-    t === "ml_initial_sales_recent" ||
-    t === "ml_initial_sales_history" ||
-    t === "ml_historical_sales_backfill"
-  ) {
-    return resolveOrdersSearchWorkEstimateMs();
-  }
-  return resolveMinExternalWorkMs();
-}
-
-/**
- * @param {ReturnType<typeof createInvocationDeadline> | null | undefined} deadline
- * @param {string} jobType
- */
-function evaluateJobStartBudget(deadline, jobType) {
-  const minimumMs = resolveMinimumBudgetToStartJobMs(deadline, jobType);
-  const remainingSafeMs = deadline?.getRemainingSafeMs?.() ?? 0;
-  const allowed = deadline?.hasBudgetForExternalWork?.(minimumMs) ?? remainingSafeMs >= minimumMs;
-  return {
-    allowed,
-    minimum_ms: minimumMs,
-    remaining_safe_ms: remainingSafeMs,
-    skip_reason: allowed ? null : "no_safe_budget_to_start_job",
-  };
+/** Estimativa para busca paginada ML antes de iniciar request. */
+function resolveOrdersSearchWorkEstimateMs() {
+  return Math.min(resolveMlTimeoutMs() + 2000, resolveMinExternalWorkMs() + 4000);
 }
 
 /**
@@ -1127,36 +1100,6 @@ async function processMlSalesBatchJobInner(supabase, ctx) {
 
     if (progressTotal == null && page.paging?.total != null) {
       progressTotal = Number(page.paging.total);
-    }
-
-    const searchCompletedAt = new Date().toISOString();
-    if (progressTotal != null && jRow.progress_total == null) {
-      await safePatchProgress(
-        {
-          progress_total: progressTotal,
-          progress_current: processedTotal,
-          last_cursor: serializeSalesCursor(cursor),
-          metadata: {
-            ...metaRowBase(),
-            phase: salesJobType === "ml_historical_sales_backfill" ? "historical_sales_window" : "sales_recent",
-            sync_job_kind: salesJobType,
-            last_orders_search_completed_at: searchCompletedAt,
-            ml_sales_import_api_total: progressTotal,
-          },
-        },
-        "after_first_search_total_known"
-      );
-    } else {
-      await safePatchProgress(
-        {
-          metadata: {
-            ...metaRowBase(),
-            last_orders_search_completed_at: searchCompletedAt,
-            ...(progressTotal != null ? { ml_sales_import_api_total: progressTotal } : {}),
-          },
-        },
-        "after_orders_search_completed"
-      );
     }
 
     const orderIds = page.orderIds || [];
@@ -2181,22 +2124,13 @@ async function dispatchJobChunkWithPerf(supabase, job, runtime) {
 export async function runMarketplaceAccountSyncWorker(supabase, opts = {}) {
   resetMlDrainRequestMetrics();
   const drainStartedAt = Date.now();
-  const requestedBudgetMs = resolveInvocationRequestedBudgetMs(opts);
-  const orchestrationTimeboxMs = resolveDrainOrchestrationTimeboxMs();
+  const requestedBudgetMs = resolveDrainTimeboxMs(opts);
   const invocationDeadline = createInvocationDeadline({
     requestedBudgetMs,
     startedAtMs: drainStartedAt,
   });
-  invocationDeadline.logEvent("worker_start", {
-    requested_budget_ms: requestedBudgetMs,
-    orchestration_timebox_ms: orchestrationTimeboxMs,
-  });
+  invocationDeadline.logEvent("worker_start", {});
   const budgetMs = invocationDeadline.effectiveBudgetMs;
-  const absoluteDeadlineMs = invocationDeadline.softDeadlineMs;
-  const orchestrationDeadlineMs = Math.min(
-    absoluteDeadlineMs,
-    drainStartedAt + orchestrationTimeboxMs
-  );
   const salesPageLimit = resolveSalesSearchPageLimit();
   const batchDetails = resolveBatchDetails(opts, salesPageLimit);
   const maxJobsPerDrain = resolveMaxJobsPerDrain(opts);
@@ -2212,6 +2146,7 @@ export async function runMarketplaceAccountSyncWorker(supabase, opts = {}) {
         "Ainda há apenas 1 job inicial ML por conta por vez (evita estado conflitante). Valores > 1 ficam para fases futuras (jobs paralelos não conflitantes).",
     });
   }
+  const absoluteDeadlineMs = invocationDeadline.softDeadlineMs;
   const runtimePayload = {
     invocationDeadline,
     deadlineMs: absoluteDeadlineMs,
@@ -2235,10 +2170,6 @@ export async function runMarketplaceAccountSyncWorker(supabase, opts = {}) {
   console.info("[ML_ONBOARDING_SYNC_JOB_DISPATCHED]", {
     event: "worker_start",
     budget_ms: budgetMs,
-    requested_budget_ms: requestedBudgetMs,
-    orchestration_timebox_ms: orchestrationTimeboxMs,
-    safe_absolute_deadline_ms: absoluteDeadlineMs,
-    remaining_safe_ms_at_start: invocationDeadline.getRemainingSafeMs(),
     max_jobs_per_drain: maxJobsPerDrain,
     global_sync_concurrency: globalSyncConcurrency,
     marketplace_ml_concurrency: marketplaceMlConcurrency,
@@ -2293,14 +2224,6 @@ export async function runMarketplaceAccountSyncWorker(supabase, opts = {}) {
   let waveIndex = 0;
   while (Date.now() < absoluteDeadlineMs && jobsDispatchedTotal < maxJobsPerDrain) {
     const iterStart = Date.now();
-    if (jobsDispatchedTotal === 0 && Date.now() >= orchestrationDeadlineMs) {
-      console.info("[S7][marketplace-sync-orchestration-timebox]", {
-        orchestration_timebox_ms: orchestrationTimeboxMs,
-        elapsed_ms: Date.now() - drainStartedAt,
-        skip_reason: "orchestration_timebox_exhausted_before_dispatch",
-      });
-      break;
-    }
     const rows = await fetchJobsPool(supabase, fetchPoolLimit);
     const distinctMarketplaceAccountIds = [
       ...new Set(rows.map((r) => String(r.marketplace_account_id || "").trim()).filter(Boolean)),
@@ -2576,15 +2499,11 @@ export async function runMarketplaceAccountSyncWorker(supabase, opts = {}) {
     });
   }
 
-  /** Polling recente — capado pelo remaining safe da invocation absoluta. */
+  /** Polling recente (não depende do seller logado) — budget dedicado após fila de jobs. */
   const incBudgetRaw = parseInt(process.env.ML_INCREMENTAL_SALES_BUDGET_MS || "14000", 10);
-  const incBudgetConfigured = Math.min(60000, Math.max(0, Number.isFinite(incBudgetRaw) ? incBudgetRaw : 14000));
-  const remainingSafeForInc = invocationDeadline.getRemainingSafeMs();
-  const incBudget = Math.min(incBudgetConfigured, Math.max(0, remainingSafeForInc - 1000));
+  const incBudget = Math.min(60000, Math.max(0, Number.isFinite(incBudgetRaw) ? incBudgetRaw : 14000));
   console.info("[sales-sync] incremental_poll_start", {
     budget_ms: incBudget,
-    budget_configured_ms: incBudgetConfigured,
-    remaining_safe_ms: remainingSafeForInc,
     poll_enable_env: process.env.ML_INCREMENTAL_SALES_POLL_ENABLE ?? "(unset)",
     max_accounts_env: process.env.ML_INCREMENTAL_SALES_MAX_ACCOUNTS ?? "(unset)",
   });
@@ -2635,20 +2554,7 @@ export async function runMarketplaceAccountSyncWorker(supabase, opts = {}) {
     error_count: incremental_sales_poll.errors?.length ?? 0,
   });
 
-  const serverProcessingMs = Date.now() - drainStartedAt;
-  console.info("[S7][marketplace-sync-invocation-trace]", {
-    server_processing_ms: serverProcessingMs,
-    invocation_deadline: invocationDeadline.snapshot(),
-  });
-
-  return {
-    ok: true,
-    chunks_processed: chunks.length,
-    chunks,
-    incremental_sales_poll,
-    server_processing_ms: serverProcessingMs,
-    invocation_deadline: invocationDeadline.snapshot(),
-  };
+  return { ok: true, chunks_processed: chunks.length, chunks, incremental_sales_poll };
 }
 
 /**
@@ -2658,12 +2564,8 @@ export async function runMarketplaceAccountSyncWorker(supabase, opts = {}) {
  * @param {{ budgetMs?: number; batchDetails?: number; salesPageLimit?: number }} [opts]
  */
 export async function runScopedMarketplaceSyncJobDrain(supabase, jobId, opts = {}) {
-  const drainStartedAt = Date.now();
-  const requestedBudgetMs = resolveInvocationRequestedBudgetMs({ budgetMs: opts.budgetMs ?? 120000 });
-  const invocationDeadline = createInvocationDeadline({
-    requestedBudgetMs,
-    startedAtMs: drainStartedAt,
-  });
+  const requestedBudgetMs = opts.budgetMs ?? 120000;
+  const invocationDeadline = createInvocationDeadline({ requestedBudgetMs });
   invocationDeadline.logEvent("scoped_drain_start", { job_id: jobId });
   const { data: job, error } = await supabase
     .from("marketplace_account_sync_jobs")
@@ -2672,19 +2574,6 @@ export async function runScopedMarketplaceSyncJobDrain(supabase, jobId, opts = {
     .maybeSingle();
   if (error) throw error;
   if (!job?.id) return { ok: false, reason: "job_not_found", job_id: jobId };
-
-  const budgetGate = evaluateJobStartBudget(invocationDeadline, String(job.job_type || ""));
-  if (!budgetGate.allowed) {
-    return {
-      ok: true,
-      job_id: jobId,
-      no_safe_budget: true,
-      skip_reason: budgetGate.skip_reason,
-      remaining_safe_ms: budgetGate.remaining_safe_ms,
-      server_processing_ms: Date.now() - drainStartedAt,
-      invocation_deadline: invocationDeadline.snapshot(),
-    };
-  }
 
   const claimed = await tryClaimMarketplaceSyncJob(supabase, job);
   if (!claimed?.id) {
@@ -2743,7 +2632,7 @@ export async function runScopedMarketplaceSyncJobDrain(supabase, jobId, opts = {
     yielded: Boolean(drainOut?.yielded),
     yield_reason: drainOut?.yield_reason ?? null,
     invocation_deadline: invocationDeadline.snapshot(),
-    server_processing_ms: Date.now() - drainStartedAt,
+    drain_out: drainOut,
   };
 }
 
