@@ -91,7 +91,7 @@ try {
       nowFn,
     });
     nowMs = 3_000;
-    const remaining = deadline.getRemainingSafeMs();
+    const remaining = deadline.getRemainingSoftMs();
     const searchEst = resolveMinimumUsefulJobStartMs();
     assert("N1-01 remaining ~39s", remaining >= 38_000 && remaining <= 40_000);
     assert("N1-01 first search permitted", deadline.hasBudgetForExternalWork(searchEst));
