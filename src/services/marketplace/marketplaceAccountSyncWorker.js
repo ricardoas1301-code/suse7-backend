@@ -2697,7 +2697,7 @@ export async function runMarketplaceAccountSyncWorker(supabase, opts = {}) {
   const invocationTraceSummary = invocationTrace.summary();
   console.info("[S7][marketplace-sync-invocation-trace]", {
     server_processing_ms: serverProcessingMs,
-    ...invocationTraceSummary,
+    invocation_trace: invocationTraceSummary,
     invocation_deadline: invocationDeadline.snapshot(),
   });
 
@@ -2707,7 +2707,6 @@ export async function runMarketplaceAccountSyncWorker(supabase, opts = {}) {
     chunks,
     incremental_sales_poll,
     server_processing_ms: serverProcessingMs,
-    invocation_trace: invocationTraceSummary,
     invocation_deadline: invocationDeadline.snapshot(),
   };
 }
