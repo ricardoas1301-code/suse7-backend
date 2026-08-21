@@ -142,34 +142,21 @@ export async function reserveBillableSaleAfterOfficialDate(supabase, userId, inp
     now,
   });
 
+  // Manual review = billing pendente/reconciliável — verdade operacional persiste (P0.3-B).
   if (classified.manual_review_required || classified.class === BILLING_SALE_PERIOD_CLASS.MANUAL_REVIEW) {
-    if (classified.reason === "official_order_at_missing") {
-      return {
-        admit: false,
-        process_sale: false,
-        reason: "manual_review_required",
-        period_class: classified.class,
-        official_order_at: null,
-        snapshot_origin: snapshotOrigin,
-        atomic: false,
-        quota_bypassed: false,
-        webhook_ok: true,
-        schedule_reconciliation: true,
-        manual_review_required: true,
-      };
-    }
     return {
-      admit: false,
-      process_sale: false,
+      admit: true,
+      process_sale: true,
       reason: "manual_review_required",
       period_class: classified.class,
       classification_reason: classified.reason,
       official_order_at: classified.official_order_at ?? null,
       snapshot_origin: snapshotOrigin,
       atomic: false,
-      quota_bypassed: false,
+      quota_bypassed: true,
       webhook_ok: true,
       manual_review_required: true,
+      schedule_reconciliation: true,
     };
   }
 
