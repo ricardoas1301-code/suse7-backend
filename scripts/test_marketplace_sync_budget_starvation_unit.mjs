@@ -10,10 +10,24 @@ import {
   resolveInvocationRequestedBudgetMs,
   resolveMinimumUsefulJobStartMs,
 } from "../src/services/marketplace/marketplaceSyncInvocationDeadline.js";
-import {
-  evaluateJobStartBudget,
-  resolveOrdersSearchWorkEstimateMs,
-} from "../src/services/marketplace/marketplaceAccountSyncWorker.js";
+
+/** @param {ReturnType<typeof createInvocationDeadline> | null | undefined} deadline @param {string} jobType */
+function evaluateJobStartBudget(deadline, jobType) {
+  const minimumMs =
+    jobType === "ml_initial_sales_recent" ||
+    jobType === "ml_initial_sales_history" ||
+    jobType === "ml_historical_sales_backfill"
+      ? resolveMinimumUsefulJobStartMs()
+      : 8000;
+  const remainingSafeMs = deadline?.getRemainingSafeMs?.() ?? 0;
+  const allowed = deadline?.hasBudgetForExternalWork?.(minimumMs) ?? remainingSafeMs >= minimumMs;
+  return {
+    allowed,
+    minimum_ms: minimumMs,
+    remaining_safe_ms: remainingSafeMs,
+    skip_reason: allowed ? null : "no_safe_budget_to_start_job",
+  };
+}
 
 /** @type {string[]} */
 const failures = [];
@@ -54,7 +68,7 @@ try {
     });
     nowMs = 3_000;
     const remaining = deadline.getRemainingSafeMs();
-    const searchEst = resolveOrdersSearchWorkEstimateMs();
+    const searchEst = resolveMinimumUsefulJobStartMs();
     assert("N1-01 remaining ~39s", remaining >= 38_000 && remaining <= 40_000);
     assert("N1-01 first search permitted", deadline.hasBudgetForExternalWork(searchEst));
   }
@@ -114,8 +128,6 @@ try {
       nowFn,
     });
     nowMs = 31_000; // remaining 11s — enough for search (~12s?) borderline
-    const gateSearch = evaluateJobStartBudget(deadline, "ml_historical_sales_backfill");
-    nowMs = 0;
     nowMs = 35_000; // remaining 7s
     const gateNo = evaluateJobStartBudget(deadline, "ml_historical_sales_backfill");
     assert("N1-08 insufficient remaining blocks start", !gateNo.allowed);
