@@ -69,6 +69,15 @@ import {
   createInvocationDeadline,
   resolveMinExternalWorkMs,
 } from "./marketplaceSyncInvocationDeadline.js";
+import {
+  filterActivePoolRowsAfterRecoveryProjection,
+  projectPoolAfterStaleRecovery,
+} from "./marketplaceSyncRecoveryProjection.js";
+import {
+  pickJobsDistinctAccounts,
+  resolvePrerequisiteBlockReason as resolveSelectorPrerequisiteBlockReason,
+  sortEligibleJobs,
+} from "./marketplaceSyncJobSelector.js";
 
 function resolveSalesSearchPageLimit() {
   return Math.min(
@@ -263,7 +272,7 @@ function pipelineStepRankLocal(jobType) {
 
 /** @param {Record<string, unknown>} job @param {Record<string, string>} statusMap */
 function prerequisiteBlockReason(job, statusMap) {
-  return resolveMlInitialSyncPrerequisiteBlockReason(job, statusMap);
+  return resolveSelectorPrerequisiteBlockReason(job, statusMap);
 }
 
 /** @param {Record<string, unknown>} metaJob */
@@ -514,77 +523,6 @@ async function fetchActiveMlJobCountsByAccount(supabase, accountIds) {
   return map;
 }
 
-/**
- * @param {Record<string, unknown>[]} rows
- * @param {Record<string, string>} statusMap
- * @param {Record<string, number>} [webhookBacklogByAccount]
- */
-function sortEligibleJobs(rows, statusMap, webhookBacklogByAccount = {}) {
-  const staleHalfThreshold = resolveStaleRecoveryThresholdMs() / 2;
-  const webhookPenaltyFor = (job) => {
-    const aid = job.marketplace_account_id != null ? String(job.marketplace_account_id).trim() : "";
-    const backlog = aid ? webhookBacklogByAccount[aid] || 0 : 0;
-    if (backlog <= 0) return 0;
-    const jobType = String(job.job_type || "");
-    if (jobType === "ml_historical_sales_backfill" || jobType === "ml_initial_sales_history") return 1000;
-    if (jobType === "ml_initial_listings" || jobType === "ml_initial_listings_current") return 100;
-    if (jobType === "ml_initial_fees" || jobType === "ml_initial_products") return 50;
-    return 0;
-  };
-
-  const filtered = rows.filter((j) => prerequisiteBlockReason(j, statusMap) == null);
-  filtered.sort((a, b) => {
-    const penaltyA = webhookPenaltyFor(a);
-    const penaltyB = webhookPenaltyFor(b);
-    if (penaltyA !== penaltyB) return penaltyA - penaltyB;
-    const sa = String(a.status || "").toLowerCase();
-    const sb = String(b.status || "").toLowerCase();
-    const leaseA = readJobLeaseMeta(a);
-    const leaseB = readJobLeaseMeta(b);
-    const hbA = leaseA.heartbeat_at || a.updated_at || a.created_at;
-    const hbB = leaseB.heartbeat_at || b.updated_at || b.created_at;
-    const ua = new Date(/** @type {string} */ (hbA || 0)).getTime();
-    const ub = new Date(/** @type {string} */ (hbB || 0)).getTime();
-    const staleA = sa === "running" && (isJobLeaseExpired(a) || (Number.isFinite(ua) && Date.now() - ua > staleHalfThreshold));
-    const staleB = sb === "running" && (isJobLeaseExpired(b) || (Number.isFinite(ub) && Date.now() - ub > staleHalfThreshold));
-    const statusRank = (status, stale) => {
-      if (status === "running" && stale) return 0;
-      if (status === "running") return 1;
-      if (status === "pending") return 2;
-      return 9;
-    };
-    const rsA = statusRank(sa, staleA);
-    const rsB = statusRank(sb, staleB);
-    if (rsA !== rsB) return rsA - rsB;
-    const pra = jobEffectivePriority(a);
-    const prb = jobEffectivePriority(b);
-    if (pra !== prb) return prb - pra;
-    const stepA = pipelineStepRank(String(a.job_type || ""));
-    const stepB = pipelineStepRank(String(b.job_type || ""));
-    if (stepA !== stepB) return stepA - stepB;
-    return ua - ub;
-  });
-  return filtered;
-}
-
-/**
- * Até um job por conta por onda (evita conflito paralelo na mesma marketplace_account_id).
- * @param {Record<string, unknown>[]} sortedEligible
- * @param {number} maxPick
- */
-function pickJobsDistinctAccounts(sortedEligible, maxPick) {
-  /** @type {Record<string, unknown>[]} */
-  const picked = [];
-  const seen = new Set();
-  for (const j of sortedEligible) {
-    const aid = j.marketplace_account_id != null ? String(j.marketplace_account_id).trim() : "";
-    if (!aid || seen.has(aid)) continue;
-    seen.add(aid);
-    picked.push(j);
-    if (picked.length >= maxPick) break;
-  }
-  return picked;
-}
 
 /**
  * @param {import("@supabase/supabase-js").SupabaseClient} supabase
@@ -2695,5 +2633,150 @@ export async function runScopedMarketplaceSyncJobDrain(supabase, jobId, opts = {
     yield_reason: drainOut?.yield_reason ?? null,
     invocation_deadline: invocationDeadline.snapshot(),
     drain_out: drainOut,
+  };
+}
+
+/** @param {Record<string, unknown>} job @param {Record<string, string>} statusMap */
+function describeJobEligibility(job, statusMap) {
+  const meta = readJobMetadataObject(job);
+  const lease = readJobLeaseMeta(job);
+  const status = String(job.status || "").toLowerCase();
+  const staleHalfThreshold = resolveStaleRecoveryThresholdMs() / 2;
+  const hbRaw = lease.heartbeat_at || job.updated_at || job.created_at;
+  const hbMs = new Date(/** @type {string} */ (hbRaw || 0)).getTime();
+  const staleRunning =
+    status === "running" &&
+    (isJobLeaseExpired(job) || (Number.isFinite(hbMs) && Date.now() - hbMs > staleHalfThreshold));
+  return {
+    job_id: job.id ?? null,
+    marketplace_account_id: job.marketplace_account_id ?? null,
+    seller_company_id: job.seller_company_id ?? null,
+    job_type: job.job_type ?? null,
+    status: job.status ?? null,
+    progress_current: job.progress_current ?? null,
+    progress_total: job.progress_total ?? null,
+    window_index: meta.window_index ?? null,
+    date_from: meta.date_from ?? null,
+    date_to: meta.date_to ?? null,
+    priority: jobEffectivePriority(job),
+    pipeline_step_rank: pipelineStepRank(String(job.job_type || "")),
+    last_cursor: job.last_cursor ?? null,
+    lease_owner: lease.lease_owner,
+    lease_version: lease.lease_version,
+    lease_expires_at: lease.lease_expires_at,
+    heartbeat_at: lease.heartbeat_at,
+    lease_expired: isJobLeaseExpired(job),
+    running_stale: staleRunning,
+    recovery_count: lease.recovery_count,
+    created_at: job.created_at ?? null,
+    updated_at: job.updated_at ?? null,
+    prerequisite_block: prerequisiteBlockReason(job, statusMap),
+  };
+}
+
+/**
+ * Simulação read-only do selector global (projeta stale recovery; sem claim/lease/dispatch).
+ * @param {import("@supabase/supabase-js").SupabaseClient} supabase
+ * @param {{ maxChunks?: number; limit?: number; nowMs?: number }} [opts]
+ */
+export async function simulateGlobalSchedulerSelection(supabase, opts = {}) {
+  const nowMs = opts.nowMs ?? Date.now();
+  const maxJobsPerDrain =
+    opts.maxChunks != null
+      ? resolveMaxJobsPerDrain({ maxChunks: opts.maxChunks })
+      : opts.limit != null
+        ? resolveMaxJobsPerDrain({ maxChunks: opts.limit })
+        : resolveMaxJobsPerDrain({});
+  const fetchPoolLimit = resolveFetchJobsPoolLimit();
+  const rowsRaw = await fetchJobsPool(supabase, fetchPoolLimit);
+  const rowsProjected = filterActivePoolRowsAfterRecoveryProjection(
+    projectPoolAfterStaleRecovery(rowsRaw, nowMs)
+  );
+  const accountIds = [...new Set(rowsProjected.map((r) => String(r.marketplace_account_id || "")).filter(Boolean))];
+  const statusMap = await loadLatestJobStatusMap(supabase, accountIds);
+  const activeChunkByAccount = await fetchActiveMlJobCountsByAccount(supabase, accountIds);
+  const webhookBacklogByAccount = await fetchPendingOrdersV2WebhookCountByAccount(supabase, accountIds);
+  const sorted = sortEligibleJobs(rowsProjected, statusMap, webhookBacklogByAccount, nowMs);
+  const slotsLeft = maxJobsPerDrain;
+  const wavePickLimit = resolveEffectiveWaveParallelism(slotsLeft);
+  const picks = pickJobsDistinctAccounts(sorted, wavePickLimit);
+
+  const sortedIds = new Set(sorted.map((j) => String(j.id ?? "")));
+  /** @type {Record<string, unknown>[]} */
+  const excluded = [];
+  for (const j of rowsRaw) {
+    if (sortedIds.has(String(j.id ?? ""))) continue;
+    const br = prerequisiteBlockReason(j, statusMap);
+    excluded.push({
+      ...describeJobEligibility(j, statusMap),
+      exclusion_reason: br || "unknown_prerequisite_block",
+    });
+  }
+
+  const recoveryProjections = (rowsRaw ?? []).map((row) => {
+    const projected = projectPoolAfterStaleRecovery([row], nowMs)[0];
+    const changed =
+      String(row.status || "") !== String(projected.status || "") ||
+      String(row.updated_at || "") !== String(projected.updated_at || "");
+    return {
+      job_id: row.id ?? null,
+      before_status: row.status ?? null,
+      after_status: projected.status ?? null,
+      changed,
+    };
+  });
+
+  const pickedIds = new Set(picks.map((j) => String(j.id ?? "")));
+  /** @type {Record<string, unknown>[]} */
+  const eligible_not_picked = [];
+  for (let i = 0; i < sorted.length; i++) {
+    const j = sorted[i];
+    if (pickedIds.has(String(j.id ?? ""))) continue;
+    const aid = String(j.marketplace_account_id || "");
+    const pickedSameAccount = picks.some((p) => String(p.marketplace_account_id || "") === aid);
+    eligible_not_picked.push({
+      eligible_rank: i + 1,
+      ...describeJobEligibility(j, statusMap),
+      not_picked_reason: pickedSameAccount
+        ? "one_job_per_account_per_wave"
+        : "beyond_wave_pick_limit",
+      active_chunks_pending_running: aid ? activeChunkByAccount[aid] ?? 0 : 0,
+    });
+  }
+
+  return {
+    read_only: true,
+    note: "Projeta recoverStaleMarketplaceSyncJobs (running stale→pending) antes do sort; sem escrita.",
+    now_ms: nowMs,
+    fetch_pool_limit: fetchPoolLimit,
+    max_jobs_per_drain: maxJobsPerDrain,
+    wave_pick_limit: wavePickLimit,
+    global_sync_concurrency: resolveGlobalSyncConcurrency(),
+    marketplace_ml_concurrency: resolveMarketplaceMlConcurrency(),
+    pool_query: {
+      table: "marketplace_account_sync_jobs",
+      status_filter: ["pending", "running"],
+      marketplace_filter: ML_MARKETPLACE_SLUG,
+      order_by: "created_at asc",
+      limit: fetchPoolLimit,
+    },
+    pool_rows_raw: rowsRaw.length,
+    pool_rows_after_recovery_projection: rowsProjected.length,
+    recovery_projections: recoveryProjections.filter((p) => p.changed),
+    eligible_count: sorted.length,
+    excluded_count: excluded.length,
+    global_eligibility_order: sorted.map((j, i) => ({
+      rank: i + 1,
+      ...describeJobEligibility(j, statusMap),
+      active_chunks_pending_running:
+        activeChunkByAccount[String(j.marketplace_account_id || "")] ?? 0,
+      webhook_backlog: webhookBacklogByAccount[String(j.marketplace_account_id || "")] ?? 0,
+    })),
+    picks: picks.map((j, i) => ({
+      pick_rank: i + 1,
+      ...describeJobEligibility(j, statusMap),
+    })),
+    excluded,
+    eligible_not_picked,
   };
 }

@@ -3,18 +3,25 @@ name: Marketplace Account Sync Cron (DEV)
 # Contrato DEV (oficial):
 #   POST secrets.DEV_MARKETPLACE_SYNC_JOB_URL
 #   Header X-Job-Secret: secrets.DEV_JOB_SECRET
-#   Body: {"limit":5}
+#   Body: {"limit":1}
 # Vercel DEV: DEV_JOB_SECRET ou JOB_SECRET com o mesmo valor do GitHub.
+#
+# P0.2-M.1 — limit conservador (1 job/conta/onda). Schedule permanece OFF até homologação completa.
 
 on:
-  # PAUSA TEMPORÁRIA P0.2 homologação runtime (2026-08-20) — reativar schedule após handoff Local→Hosted validado.
+  # PAUSA TEMPORÁRIA P0.2 homologação runtime (2026-08-20) — reativar schedule após ticks controlados validados.
   # schedule:
   #   - cron: "*/1 * * * *"
   workflow_dispatch: {}
 
+concurrency:
+  group: marketplace-account-sync-dev
+  cancel-in-progress: false
+
 jobs:
   run-dev:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     env:
       SYNC_JOB_URL: ${{ secrets.DEV_MARKETPLACE_SYNC_JOB_URL }}
       JOB_SECRET: ${{ secrets.DEV_JOB_SECRET }}
@@ -42,13 +49,13 @@ jobs:
             exit 1
           fi
 
-          echo "[marketplace-sync-dev] cron_firing method=POST limit=5"
+          echo "[marketplace-sync-dev] cron_firing method=POST limit=1"
           echo "[marketplace-sync-dev] request_start"
 
           http_code=$(curl -sS -o /tmp/marketplace-sync-dev.json -w "%{http_code}" -X POST "${SYNC_JOB_URL}" \
             -H "Content-Type: application/json" \
             -H "X-Job-Secret: ${JOB_SECRET}" \
-            -d '{"limit":5}')
+            -d '{"limit":1}')
 
           echo "[marketplace-sync-dev] request_http_status=${http_code}"
 

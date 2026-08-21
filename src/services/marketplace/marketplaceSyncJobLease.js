@@ -451,55 +451,36 @@ export async function recoverStaleMarketplaceSyncJobs(supabase) {
     return stats;
   }
 
-  for (const row of runningRows ?? []) {
-    const lease = readJobLeaseMeta(row);
-    const hb = lease.heartbeat_at || row.updated_at || row.started_at;
-    const hbMs = hb ? Date.parse(String(hb)) : NaN;
-    const staleByHeartbeat = !Number.isFinite(hbMs) || nowMs - hbMs > thresholdMs;
-    const staleByLease = isJobLeaseExpired(row, nowMs);
-    if (!staleByHeartbeat && !staleByLease) continue;
+  const { projectStaleRunningRecovery } = await import("./marketplaceSyncRecoveryProjection.js");
 
-    const nextRecovery = (lease.recovery_count || 0) + 1;
-    if (nextRecovery > maxRecoveries) {
-      const nowIso = new Date().toISOString();
-      await supabase
+  for (const row of runningRows ?? []) {
+    const { changed, recovery_action, projected } = projectStaleRunningRecovery(row, nowMs);
+    if (!changed) continue;
+
+    if (recovery_action === "terminal") {
+      const { error: updErr } = await supabase
         .from("marketplace_account_sync_jobs")
         .update({
-          status: "error",
-          finished_at: nowIso,
-          updated_at: nowIso,
-          error_message: `stale_recovery_limit_exceeded>${maxRecoveries}`,
-          metadata: {
-            ...readJobMetadataObject(row),
-            recovery_count: nextRecovery,
-            stale_recovery_reason: "max_recoveries_exceeded",
-            last_stale_at: nowIso,
-          },
+          status: projected.status,
+          finished_at: projected.finished_at,
+          updated_at: projected.updated_at,
+          error_message: projected.error_message,
+          metadata: projected.metadata,
         })
         .eq("id", row.id)
         .eq("status", "running");
-      stats.terminal += 1;
+      if (!updErr) stats.terminal += 1;
       continue;
     }
 
-    const nowIso = new Date().toISOString();
-    const meta = {
-      ...readJobMetadataObject(row),
-      recovery_count: nextRecovery,
-      stale_recovery_reason: "heartbeat_or_lease_expired",
-      last_stale_at: nowIso,
-      lease_owner: null,
-      lease_expires_at: null,
-      heartbeat_at: hb ?? cutoffIso,
-    };
     const { error: updErr } = await supabase
       .from("marketplace_account_sync_jobs")
       .update({
-        status: "pending",
-        finished_at: null,
-        error_message: null,
-        updated_at: nowIso,
-        metadata: meta,
+        status: projected.status,
+        finished_at: projected.finished_at,
+        error_message: projected.error_message,
+        updated_at: projected.updated_at,
+        metadata: projected.metadata,
       })
       .eq("id", row.id)
       .eq("status", "running");
@@ -510,7 +491,7 @@ export async function recoverStaleMarketplaceSyncJobs(supabase) {
         job_id: row.id,
         marketplace_account_id: row.marketplace_account_id ?? null,
         job_type: row.job_type ?? null,
-        recovery_count: nextRecovery,
+        recovery_count: readJobLeaseMeta(projected).recovery_count,
         progress_current: row.progress_current ?? null,
         progress_total: row.progress_total ?? null,
       });
