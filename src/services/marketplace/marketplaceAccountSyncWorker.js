@@ -2002,26 +2002,6 @@ const MULTI_TURN_RESUMABLE_JOB_TYPES = new Set([
  * @param {{ deadlineMs: number; batchDetails: number; salesPageLimit: number }} runtime
  */
 async function dispatchJobChunk(supabase, job, runtime) {
-  const jobType = String(job.job_type || "");
-  const budgetGate = evaluateJobStartBudget(runtime.invocationDeadline, jobType);
-  if (!budgetGate.allowed) {
-    console.info("[S7][marketplace-sync-no-safe-budget]", {
-      job_id: job.id ?? null,
-      marketplace_account_id: job.marketplace_account_id ?? null,
-      job_type: jobType,
-      remaining_safe_ms: budgetGate.remaining_safe_ms,
-      minimum_ms: budgetGate.minimum_ms,
-      skip_reason: budgetGate.skip_reason,
-    });
-    return {
-      stopped: true,
-      processedInThisRun: 0,
-      no_safe_budget: true,
-      skip_reason: budgetGate.skip_reason,
-      remaining_safe_ms: budgetGate.remaining_safe_ms,
-    };
-  }
-
   const claimed = await tryClaimMarketplaceSyncJob(supabase, job);
   if (!claimed?.id) {
     console.info("[S7][marketplace-sync-drain-claim-skipped]", {
@@ -2457,28 +2437,6 @@ export async function runMarketplaceAccountSyncWorker(supabase, opts = {}) {
         marketplace_account_id: job.marketplace_account_id ?? null,
         wave: waveIndex,
       });
-    }
-
-    const leadBudget = evaluateJobStartBudget(
-      invocationDeadline,
-      String(picks[0]?.job_type || "")
-    );
-    if (!leadBudget.allowed) {
-      console.info("[S7][marketplace-sync-drain-skip-no-budget]", {
-        wave: waveIndex,
-        job_id: picks[0]?.id ?? null,
-        job_type: picks[0]?.job_type ?? null,
-        remaining_safe_ms: leadBudget.remaining_safe_ms,
-        minimum_ms: leadBudget.minimum_ms,
-        skip_reason: leadBudget.skip_reason,
-      });
-      chunks.push({
-        no_safe_budget: true,
-        skip_reason: leadBudget.skip_reason,
-        remaining_safe_ms: leadBudget.remaining_safe_ms,
-        job_id: picks[0]?.id ?? null,
-      });
-      break;
     }
 
     const waveResults = await Promise.all(picks.map((job) => dispatchJobChunkWithPerf(supabase, job, runtimePayload)));
