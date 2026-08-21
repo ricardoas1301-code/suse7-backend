@@ -9,9 +9,11 @@ import {
   nextOrdersSearchOffset,
   resetMlDrainRequestMetrics,
   resolveMlOrdersSearchSort,
+  resolveMlTimeoutMs,
   searchSellerOrdersPage,
   snapshotMlDrainRequestMetrics,
   setMlExternalAwaitHeartbeatHook,
+  setMlExternalAwaitDeadlineGuard,
 } from "../../handlers/ml/_helpers/mercadoLibreOrdersApi.js";
 import { getValidMLToken } from "../../handlers/ml/_helpers/mlToken.js";
 import { ML_MARKETPLACE_SLUG } from "../../handlers/ml/_helpers/mlMarketplace.js";
@@ -63,6 +65,10 @@ import {
   resolveHeartbeatIntervalMs,
   resolveHeartbeatOrderBatch,
 } from "./marketplaceSyncJobLease.js";
+import {
+  createInvocationDeadline,
+  resolveMinExternalWorkMs,
+} from "./marketplaceSyncInvocationDeadline.js";
 
 function resolveSalesSearchPageLimit() {
   return Math.min(
@@ -175,6 +181,43 @@ const ORDER_PROCESS_TIMEOUT_MS = Math.min(
   180000,
   Math.max(5000, parseInt(process.env.ML_INITIAL_SALES_ORDER_PROCESS_TIMEOUT_MS || "45000", 10) || 45000)
 );
+
+/** Estimativa conservadora para iniciar processamento de um pedido. */
+function resolveOrderWorkEstimateMs() {
+  return Math.min(ORDER_PROCESS_TIMEOUT_MS, 12000);
+}
+
+/** Estimativa para busca paginada ML antes de iniciar request. */
+function resolveOrdersSearchWorkEstimateMs() {
+  return Math.min(resolveMlTimeoutMs() + 2000, resolveMinExternalWorkMs() + 4000);
+}
+
+/**
+ * @param {ReturnType<typeof createInvocationDeadline>} deadline
+ * @param {{ processedInThisRun: number; processedTotal: number; progressTotal: number | null; jRow: Record<string, unknown> }} state
+ * @param {string} [reason]
+ */
+function buildSalesBatchSoftYield(deadline, state, reason = "soft_deadline_exhausted") {
+  deadline.logEvent("soft_yield", {
+    reason,
+    job_id: state.jRow?.id ?? null,
+    progress_current: state.processedTotal,
+    progress_total: state.progressTotal,
+  });
+  return {
+    stopped: true,
+    yielded: true,
+    yield_reason: reason,
+    processedInThisRun: state.processedInThisRun,
+    progress_current: state.processedTotal,
+    progress_total: state.progressTotal,
+    invocation_deadline: deadline.snapshot(),
+  };
+}
+
+function isMlBackoffYieldError(e) {
+  return e && typeof e === "object" && /** @type {{ code?: string }} */ (e).code === "ML_BACKOFF_YIELD";
+}
 /**
  * @param {string} event
  * @param {Record<string, unknown>} payload
@@ -562,7 +605,16 @@ async function completeStubJob(supabase, job, metaPatch) {
  * @param {{ deadlineMs: number; batchDetails: number; salesPageLimit?: number }} opts
  */
 async function processMlSalesBatchJob(supabase, job, opts) {
-  const { deadlineMs, batchDetails } = opts;
+  const invocationDeadline =
+    opts.invocationDeadline ??
+    createInvocationDeadline({
+      requestedBudgetMs:
+        opts.deadlineMs != null && Number.isFinite(Number(opts.deadlineMs))
+          ? Math.max(3000, Number(opts.deadlineMs) - Date.now())
+          : 120000,
+    });
+  const deadlineMs = invocationDeadline.softDeadlineMs;
+  const batchDetails = opts.batchDetails;
   const pageLimit = opts.salesPageLimit ?? resolveSalesSearchPageLimit();
   const heartbeatEvery = resolveSalesProgressHeartbeatEvery();
   let processedInThisRun = 0;
@@ -644,12 +696,18 @@ async function processMlSalesBatchJob(supabase, job, opts) {
     await heartbeatMarketplaceSyncJob(supabase, jRow, { ml_external_await: true });
     lastHeartbeatMs = Date.now();
   });
+  setMlExternalAwaitDeadlineGuard((delayMs) => invocationDeadline.shouldAllowBackoffSleep(delayMs));
 
   try {
+  invocationDeadline.logEvent("sales_batch_job_start", {
+    job_id: jRow.id ?? null,
+    job_type: job.job_type ?? null,
+  });
   return await processMlSalesBatchJobInner(supabase, {
     job,
     jRow,
     deadlineMs,
+    invocationDeadline,
     batchDetails,
     pageLimit,
     heartbeatEvery,
@@ -668,6 +726,7 @@ async function processMlSalesBatchJob(supabase, job, opts) {
   });
   } finally {
     setMlExternalAwaitHeartbeatHook(null);
+    setMlExternalAwaitDeadlineGuard(null);
   }
 }
 
@@ -680,6 +739,7 @@ async function processMlSalesBatchJobInner(supabase, ctx) {
     job,
     jRow,
     deadlineMs,
+    invocationDeadline,
     batchDetails,
     pageLimit,
     heartbeatEvery,
@@ -980,7 +1040,29 @@ async function processMlSalesBatchJobInner(supabase, ctx) {
     await tryWriteSalesImportCoverage(supabase, buildCoverageRow(status, finishedAt));
   };
 
-  while (Date.now() < deadlineMs) {
+  while (!invocationDeadline.isSoftExpired()) {
+    if (invocationDeadline.shouldStopBeforeNextExternalWork(resolveOrdersSearchWorkEstimateMs())) {
+      await safePatchProgress(
+        {
+          progress_total: progressTotal,
+          progress_current: processedTotal,
+          last_cursor: serializeSalesCursor(cursor),
+          metadata: {
+            ...metaRowBase(),
+            phase: salesJobType === "ml_historical_sales_backfill" ? "historical_sales_window" : "sales_recent",
+            sync_job_kind: salesJobType,
+            soft_yield_reason: "before_orders_search",
+          },
+        },
+        "soft_deadline_before_orders_search"
+      );
+      await flushCoverage("running", null);
+      return buildSalesBatchSoftYield(
+        invocationDeadline,
+        { jRow, processedInThisRun, processedTotal, progressTotal },
+        "soft_deadline_before_orders_search"
+      );
+    }
     await maybeFlushHybridHeartbeat("time_or_volume_tick");
     await safePatchProgress(
       {
@@ -1033,6 +1115,28 @@ async function processMlSalesBatchJobInner(supabase, ctx) {
         sort: resolveMlOrdersSearchSort(),
       });
     } catch (e) {
+      if (isMlBackoffYieldError(e)) {
+        await safePatchProgress(
+          {
+            progress_total: progressTotal,
+            progress_current: processedTotal,
+            last_cursor: serializeSalesCursor(cursor),
+            metadata: {
+              ...metaRowBase(),
+              phase: salesJobType === "ml_historical_sales_backfill" ? "historical_sales_window" : "sales_recent",
+              sync_job_kind: salesJobType,
+              soft_yield_reason: "ml_backoff_yield",
+            },
+          },
+          "soft_deadline_ml_backoff"
+        );
+        await flushCoverage("running", null);
+        return buildSalesBatchSoftYield(
+          invocationDeadline,
+          { jRow, processedInThisRun, processedTotal, progressTotal },
+          "ml_backoff_yield"
+        );
+      }
       const em = e?.message ? String(e.message) : String(e);
       const code = e && typeof e === "object" && "status" in e ? String(/** @type {{ status?: number }} */ (e).status) : "orders_search_fetch_error";
       logS7MlSalesHistory("[S7_ML_SALES_HISTORY_BATCH_ERROR]", {
@@ -1341,12 +1445,41 @@ async function processMlSalesBatchJobInner(supabase, ctx) {
     const nowIso = new Date().toISOString();
     let batchMaxCreated = null;
 
+    if (invocationDeadline.shouldStopBeforeNextExternalWork(resolveMinExternalWorkMs() + 2000)) {
+      await safePatchProgress(
+        {
+          progress_total: progressTotal,
+          progress_current: processedTotal,
+          last_cursor: serializeSalesCursor(cursor),
+          metadata: {
+            ...metaRowBase(),
+            phase: salesJobType === "ml_historical_sales_backfill" ? "historical_sales_window" : "sales_recent",
+            sync_job_kind: salesJobType,
+            soft_yield_reason: "before_order_batch",
+          },
+        },
+        "soft_deadline_before_order_batch"
+      );
+      await flushCoverage("running", null);
+      return buildSalesBatchSoftYield(
+        invocationDeadline,
+        { jRow, processedInThisRun, processedTotal, progressTotal },
+        "soft_deadline_before_order_batch"
+      );
+    }
+
     const detailConcurrency = resolveOrderDetailConcurrency();
     const fetchedPairs = await mapLimit(slice, detailConcurrency, async (oid) => {
+      if (invocationDeadline.shouldStopBeforeNextExternalWork(resolveMinExternalWorkMs())) {
+        return { oid, detail: null, err: null, skipped_deadline: true };
+      }
       try {
         const detail = await fetchOrderById(accessToken, oid, { marketplaceAccountId: accountId });
         return { oid, detail, err: null };
       } catch (e) {
+        if (isMlBackoffYieldError(e)) {
+          return { oid, detail: null, err: e, backoff_yield: true };
+        }
         return { oid, detail: null, err: e };
       }
     });
@@ -1355,6 +1488,29 @@ async function processMlSalesBatchJobInner(supabase, ctx) {
       salesJobType === "ml_historical_sales_backfill" ? "historical_sales_window" : "sales_recent";
 
     for (const pair of fetchedPairs) {
+      if (pair.backoff_yield || pair.skipped_deadline) {
+        await safePatchProgress(
+          {
+            progress_total: progressTotal,
+            progress_current: processedTotal,
+            last_cursor: serializeSalesCursor(cursor),
+            metadata: {
+              ...metaRowBase(),
+              phase: slicePhase,
+              sync_job_kind: salesJobType,
+              soft_yield_reason: pair.backoff_yield ? "ml_backoff_yield" : "before_order_detail",
+            },
+          },
+          "soft_deadline_mid_batch"
+        );
+        await flushCoverage("running", null);
+        return buildSalesBatchSoftYield(
+          invocationDeadline,
+          { jRow, processedInThisRun, processedTotal, progressTotal },
+          pair.backoff_yield ? "ml_backoff_yield" : "soft_deadline_before_order_detail"
+        );
+      }
+
       const oid = pair.oid;
       const orderIndex = processedTotal + 1;
       console.info("[S7][ml-sales-sync-order-step]", {
@@ -1483,6 +1639,30 @@ async function processMlSalesBatchJobInner(supabase, ctx) {
         batchMaxCreated = created;
       }
 
+      if (invocationDeadline.shouldStopBeforeNextExternalWork(resolveOrderWorkEstimateMs())) {
+        await safePatchProgress(
+          {
+            progress_total: progressTotal,
+            progress_current: processedTotal,
+            last_cursor: serializeSalesCursor(cursor),
+            last_synced_at: new Date().toISOString(),
+            metadata: {
+              ...metaRowBase(),
+              phase: slicePhase,
+              sync_job_kind: salesJobType,
+              soft_yield_reason: "before_order_persist",
+            },
+          },
+          "soft_deadline_before_order_persist"
+        );
+        await flushCoverage("running", null);
+        return buildSalesBatchSoftYield(
+          invocationDeadline,
+          { jRow, processedInThisRun, processedTotal, progressTotal },
+          "soft_deadline_before_order_persist"
+        );
+      }
+
       try {
         console.info("[S7][ml-sales-sync-order-step]", {
           syncRunId: jRow.id,
@@ -1493,6 +1673,10 @@ async function processMlSalesBatchJobInner(supabase, ctx) {
           total: progressTotal,
           step: "persist order/items/customer/snapshot/metrics",
         });
+        const orderTimeoutMs = Math.min(
+          ORDER_PROCESS_TIMEOUT_MS,
+          Math.max(1000, invocationDeadline.getRemainingSoftMs() - 500)
+        );
         await withTimeout(
           applyMlOrderDetailToMarketplaceSales(
             supabase,
@@ -1513,7 +1697,7 @@ async function processMlSalesBatchJobInner(supabase, ctx) {
               syncType: salesJobType,
             }
           ),
-          ORDER_PROCESS_TIMEOUT_MS,
+          orderTimeoutMs,
           "process_order"
         );
         console.info("[sales-sync] persist_order_ok", {
@@ -1655,6 +1839,13 @@ async function processMlSalesBatchJobInner(supabase, ctx) {
   }
 
   await flushCoverage("running", null);
+  if (invocationDeadline.isSoftExpired()) {
+    return buildSalesBatchSoftYield(
+      invocationDeadline,
+      { jRow, processedInThisRun, processedTotal, progressTotal },
+      "soft_deadline_exhausted"
+    );
+  }
   return {
     stopped: false,
     processedInThisRun,
@@ -1995,7 +2186,13 @@ async function dispatchJobChunkWithPerf(supabase, job, runtime) {
 export async function runMarketplaceAccountSyncWorker(supabase, opts = {}) {
   resetMlDrainRequestMetrics();
   const drainStartedAt = Date.now();
-  const budgetMs = resolveDrainTimeboxMs(opts);
+  const requestedBudgetMs = resolveDrainTimeboxMs(opts);
+  const invocationDeadline = createInvocationDeadline({
+    requestedBudgetMs,
+    startedAtMs: drainStartedAt,
+  });
+  invocationDeadline.logEvent("worker_start", {});
+  const budgetMs = invocationDeadline.effectiveBudgetMs;
   const salesPageLimit = resolveSalesSearchPageLimit();
   const batchDetails = resolveBatchDetails(opts, salesPageLimit);
   const maxJobsPerDrain = resolveMaxJobsPerDrain(opts);
@@ -2011,8 +2208,13 @@ export async function runMarketplaceAccountSyncWorker(supabase, opts = {}) {
         "Ainda há apenas 1 job inicial ML por conta por vez (evita estado conflitante). Valores > 1 ficam para fases futuras (jobs paralelos não conflitantes).",
     });
   }
-  const absoluteDeadlineMs = drainStartedAt + budgetMs;
-  const runtimePayload = { deadlineMs: absoluteDeadlineMs, batchDetails, salesPageLimit };
+  const absoluteDeadlineMs = invocationDeadline.softDeadlineMs;
+  const runtimePayload = {
+    invocationDeadline,
+    deadlineMs: absoluteDeadlineMs,
+    batchDetails,
+    salesPageLimit,
+  };
 
   /** @type {Record<string, unknown>[] } */
   const chunks = [];
@@ -2424,7 +2626,9 @@ export async function runMarketplaceAccountSyncWorker(supabase, opts = {}) {
  * @param {{ budgetMs?: number; batchDetails?: number; salesPageLimit?: number }} [opts]
  */
 export async function runScopedMarketplaceSyncJobDrain(supabase, jobId, opts = {}) {
-  const budgetMs = opts.budgetMs ?? 120000;
+  const requestedBudgetMs = opts.budgetMs ?? 120000;
+  const invocationDeadline = createInvocationDeadline({ requestedBudgetMs });
+  invocationDeadline.logEvent("scoped_drain_start", { job_id: jobId });
   const { data: job, error } = await supabase
     .from("marketplace_account_sync_jobs")
     .select("*")
@@ -2446,7 +2650,8 @@ export async function runScopedMarketplaceSyncJobDrain(supabase, jobId, opts = {
 
   const leaseAfterClaim = readJobLeaseMeta(claimed);
   const runtime = {
-    deadlineMs: Date.now() + budgetMs,
+    invocationDeadline,
+    deadlineMs: invocationDeadline.softDeadlineMs,
     batchDetails: opts.batchDetails ?? 50,
     salesPageLimit: opts.salesPageLimit ?? 50,
   };
@@ -2471,6 +2676,12 @@ export async function runScopedMarketplaceSyncJobDrain(supabase, jobId, opts = {
     .maybeSingle();
   const leaseFinal = readJobLeaseMeta(fresh ?? {});
 
+  invocationDeadline.logEvent("scoped_drain_done", {
+    job_id: jobId,
+    yielded: Boolean(drainOut?.yielded),
+    yield_reason: drainOut?.yield_reason ?? null,
+  });
+
   return {
     ok: true,
     job_id: jobId,
@@ -2480,6 +2691,9 @@ export async function runScopedMarketplaceSyncJobDrain(supabase, jobId, opts = {
     progress_current: fresh?.progress_current ?? null,
     progress_total: fresh?.progress_total ?? null,
     last_cursor: fresh?.last_cursor ?? null,
+    yielded: Boolean(drainOut?.yielded),
+    yield_reason: drainOut?.yield_reason ?? null,
+    invocation_deadline: invocationDeadline.snapshot(),
     drain_out: drainOut,
   };
 }

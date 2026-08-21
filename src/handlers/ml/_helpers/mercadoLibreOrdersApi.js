@@ -20,8 +20,24 @@ let drainRequestMetrics = { rateLimitCount: 0, retryCount: 0, timeoutCount: 0 };
 /** @type {(() => void | Promise<void>) | null} */
 let externalAwaitHeartbeatHook = null;
 
+/** Guard de soft deadline antes de sleep/backoff ML — (delayMs) => boolean */
+/** @type {((delayMs: number) => boolean) | null} */
+let externalAwaitDeadlineGuard = null;
+
 export function setMlExternalAwaitHeartbeatHook(fn) {
   externalAwaitHeartbeatHook = typeof fn === "function" ? fn : null;
+}
+
+/** @param {((delayMs: number) => boolean) | null} fn */
+export function setMlExternalAwaitDeadlineGuard(fn) {
+  externalAwaitDeadlineGuard = typeof fn === "function" ? fn : null;
+}
+
+export function resolveMlTimeoutMs() {
+  return Math.min(
+    120000,
+    Math.max(3000, parseInt(process.env.ML_REQUEST_TIMEOUT_MS || "28000", 10) || 28000)
+  );
 }
 
 async function invokeExternalAwaitHeartbeatHook() {
@@ -37,6 +53,11 @@ async function invokeExternalAwaitHeartbeatHook() {
 
 async function sleep(ms) {
   await invokeExternalAwaitHeartbeatHook();
+  if (externalAwaitDeadlineGuard && !externalAwaitDeadlineGuard(ms)) {
+    const err = new Error("ml_backoff_skipped_soft_deadline");
+    err.code = "ML_BACKOFF_YIELD";
+    throw err;
+  }
   return new Promise((r) => setTimeout(r, ms));
 }
 
@@ -46,13 +67,6 @@ export function resetMlDrainRequestMetrics() {
 
 export function snapshotMlDrainRequestMetrics() {
   return { ...drainRequestMetrics };
-}
-
-function resolveMlTimeoutMs() {
-  return Math.min(
-    120000,
-    Math.max(3000, parseInt(process.env.ML_REQUEST_TIMEOUT_MS || "28000", 10) || 28000)
-  );
 }
 
 function resolveMlMaxRetries() {
