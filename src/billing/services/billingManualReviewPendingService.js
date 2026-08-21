@@ -16,11 +16,14 @@ import {
   resolveBabyAdmissionCycleKey,
   resolveSalesLimitSnapshotFromMetadata,
 } from "./billingBillableSaleAdmissionService.js";
+import {
+  resolvePendingMaterializationCycleKey,
+} from "./billingManualReviewPendingMetadataService.js";
 import { loadCanonicalBillableSubscriptionContext } from "./billingCanonicalSubscriptionService.js";
 import { loadSellerEntitlementOverlay } from "./billingSellerEntitlementStoreService.js";
 import { resolveBillingAccessEntitlementSnapshot } from "./billingSubscriptionEntitlementService.js";
 
-export const MANUAL_REVIEW_PENDING_RECONCILER_DEFAULT_LIMIT = 50;
+export const MANUAL_REVIEW_PENDING_RECONCILER_DEFAULT_LIMIT = 10;
 export const MANUAL_REVIEW_RECOVERY_DEFAULT_LIMIT = 25;
 export const MANUAL_REVIEW_RECOVERY_LOOKBACK_DAYS = 30;
 export const MANUAL_REVIEW_PENDING_RETRY_INTERVAL_MS = 15 * 60 * 1000;
@@ -233,7 +236,22 @@ export async function materializeManualReviewPendingAfterSale(supabase, userId, 
   const snapshot = await resolveBillingAccessEntitlementSnapshot(supabase, userId, {
     now: input.now instanceof Date ? input.now : new Date(),
   });
-  const cycleKey = resolveBabyAdmissionCycleKey(mergedMeta, snapshot);
+  const classified = classifySalePeriodForQuota({
+    metadata: mergedMeta,
+    official_order_at: input.official_order_at,
+    snapshot_origin: snapshotOrigin,
+    now: input.now instanceof Date ? input.now : new Date(),
+  });
+  const cycleKey = resolvePendingMaterializationCycleKey(classified, mergedMeta);
+
+  if (!cycleKey) {
+    return {
+      ok: false,
+      skipped: true,
+      reason: "cycle_identity_indeterminate",
+      classification_reason: classified.reason ?? null,
+    };
+  }
 
   const official =
     resolveOfficialOrderAt({

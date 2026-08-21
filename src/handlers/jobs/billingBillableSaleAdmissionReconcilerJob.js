@@ -46,13 +46,18 @@ export default async function billingBillableSaleAdmissionReconcilerJobHandler(r
   const traceId = getTraceId(req);
   const auth = evaluateJobAuth(req);
   if (!auth.allow) {
-    return fail(res, 401, "unauthorized", { traceId });
+    return fail(res, { code: "UNAUTHORIZED", message: "Token de job inválido ou ausente." }, 401, traceId);
   }
 
   const supabaseUrl = config.supabaseUrl;
   const serviceKey = config.supabaseServiceRoleKey;
   if (!supabaseUrl || !serviceKey) {
-    return fail(res, 500, "supabase_env_missing", { traceId });
+    return fail(
+      res,
+      { code: "SUPABASE_ENV_MISSING", message: "Configuração do banco indisponível." },
+      500,
+      traceId,
+    );
   }
 
   const supabase = createClient(supabaseUrl, serviceKey, {
@@ -64,11 +69,16 @@ export default async function billingBillableSaleAdmissionReconcilerJobHandler(r
       source: `http_job:${auth.mode}`,
       batchLimit: 100,
     });
-    return ok(res, { ...result, auth_mode: auth.mode }, { traceId });
+    return ok(res, { ok: true, job: "billing-billable-sale-admission-reconciler", ...result, auth_mode: auth.mode, traceId });
   } catch (err) {
-    return fail(res, 500, "reconciler_failed", {
+    return fail(
+      res,
+      {
+        code: "RECONCILER_FAILED",
+        message: err instanceof Error ? err.message : String(err),
+      },
+      500,
       traceId,
-      message: err instanceof Error ? err.message : String(err),
-    });
+    );
   }
 }

@@ -2,6 +2,7 @@
 // P0.3-C.1B — reconciler Class B (PENDING_MANUAL_REVIEW) + gap recovery
 // ======================================================================
 
+import { BILLING_RECONCILER_EST_MS_PER_PENDING, BILLING_RECONCILER_EST_MS_PER_RECOVERY } from "../jobs/billingReconcilerInvocationBudget.js";
 import { randomUUID } from "node:crypto";
 import { logBilling } from "../billingLog.js";
 import { BILLING_SALE_PERIOD_CLASS } from "../billingConstants.js";
@@ -19,6 +20,9 @@ import {
   resolveUsageLimitForManualReviewPromote,
   upsertManualReviewPendingAdmission,
 } from "./billingManualReviewPendingService.js";
+import {
+  pendingCycleKeysAligned,
+} from "./billingManualReviewPendingMetadataService.js";
 import {
   isOnboardingImportOrigin,
   normalizeBillingSnapshotOrigin,
@@ -112,6 +116,33 @@ export async function reconcileOneManualReviewPendingAdmission(supabase, pending
     return { ok: true, outcome: "remain_pending", reason: action.reason };
   }
 
+  if (action.action === "promote") {
+    const targetCycleKey =
+      action.cycle_key != null
+        ? String(action.cycle_key)
+        : classified.cycle_key != null
+          ? String(classified.cycle_key)
+          : null;
+
+    if (!pendingCycleKeysAligned(pendingRow.cycle_key, targetCycleKey)) {
+      await upsertManualReviewPendingAdmission(supabase, userId, {
+        subscription_id: String(pendingRow.subscription_id),
+        cycle_key: String(pendingRow.cycle_key),
+        external_order_id: externalOrderId,
+        marketplace: String(pendingRow.marketplace),
+        marketplace_account_id: String(pendingRow.marketplace_account_id),
+        period_class: classified.class,
+        classification_reason: "cycle_identity_unresolved",
+        snapshot_origin: pendingRow.snapshot_origin,
+        official_order_at: classified.official_order_at ?? pendingRow.official_order_at,
+        next_recovery_at: computeManualReviewNextRecoveryAt(
+          options.now instanceof Date ? options.now : new Date(),
+        ),
+      });
+      return { ok: true, outcome: "remain_pending", reason: "cycle_identity_unresolved" };
+    }
+  }
+
   if (action.action === "finalize") {
     const result = await finalizeManualReviewNotBillable(supabase, userId, {
       admission_id: admissionId,
@@ -194,7 +225,7 @@ export async function reconcileOneManualReviewPendingAdmission(supabase, pending
 
 /**
  * @param {import("@supabase/supabase-js").SupabaseClient} supabase
- * @param {{ limit?: number; now?: Date }} [options]
+ * @param {{ limit?: number; now?: Date; deadline?: { shouldYield: (n?: number) => boolean } }} [options]
  */
 export async function reconcileManualReviewPendingBatch(supabase, options = {}) {
   const selected = await selectDueManualReviewPendingAdmissions(supabase, options);
@@ -205,12 +236,17 @@ export async function reconcileManualReviewPendingBatch(supabase, options = {}) 
     promoted: 0,
     final_not_billable: 0,
     errors: 0,
+    skipped_budget: 0,
   };
 
   /** @type {Array<Record<string, unknown>>} */
   const details = [];
 
   for (const row of selected) {
+    if (options.deadline?.shouldYield(BILLING_RECONCILER_EST_MS_PER_PENDING)) {
+      counts.skipped_budget += selected.length - details.length;
+      break;
+    }
     try {
       const result = await reconcileOneManualReviewPendingAdmission(
         supabase,
@@ -321,6 +357,7 @@ export async function selectOperationalSalesMissingAdmission(supabase, options =
  *   snapshot_origin?: string | null;
  *   dryRun?: boolean;
  *   now?: Date;
+ *   deadline?: { shouldYield: (n?: number) => boolean };
  * }} [options]
  */
 export async function recoverSalesMissingManualReviewPending(supabase, options = {}) {
@@ -336,6 +373,12 @@ export async function recoverSalesMissingManualReviewPending(supabase, options =
   const details = [];
 
   for (const sale of candidates) {
+    if (options.deadline?.shouldYield(BILLING_RECONCILER_EST_MS_PER_RECOVERY)) {
+      counts.skipped += candidates.length - details.filter((d) => !d.skipped_budget).length;
+      details.push({ skipped_budget: true, reason: "invocation_budget" });
+      break;
+    }
+
     const userId = String(sale.user_id ?? "");
     const externalOrderId = String(sale.external_order_id ?? "");
     const snapshotOrigin = normalizeBillingSnapshotOrigin(
