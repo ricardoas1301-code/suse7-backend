@@ -5,10 +5,35 @@
 import {
   computeEffectiveBudgetMs,
   createInvocationDeadline,
-  resolveDrainOrchestrationTimeboxMs,
-  resolveInvocationRequestedBudgetMs,
-  resolveMinimumUsefulJobStartMs,
+  resolveMinExternalWorkMs,
 } from "../src/services/marketplace/marketplaceSyncInvocationDeadline.js";
+
+function resolveInvocationRequestedBudgetMs(opts = {}) {
+  if (opts.budgetMs != null && Number.isFinite(Number(opts.budgetMs))) {
+    return Math.max(3000, Number(opts.budgetMs));
+  }
+  const raw =
+    process.env.MARKETPLACE_SYNC_INVOCATION_BUDGET_MS ??
+    process.env.ML_MARKETPLACE_SYNC_BUDGET_MS ??
+    "120000";
+  return Math.min(300000, Math.max(3000, parseInt(String(raw), 10) || 120000));
+}
+
+function resolveDrainOrchestrationTimeboxMs() {
+  const raw =
+    process.env.MARKETPLACE_SYNC_DRAIN_ORCHESTRATION_MS ??
+    process.env.MARKETPLACE_SYNC_DRAIN_TIMEBOX_MS ??
+    "15000";
+  return Math.min(120000, Math.max(3000, parseInt(String(raw), 10) || 15000));
+}
+
+function resolveMinimumUsefulJobStartMs() {
+  const mlTimeout = Math.min(
+    120000,
+    Math.max(3000, parseInt(process.env.ML_REQUEST_TIMEOUT_MS || "28000", 10) || 28000)
+  );
+  return Math.min(mlTimeout + 2000, resolveMinExternalWorkMs() + 4000);
+}
 
 /** @param {ReturnType<typeof createInvocationDeadline> | null | undefined} deadline @param {string} jobType */
 function evaluateJobStartBudget(deadline, jobType) {
