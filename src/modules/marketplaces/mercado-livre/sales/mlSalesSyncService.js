@@ -572,6 +572,8 @@ export async function applyMlOrderDetailToMarketplaceSales(
       await notifyBillableSaleRecorded(supabase, userId, {
         is_new_sale: true,
         external_order_id: extOrderId,
+        marketplace: ML_MARKETPLACE_SLUG,
+        marketplace_account_id: marketplaceAccountId,
         atomic_admission: atomicAdmission,
         snapshot_origin: snapshotOrigin,
         period_class: atomicAdmission?.period_class ?? null,

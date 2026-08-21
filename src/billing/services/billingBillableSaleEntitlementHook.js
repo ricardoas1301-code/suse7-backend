@@ -28,6 +28,7 @@ import {
   shouldBypassAtomicQuotaReservation,
 } from "./billingQuotaEligibilityService.js";
 import { resolveCanonicalAccessPrecedence } from "./billingAccessPrecedenceService.js";
+import { materializeManualReviewPendingAfterSale } from "./billingManualReviewPendingService.js";
 
 export {
   evaluateBillableSaleBeforeProcessingAtomic as evaluateBillableSaleBeforeProcessing,
@@ -77,9 +78,22 @@ function resolveObservationLogEvent(periodClass, reason) {
  *   period_class?: string | null;
  *   snapshot_origin?: string | null;
  *   official_order_at?: string | null;
+ *   marketplace?: string | null;
+ *   marketplace_account_id?: string | null;
  *   now?: Date;
  * }} options
  */
+function shouldMaterializeManualReviewPending(options, periodClass) {
+  const admission = options.atomic_admission;
+  if (!admission) return false;
+  return (
+    Boolean(admission.manual_review_required) ||
+    Boolean(admission.schedule_reconciliation) ||
+    admission.reason === "manual_review_required" ||
+    periodClass === BILLING_SALE_PERIOD_CLASS.MANUAL_REVIEW
+  );
+}
+
 export async function notifyBillableSaleRecorded(supabase, userId, options) {
   if (!options?.is_new_sale) {
     return { applied: false, reason: "deduplicated_reprocess" };
@@ -125,6 +139,52 @@ export async function notifyBillableSaleRecorded(supabase, userId, options) {
       /** @type {string|null} */ (periodClass),
       String(options.atomic_admission?.reason ?? ""),
     );
+
+    if (
+      shouldMaterializeManualReviewPending(options, /** @type {string|null} */ (periodClass)) &&
+      options.external_order_id &&
+      options.marketplace &&
+      options.marketplace_account_id
+    ) {
+      const pending = await materializeManualReviewPendingAfterSale(supabase, userId, {
+        external_order_id: String(options.external_order_id),
+        marketplace: String(options.marketplace),
+        marketplace_account_id: String(options.marketplace_account_id),
+        atomic_admission: options.atomic_admission,
+        period_class: periodClass,
+        classification_reason:
+          options.atomic_admission?.classification_reason != null
+            ? String(options.atomic_admission.classification_reason)
+            : null,
+        snapshot_origin: snapshotOrigin,
+        official_order_at: officialOrderAt,
+        now,
+      });
+
+      logBilling("billing", event, {
+        user_id: userId,
+        reason: options.atomic_admission?.reason ?? null,
+        period_class: periodClass,
+        snapshot_origin: snapshotOrigin,
+        official_order_at: officialOrderAt,
+        external_order_id: options.external_order_id ?? null,
+        pending_admission_id: pending.admission_id ?? null,
+        pending_created: pending.created ?? null,
+        pending_duplicate: pending.duplicate ?? null,
+      });
+
+      return {
+        applied: Boolean(pending.ok),
+        reason: String(options.atomic_admission?.reason ?? "manual_review_required"),
+        quota_bypassed: true,
+        manual_review_pending: pending,
+        schedule_reconciliation: true,
+        period_class: periodClass,
+        snapshot_origin: snapshotOrigin,
+        official_order_at: officialOrderAt,
+      };
+    }
+
     logBilling("billing", event, {
       user_id: userId,
       reason: options.atomic_admission?.reason ?? null,

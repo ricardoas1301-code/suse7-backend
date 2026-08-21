@@ -6,9 +6,20 @@
 
 import { logBilling } from "../billingLog.js";
 import { reconcileExpiredBillableSaleReservations } from "../services/billingBillableSaleAdmissionService.js";
+import {
+  MANUAL_REVIEW_PENDING_RECONCILER_DEFAULT_LIMIT,
+  MANUAL_REVIEW_RECOVERY_DEFAULT_LIMIT,
+} from "../services/billingManualReviewPendingService.js";
+import {
+  reconcileManualReviewPendingBatch,
+  recoverSalesMissingManualReviewPending,
+} from "../services/billingManualReviewPendingReconcilerService.js";
 
 export const BILLABLE_SALE_ADMISSION_RECONCILER_DEFAULTS = {
   batch_limit: 100,
+  /** Class B — pending manual review (separado de expired atomic). */
+  pending_batch_limit: MANUAL_REVIEW_PENDING_RECONCILER_DEFAULT_LIMIT,
+  recovery_limit: MANUAL_REVIEW_RECOVERY_DEFAULT_LIMIT,
   period_ms: 60_000,
   max_retries: 3,
   alert_after_exhausted_retries: true,
@@ -26,6 +37,8 @@ const lockState = {
  * @param {import("@supabase/supabase-js").SupabaseClient} supabase
  * @param {{
  *   batchLimit?: number;
+ *   pendingBatchLimit?: number;
+ *   recoveryLimit?: number;
  *   maxRetries?: number;
  *   source?: string;
  * }} [options]
@@ -43,6 +56,10 @@ export async function runBillableSaleAdmissionReconcilerJob(supabase, options = 
   lockState.lastError = null;
 
   const batchLimit = options.batchLimit ?? BILLABLE_SALE_ADMISSION_RECONCILER_DEFAULTS.batch_limit;
+  const pendingBatchLimit =
+    options.pendingBatchLimit ?? BILLABLE_SALE_ADMISSION_RECONCILER_DEFAULTS.pending_batch_limit;
+  const recoveryLimit =
+    options.recoveryLimit ?? BILLABLE_SALE_ADMISSION_RECONCILER_DEFAULTS.recovery_limit;
   const maxRetries = options.maxRetries ?? BILLABLE_SALE_ADMISSION_RECONCILER_DEFAULTS.max_retries;
   let attempt = 0;
   /** @type {Record<string, unknown> | null} */
@@ -52,15 +69,42 @@ export async function runBillableSaleAdmissionReconcilerJob(supabase, options = 
     while (attempt < maxRetries) {
       attempt += 1;
       try {
-        lastResult = await reconcileExpiredBillableSaleReservations(supabase, { batchLimit });
+        // Class A — expired/reservation recovery (prioridade: catraca atômica existente).
+        const expiredResult = await reconcileExpiredBillableSaleReservations(supabase, {
+          batchLimit,
+        });
+
+        // Class B — PENDING_MANUAL_REVIEW (promote/finalize only; nunca reserve v2).
+        const pendingResult = await reconcileManualReviewPendingBatch(supabase, {
+          limit: pendingBatchLimit,
+        });
+
+        // Gap recovery — sale persistida sem pending (limitado, pós-cutover operacional).
+        const recoveryResult = await recoverSalesMissingManualReviewPending(supabase, {
+          limit: recoveryLimit,
+          dryRun: false,
+        });
+
+        lastResult = {
+          class_a_expired: expiredResult,
+          class_b_pending: pendingResult,
+          sale_pending_recovery: recoveryResult,
+        };
+
         logBilling("billing", "BILLING_ADMISSION_RECONCILER_OK", {
           source: options.source ?? "cron",
           attempt,
           batch_limit: batchLimit,
-          processed: lastResult?.processed ?? null,
-          expired: lastResult?.expired ?? null,
-          finalized: lastResult?.finalized ?? null,
-          recovery: lastResult?.recovery ?? null,
+          pending_batch_limit: pendingBatchLimit,
+          processed: expiredResult?.processed ?? null,
+          expired: expiredResult?.expired ?? null,
+          finalized: expiredResult?.finalized ?? null,
+          recovery: expiredResult?.recovery ?? null,
+          pending_selected: pendingResult?.selected_count ?? null,
+          pending_remained: pendingResult?.remained_pending ?? null,
+          pending_promoted: pendingResult?.promoted ?? null,
+          pending_final_not_billable: pendingResult?.final_not_billable ?? null,
+          gap_recovery_materialized: recoveryResult?.materialized ?? null,
         });
         lockState.lastFinishedAt = new Date().toISOString();
         return { ok: true, attempt, result: lastResult };
