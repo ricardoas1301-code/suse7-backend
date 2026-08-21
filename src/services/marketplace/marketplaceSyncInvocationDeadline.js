@@ -1,13 +1,7 @@
 /**
  * SSOT — soft/hard deadline para invocações serverless do marketplace sync.
  *
- * Contrato (P0.2-N.1):
- * - Um relógio absoluto por HTTP invocation (T0 = request start).
- * - safeAbsoluteDeadline = MIN(T0 + requested, T0 + platformMax - shutdownMargin).
- * - Fase de orquestração (drain) e fase de job compartilham o MESMO relógio.
- * - MARKETPLACE_SYNC_DRAIN_TIMEBOX_MS limita apenas orquestração, NÃO o job.
- * - Nunca resetar o relógio após claim.
- *
+ * P0.2-N.1: MARKETPLACE_SYNC_DRAIN_TIMEBOX_MS limita orquestração, não o job.
  * effective_budget = MIN(requested_budget, platform_max - shutdown_margin)
  */
 
@@ -42,14 +36,13 @@ export function computeEffectiveBudgetMs(requestedBudgetMs, opts = {}) {
   const platformSafeWorkMs = Math.max(3000, platformMax - margin);
   const requested = Math.max(
     3000,
-    Math.min(300000, Number.isFinite(Number(requestedBudgetMs)) ? Number(requestedBudgetMs) : 120000)
+    Math.min(120000, Number.isFinite(Number(requestedBudgetMs)) ? Number(requestedBudgetMs) : 120000)
   );
   return Math.min(requested, platformSafeWorkMs);
 }
 
 /**
- * Budget solicitado da invocation HTTP (capado depois pelo platform-safe).
- * NÃO confundir com MARKETPLACE_SYNC_DRAIN_TIMEBOX_MS (orquestração only).
+ * Budget da invocation HTTP — NÃO usar MARKETPLACE_SYNC_DRAIN_TIMEBOX_MS aqui.
  * @param {{ budgetMs?: number }} [opts]
  */
 export function resolveInvocationRequestedBudgetMs(opts = {}) {
@@ -67,7 +60,7 @@ export function resolveInvocationRequestedBudgetMs(opts = {}) {
 }
 
 /**
- * Teto opcional só para fase A (pool/selector/recovery sweep) — não limita job work.
+ * Teto opcional da fase de orquestração (pool/selector) — não limita job work.
  */
 export function resolveDrainOrchestrationTimeboxMs() {
   const raw =
@@ -77,7 +70,6 @@ export function resolveDrainOrchestrationTimeboxMs() {
   return Math.min(120000, Math.max(3000, parseInt(String(raw), 10) || 15000));
 }
 
-/** Mínimo conservador para iniciar trabalho útil (primeira search ML). */
 export function resolveMinimumUsefulJobStartMs() {
   const raw = parseInt(process.env.MARKETPLACE_SYNC_MIN_USEFUL_JOB_START_MS || "0", 10);
   if (Number.isFinite(raw) && raw > 0) {
@@ -88,47 +80,6 @@ export function resolveMinimumUsefulJobStartMs() {
     Math.max(3000, parseInt(process.env.ML_REQUEST_TIMEOUT_MS || "28000", 10) || 28000)
   );
   return Math.min(mlTimeout + 2000, resolveMinExternalWorkMs() + 4000);
-}
-
-/**
- * Trace temporal seguro por invocation (sem PII).
- * @param {number} startedAtMs
- */
-export function createInvocationTrace(startedAtMs) {
-  /** @type {{ phase: string; at_ms: number; elapsed_ms: number }[]} */
-  const phases = [{ phase: "request_start", at_ms: startedAtMs, elapsed_ms: 0 }];
-  let lastAt = startedAtMs;
-
-  const mark = (phase) => {
-    const now = Date.now();
-    phases.push({
-      phase,
-      at_ms: now,
-      elapsed_ms: now - startedAtMs,
-    });
-    lastAt = now;
-  };
-
-  const durationSincePrevious = () => Date.now() - lastAt;
-
-  const summary = () => {
-    const now = Date.now();
-    /** @type {Record<string, number>} */
-    const durations = {};
-    for (let i = 1; i < phases.length; i += 1) {
-      const prev = phases[i - 1];
-      const cur = phases[i];
-      durations[`${prev.phase}_to_${cur.phase}_ms`] = cur.at_ms - prev.at_ms;
-    }
-    return {
-      request_start_ms: startedAtMs,
-      total_ms: now - startedAtMs,
-      phases: phases.map((p) => ({ phase: p.phase, elapsed_ms: p.elapsed_ms })),
-      phase_durations: durations,
-    };
-  };
-
-  return { mark, summary, durationSincePrevious };
 }
 
 /**
@@ -161,14 +112,12 @@ export function createInvocationDeadline(opts = {}) {
     invocation_started_at: new Date(startedAtMs).toISOString(),
     hard_deadline_at: new Date(hardDeadlineMs).toISOString(),
     soft_deadline_at: new Date(softDeadlineMs).toISOString(),
-    safe_absolute_deadline_at: new Date(softDeadlineMs).toISOString(),
     requested_budget_ms: requestedBudgetMs,
     effective_budget_ms: effectiveBudgetMs,
     platform_max_duration_ms: platformMaxMs,
     shutdown_margin_ms: shutdownMarginMs,
     elapsed_ms: nowFn() - startedAtMs,
     remaining_soft_ms: Math.max(0, softDeadlineMs - nowFn()),
-    remaining_safe_ms: Math.max(0, softDeadlineMs - nowFn()),
     remaining_hard_ms: Math.max(0, hardDeadlineMs - nowFn()),
   });
 
