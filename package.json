@@ -51,6 +51,7 @@
     "test:historical-grid-reconciliation": "node ./scripts/test_historical_grid_reconciliation_unit.mjs",
     "test:historical-window-unique-db-dev": "node ./scripts/test_historical_window_unique_db_dev.mjs",
     "test:marketplace-sync-invocation-deadline": "node ./scripts/test_marketplace_sync_invocation_deadline_unit.mjs",
+    "test:marketplace-sync-budget-starvation": "node ./scripts/test_marketplace_sync_budget_starvation_unit.mjs",
     "test:marketplace-sync-scheduler-historical-order": "node ./scripts/test_marketplace_sync_scheduler_historical_order_unit.mjs",
     "test:snapshot-immutability-stress": "node ./scripts/prove_snapshot_immutability_stress_concurrent.mjs",
     "test": "npm run test:listing-health-buckets && npm run test:product-health-buckets && npm run test:competition-health-buckets && npm run test:pricing-health-buckets",

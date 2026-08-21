@@ -224,6 +224,7 @@ export async function handleJobsMarketplaceAccountSync(req, res) {
       stage: "worker_dispatch_done",
       chunks_processed: out?.chunks_processed ?? (out?.ok ? 1 : 0),
       scoped_job_id: workerOpts.jobId ?? null,
+      server_processing_ms: out?.server_processing_ms ?? null,
     });
     logSyncCheckpoint(6, {
       stage: "incremental_sales_poll_done",
@@ -242,6 +243,7 @@ export async function handleJobsMarketplaceAccountSync(req, res) {
       ...(Object.keys(workerOpts).length ? { worker_opts: workerOpts } : {}),
       ...(workerOpts.maxChunks != null ? { requested_limit_chunks: workerOpts.maxChunks } : {}),
       ...out,
+      server_processing_ms: out?.server_processing_ms ?? null,
       auth_mode: auth.mode === "none" ? "none" : auth.mode,
       hint: workerOpts.jobId
         ? "Scoped drain: job_id processado exclusivamente (requer X-Job-Secret)."
