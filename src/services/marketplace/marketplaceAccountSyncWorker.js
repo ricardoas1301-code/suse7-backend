@@ -66,7 +66,6 @@ import {
 } from "./marketplaceSyncJobLease.js";
 import {
   createInvocationDeadline,
-  createInvocationTrace,
   resolveDrainOrchestrationTimeboxMs,
   resolveInvocationRequestedBudgetMs,
   resolveMinimumUsefulJobStartMs,
@@ -2023,9 +2022,7 @@ async function dispatchJobChunk(supabase, job, runtime) {
     };
   }
 
-  if (runtime.trace?.mark) runtime.trace.mark("claim_start");
   const claimed = await tryClaimMarketplaceSyncJob(supabase, job);
-  if (runtime.trace?.mark) runtime.trace.mark("claim_end");
   if (!claimed?.id) {
     console.info("[S7][marketplace-sync-drain-claim-skipped]", {
       job_id: job.id ?? null,
@@ -2204,7 +2201,6 @@ async function dispatchJobChunkWithPerf(supabase, job, runtime) {
 export async function runMarketplaceAccountSyncWorker(supabase, opts = {}) {
   resetMlDrainRequestMetrics();
   const drainStartedAt = Date.now();
-  const invocationTrace = createInvocationTrace(drainStartedAt);
   const requestedBudgetMs = resolveInvocationRequestedBudgetMs(opts);
   const orchestrationTimeboxMs = resolveDrainOrchestrationTimeboxMs();
   const invocationDeadline = createInvocationDeadline({
@@ -2215,7 +2211,6 @@ export async function runMarketplaceAccountSyncWorker(supabase, opts = {}) {
     requested_budget_ms: requestedBudgetMs,
     orchestration_timebox_ms: orchestrationTimeboxMs,
   });
-  invocationTrace.mark("worker_start");
   const budgetMs = invocationDeadline.effectiveBudgetMs;
   const absoluteDeadlineMs = invocationDeadline.softDeadlineMs;
   const orchestrationDeadlineMs = Math.min(
@@ -2242,7 +2237,6 @@ export async function runMarketplaceAccountSyncWorker(supabase, opts = {}) {
     deadlineMs: absoluteDeadlineMs,
     batchDetails,
     salesPageLimit,
-    trace: invocationTrace,
   };
 
   /** @type {Record<string, unknown>[] } */
@@ -2308,9 +2302,7 @@ export async function runMarketplaceAccountSyncWorker(supabase, opts = {}) {
     },
   });
 
-  invocationTrace.mark("recovery_start");
   const staleStats = await recoverStaleMarketplaceSyncJobs(supabase);
-  invocationTrace.mark("recovery_end");
   if (staleStats.running_requeued > 0 || staleStats.error_requeued > 0 || staleStats.terminal > 0) {
     console.warn("[S7][marketplace-sync-stale-recovery-sweep]", {
       ...staleStats,
@@ -2329,9 +2321,7 @@ export async function runMarketplaceAccountSyncWorker(supabase, opts = {}) {
       });
       break;
     }
-    invocationTrace.mark("pool_fetch_start");
     const rows = await fetchJobsPool(supabase, fetchPoolLimit);
-    invocationTrace.mark("pool_fetch_end");
     const distinctMarketplaceAccountIds = [
       ...new Set(rows.map((r) => String(r.marketplace_account_id || "").trim()).filter(Boolean)),
     ];
@@ -2361,12 +2351,10 @@ export async function runMarketplaceAccountSyncWorker(supabase, opts = {}) {
       ),
     });
     const accountIds = [...new Set(rows.map((r) => String(r.marketplace_account_id || "")).filter(Boolean))];
-    invocationTrace.mark("selector_start");
     const statusMap = await loadLatestJobStatusMap(supabase, accountIds);
     const activeChunkByAccount = await fetchActiveMlJobCountsByAccount(supabase, accountIds);
     const webhookBacklogByAccount = await fetchPendingOrdersV2WebhookCountByAccount(supabase, accountIds);
     const sorted = sortEligibleJobs(rows, statusMap, webhookBacklogByAccount);
-    invocationTrace.mark("selector_end");
 
     const sortedIdSet = new Set(sorted.map((j) => String(j.id ?? "")));
     for (const j of rows) {
@@ -2493,9 +2481,7 @@ export async function runMarketplaceAccountSyncWorker(supabase, opts = {}) {
       break;
     }
 
-    invocationTrace.mark("job_work_start");
     const waveResults = await Promise.all(picks.map((job) => dispatchJobChunkWithPerf(supabase, job, runtimePayload)));
-    invocationTrace.mark("job_work_end");
 
     console.info("[sales-sync] chunks_created", {
       wave: waveIndex,
@@ -2637,7 +2623,6 @@ export async function runMarketplaceAccountSyncWorker(supabase, opts = {}) {
   const incBudgetConfigured = Math.min(60000, Math.max(0, Number.isFinite(incBudgetRaw) ? incBudgetRaw : 14000));
   const remainingSafeForInc = invocationDeadline.getRemainingSafeMs();
   const incBudget = Math.min(incBudgetConfigured, Math.max(0, remainingSafeForInc - 1000));
-  invocationTrace.mark("incremental_poll_start");
   console.info("[sales-sync] incremental_poll_start", {
     budget_ms: incBudget,
     budget_configured_ms: incBudgetConfigured,
@@ -2692,12 +2677,9 @@ export async function runMarketplaceAccountSyncWorker(supabase, opts = {}) {
     error_count: incremental_sales_poll.errors?.length ?? 0,
   });
 
-  invocationTrace.mark("incremental_poll_end");
   const serverProcessingMs = Date.now() - drainStartedAt;
-  const invocationTraceSummary = invocationTrace.summary();
   console.info("[S7][marketplace-sync-invocation-trace]", {
     server_processing_ms: serverProcessingMs,
-    invocation_trace: invocationTraceSummary,
     invocation_deadline: invocationDeadline.snapshot(),
   });
 
