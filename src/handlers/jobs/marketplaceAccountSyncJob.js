@@ -176,7 +176,24 @@ export async function handleJobsMarketplaceAccountSync(req, res) {
     ),
   });
 
-  const supabase = createClient(config.supabaseUrl, config.supabaseServiceRoleKey, {
+  const supabaseUrl = config.supabaseUrl && String(config.supabaseUrl).trim();
+  const supabaseServiceRoleKey =
+    config.supabaseServiceRoleKey && String(config.supabaseServiceRoleKey).trim();
+  if (!supabaseUrl || !supabaseServiceRoleKey) {
+    console.error("[marketplace-account-sync-job] supabase_config_missing", {
+      vercel_env: process.env.VERCEL_ENV ?? null,
+      supabase_url_present: Boolean(supabaseUrl),
+      supabase_service_role_present: Boolean(supabaseServiceRoleKey),
+    });
+    return res.status(503).json({
+      ok: false,
+      error:
+        "Supabase não configurado neste deployment (SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY ausentes).",
+      vercel_env: process.env.VERCEL_ENV ?? null,
+    });
+  }
+
+  const supabase = createClient(supabaseUrl, supabaseServiceRoleKey, {
     auth: { autoRefreshToken: false, persistSession: false },
   });
   logSyncCheckpoint(3, { stage: "supabase_client_ready" });
