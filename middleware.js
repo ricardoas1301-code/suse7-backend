@@ -79,6 +79,10 @@ export default function middleware(request) {
   const headers = corsHeaders(origin);
 
   if (request.method === "OPTIONS") {
+    // Edge allowlist miss → delega preflight ao handler serverless (applyCors SSOT).
+    if (!headers["Access-Control-Allow-Origin"]) {
+      return next();
+    }
     return new Response(null, {
       status: 204,
       headers,
