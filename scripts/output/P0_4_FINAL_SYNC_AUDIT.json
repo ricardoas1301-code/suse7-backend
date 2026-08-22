@@ -1,0 +1,646 @@
+{
+  "generated_at": "2026-08-22T18:18:11.352Z",
+  "mission": "P0.4_FINAL_SYNC_NORMALIZATION",
+  "git": {
+    "backend_dev_sha": "ea9a96d3361604a7a2607bda46a79b4ab471e615",
+    "backend_main_sha": "2eda27b31d3af55be024447aecdedc49d8fa311b",
+    "scheduler_sha": "18ad658cbec29745a68e8406a0e281344eea8397"
+  },
+  "orchestration_inventory": {
+    "marketplace_sync_owner": {
+      "canonical": "suse7-scheduler/marketplace-account-sync-dev.yml",
+      "trigger": "schedule 2/5 * * * *",
+      "endpoint": "POST /api/jobs/marketplace-account-sync",
+      "backend_duplicate": "suse7-backend/marketplace-account-sync-cron-dev.yml schedule OFF (superseded)"
+    },
+    "webhook_ingest": {
+      "owner": "POST /api/ml/webhook (backend DEV hosted)",
+      "processor_drain": "suse7-backend/ml-webhook-events-cron-dev.yml schedule */1 * * * *",
+      "job": "POST /api/jobs/ml-webhook-events"
+    },
+    "scanner_fallback": {
+      "owner": "incremental_sales_poll inside marketplace-account-sync worker",
+      "cadence": "every marketplace sync tick (scheduler 2/5)"
+    },
+    "billing": {
+      "owner": "suse7-scheduler/billing-admission-reconciler-dev.yml",
+      "cadence": "9/15 * * * *"
+    },
+    "vercel_crons": "competition-daily-snapshot + daily-sales-summary only (no marketplace sync)",
+    "frontend": "observer only — sync-status display, no drain nudge"
+  },
+  "marketplace_schedule_rca": {
+    "question": "Who woke freshness while backend marketplace-account-sync-cron-dev.yml schedule was commented?",
+    "answer": "suse7-scheduler marketplace-account-sync-dev.yml (schedule ON 2/5 * * * *)",
+    "evidence": "GitHub runs event=schedule workflowName=Marketplace Account Sync Cron (DEV)",
+    "recent_runs": [
+      {
+        "conclusion": "success",
+        "createdAt": "2026-08-22T17:50:17Z",
+        "databaseId": 32588937895,
+        "event": "schedule",
+        "headSha": "18ad658cbec29745a68e8406a0e281344eea8397"
+      },
+      {
+        "conclusion": "success",
+        "createdAt": "2026-08-22T17:26:38Z",
+        "databaseId": 32587740795,
+        "event": "schedule",
+        "headSha": "92a3a54a4bda3b678852939f48223ffc34f67a99"
+      },
+      {
+        "conclusion": "success",
+        "createdAt": "2026-08-22T16:54:57Z",
+        "databaseId": 32586146304,
+        "event": "schedule",
+        "headSha": "92a3a54a4bda3b678852939f48223ffc34f67a99"
+      }
+    ]
+  },
+  "accounts": {
+    "rf": {
+      "label": "rf",
+      "account_id": "359327e4-9902-4213-a1c3-1de702ef92ee",
+      "ml_nickname": "LOJASRFMOVEIS",
+      "sales_total": 847,
+      "earliest_order": {
+        "external_order_id": "2000013028816888",
+        "date_created_marketplace": "2025-09-13T14:46:00+00:00"
+      },
+      "latest_order": {
+        "external_order_id": "2000018055213616",
+        "date_created_marketplace": "2026-08-21T20:31:28+00:00"
+      },
+      "watermark": "2026-08-21T20:31:28+00:00",
+      "ml_sales_last_sync_at": "2026-08-22T17:50:36.102+00:00",
+      "job_counts": {
+        "ml_historical_sales_backfill:done": 10,
+        "ml_initial_sales_recent:done": 1,
+        "ml_enable_webhook_monitoring:done": 1,
+        "ml_initial_customers_recent:done": 1,
+        "ml_initial_products:done": 1,
+        "ml_initial_fees:done": 1,
+        "ml_initial_listings_current:done": 1
+      },
+      "recent_jobs": [
+        {
+          "job_type": "ml_historical_sales_backfill",
+          "status": "done",
+          "updated_at": "2026-08-20T12:37:34.914+00:00"
+        },
+        {
+          "job_type": "ml_historical_sales_backfill",
+          "status": "done",
+          "updated_at": "2026-08-20T12:35:12.186+00:00"
+        },
+        {
+          "job_type": "ml_historical_sales_backfill",
+          "status": "done",
+          "updated_at": "2026-08-20T12:32:45.383+00:00"
+        },
+        {
+          "job_type": "ml_historical_sales_backfill",
+          "status": "done",
+          "updated_at": "2026-08-20T12:27:55.121+00:00"
+        },
+        {
+          "job_type": "ml_historical_sales_backfill",
+          "status": "done",
+          "updated_at": "2026-08-20T12:18:43.187+00:00"
+        },
+        {
+          "job_type": "ml_historical_sales_backfill",
+          "status": "done",
+          "updated_at": "2026-08-20T12:11:55.224+00:00"
+        },
+        {
+          "job_type": "ml_historical_sales_backfill",
+          "status": "done",
+          "updated_at": "2026-08-20T12:05:06.643+00:00"
+        },
+        {
+          "job_type": "ml_historical_sales_backfill",
+          "status": "done",
+          "updated_at": "2026-08-20T11:59:49.927+00:00"
+        }
+      ],
+      "set_diff_48h": {
+        "probe_from": "2026-08-20T18:18:12.976Z",
+        "probe_to": "2026-08-22T18:18:12.976Z",
+        "ml_count": 6,
+        "db_count": 6,
+        "missing_count": 0,
+        "missing_sample": []
+      },
+      "duplicate_logical_orders": 0
+    },
+    "insprazzo": {
+      "label": "insprazzo",
+      "account_id": "f4b8e92b-5416-422d-835e-b95e7ded28e4",
+      "ml_nickname": "INSPIRAZZO",
+      "sales_total": 1819,
+      "earliest_order": {
+        "external_order_id": "2000012957689896",
+        "date_created_marketplace": "2025-09-08T01:30:27+00:00"
+      },
+      "latest_order": {
+        "external_order_id": "2000018066151622",
+        "date_created_marketplace": "2026-08-22T17:14:37+00:00"
+      },
+      "watermark": "2026-08-22T17:14:37+00:00",
+      "ml_sales_last_sync_at": "2026-08-22T17:50:31.721+00:00",
+      "job_counts": {
+        "ml_historical_sales_backfill:done": 10,
+        "ml_initial_sales_recent:done": 1,
+        "ml_enable_webhook_monitoring:done": 1,
+        "ml_initial_customers_recent:done": 1,
+        "ml_initial_products:done": 1,
+        "ml_initial_fees:done": 1,
+        "ml_initial_listings_current:done": 1
+      },
+      "recent_jobs": [
+        {
+          "job_type": "ml_historical_sales_backfill",
+          "status": "done",
+          "updated_at": "2026-08-21T14:54:30.56+00:00"
+        },
+        {
+          "job_type": "ml_historical_sales_backfill",
+          "status": "done",
+          "updated_at": "2026-08-21T14:08:44.691+00:00"
+        },
+        {
+          "job_type": "ml_historical_sales_backfill",
+          "status": "done",
+          "updated_at": "2026-08-21T13:26:20.918+00:00"
+        },
+        {
+          "job_type": "ml_historical_sales_backfill",
+          "status": "done",
+          "updated_at": "2026-08-21T11:19:54.274+00:00"
+        },
+        {
+          "job_type": "ml_historical_sales_backfill",
+          "status": "done",
+          "updated_at": "2026-08-21T10:08:33.605+00:00"
+        },
+        {
+          "job_type": "ml_historical_sales_backfill",
+          "status": "done",
+          "updated_at": "2026-08-21T08:51:53.865+00:00"
+        },
+        {
+          "job_type": "ml_historical_sales_backfill",
+          "status": "done",
+          "updated_at": "2026-08-21T08:50:24.01+00:00"
+        },
+        {
+          "job_type": "ml_historical_sales_backfill",
+          "status": "done",
+          "updated_at": "2026-08-21T01:22:37.986+00:00"
+        }
+      ],
+      "set_diff_48h": {
+        "probe_from": "2026-08-20T18:18:15.008Z",
+        "probe_to": "2026-08-22T18:18:15.008Z",
+        "ml_count": 13,
+        "db_count": 13,
+        "missing_count": 0,
+        "missing_sample": []
+      },
+      "duplicate_logical_orders": 0
+    },
+    "super_metal": {
+      "label": "super_metal",
+      "account_id": "9ee145d1-b6ff-4a44-a0ca-3bab5d7e9ef0",
+      "ml_nickname": "SUPER METALRIO",
+      "sales_total": 1102,
+      "earliest_order": {
+        "external_order_id": "2000014822673878",
+        "date_created_marketplace": "2026-01-22T16:40:13+00:00"
+      },
+      "latest_order": {
+        "external_order_id": "2000018066219698",
+        "date_created_marketplace": "2026-08-22T17:19:25+00:00"
+      },
+      "watermark": "2026-08-22T17:19:25+00:00",
+      "ml_sales_last_sync_at": "2026-08-22T17:50:34.623+00:00",
+      "job_counts": {
+        "ml_historical_sales_backfill:done": 10,
+        "ml_initial_sales_recent:done": 1,
+        "ml_enable_webhook_monitoring:done": 1,
+        "ml_initial_customers_recent:done": 1,
+        "ml_initial_products:done": 1,
+        "ml_initial_fees:done": 1,
+        "ml_initial_listings_current:done": 1
+      },
+      "recent_jobs": [
+        {
+          "job_type": "ml_historical_sales_backfill",
+          "status": "done",
+          "updated_at": "2026-08-20T20:08:49.581+00:00"
+        },
+        {
+          "job_type": "ml_historical_sales_backfill",
+          "status": "done",
+          "updated_at": "2026-08-20T20:08:48.656+00:00"
+        },
+        {
+          "job_type": "ml_historical_sales_backfill",
+          "status": "done",
+          "updated_at": "2026-08-20T20:08:47.717+00:00"
+        },
+        {
+          "job_type": "ml_historical_sales_backfill",
+          "status": "done",
+          "updated_at": "2026-08-20T20:08:46.73+00:00"
+        },
+        {
+          "job_type": "ml_historical_sales_backfill",
+          "status": "done",
+          "updated_at": "2026-08-20T20:08:45.78+00:00"
+        },
+        {
+          "job_type": "ml_historical_sales_backfill",
+          "status": "done",
+          "updated_at": "2026-08-20T20:08:44.842+00:00"
+        },
+        {
+          "job_type": "ml_historical_sales_backfill",
+          "status": "done",
+          "updated_at": "2026-08-20T20:08:43.844+00:00"
+        },
+        {
+          "job_type": "ml_historical_sales_backfill",
+          "status": "done",
+          "updated_at": "2026-08-20T20:08:42.558+00:00"
+        }
+      ],
+      "set_diff_48h": {
+        "probe_from": "2026-08-20T18:18:16.638Z",
+        "probe_to": "2026-08-22T18:18:16.638Z",
+        "ml_count": 17,
+        "db_count": 17,
+        "missing_count": 0,
+        "missing_sample": []
+      },
+      "duplicate_logical_orders": 0
+    }
+  },
+  "rf_billing": [
+    {
+      "admission_result": "EXPIRED",
+      "c": 2
+    },
+    {
+      "admission_result": "PENDING_MANUAL_REVIEW",
+      "c": 10
+    }
+  ],
+  "webhook_witnesses": [
+    {
+      "external_order_id": "2000018066219698",
+      "webhook_event_id": "3df66aa0-47f4-45dc-881d-a6a42ad35847",
+      "webhook_status": "done",
+      "webhook_created_at": "2026-08-22 17:21:04.49775+00",
+      "webhook_processed_at": "2026-08-22 17:21:05.557+00",
+      "sale_created_at": "2026-08-22T17:19:32.694456+00:00",
+      "date_created_marketplace": "2026-08-22T17:19:25+00:00",
+      "latency_webhook_received_minus_mp_ms": 99497,
+      "latency_sale_persisted_minus_webhook_ms": -91803,
+      "latency_sale_persisted_minus_mp_ms": 7694
+    },
+    {
+      "external_order_id": "2000018022865836",
+      "webhook_event_id": "23fa92d2-51c8-4d4e-907b-fc86a17a6d68",
+      "webhook_status": "done",
+      "webhook_created_at": "2026-08-22 17:21:02.126398+00",
+      "webhook_processed_at": "2026-08-22 17:21:03.502+00",
+      "sale_created_at": "2026-08-20T16:35:35.030667+00:00",
+      "date_created_marketplace": "2026-08-19T22:16:50+00:00",
+      "latency_webhook_received_minus_mp_ms": 241452126,
+      "latency_sale_persisted_minus_webhook_ms": -175527096,
+      "latency_sale_persisted_minus_mp_ms": 65925030
+    },
+    {
+      "external_order_id": "2000017897374024",
+      "webhook_event_id": "ea8bd325-f022-449d-9298-56baa76700d7",
+      "webhook_status": "done",
+      "webhook_created_at": "2026-08-22 17:19:45.055789+00",
+      "webhook_processed_at": "2026-08-22 17:19:46.208+00",
+      "sale_created_at": "2026-08-20T11:34:28.954192+00:00",
+      "date_created_marketplace": "2026-08-12T16:06:51+00:00",
+      "latency_webhook_received_minus_mp_ms": 868374055,
+      "latency_sale_persisted_minus_webhook_ms": -193516101,
+      "latency_sale_persisted_minus_mp_ms": 674857954
+    },
+    {
+      "external_order_id": "2000017897374024",
+      "webhook_event_id": "6364ce0e-eb32-4aef-9082-862eb9e736d4",
+      "webhook_status": "done",
+      "webhook_created_at": "2026-08-22 17:19:44.163926+00",
+      "webhook_processed_at": "2026-08-22 17:19:45.379+00",
+      "sale_created_at": "2026-08-20T11:34:28.954192+00:00",
+      "date_created_marketplace": "2026-08-12T16:06:51+00:00",
+      "latency_webhook_received_minus_mp_ms": 868373163,
+      "latency_sale_persisted_minus_webhook_ms": -193515209,
+      "latency_sale_persisted_minus_mp_ms": 674857954
+    },
+    {
+      "external_order_id": "2000018066219698",
+      "webhook_event_id": "970b2815-288a-4080-8cb5-15b02261df97",
+      "webhook_status": "done",
+      "webhook_created_at": "2026-08-22 17:19:36.011117+00",
+      "webhook_processed_at": "2026-08-22 17:19:37.086+00",
+      "sale_created_at": "2026-08-22T17:19:32.694456+00:00",
+      "date_created_marketplace": "2026-08-22T17:19:25+00:00",
+      "latency_webhook_received_minus_mp_ms": 11011,
+      "latency_sale_persisted_minus_webhook_ms": -3317,
+      "latency_sale_persisted_minus_mp_ms": 7694
+    },
+    {
+      "external_order_id": "2000018066219698",
+      "webhook_event_id": "fd8a5459-5306-478b-a428-b84aea3c19e6",
+      "webhook_status": "done",
+      "webhook_created_at": "2026-08-22 17:19:35.119045+00",
+      "webhook_processed_at": "2026-08-22 17:19:36.188+00",
+      "sale_created_at": "2026-08-22T17:19:32.694456+00:00",
+      "date_created_marketplace": "2026-08-22T17:19:25+00:00",
+      "latency_webhook_received_minus_mp_ms": 10119,
+      "latency_sale_persisted_minus_webhook_ms": -2425,
+      "latency_sale_persisted_minus_mp_ms": 7694
+    },
+    {
+      "external_order_id": "2000018066219698",
+      "webhook_event_id": "be032365-84f9-476e-8762-80698f6f20a8",
+      "webhook_status": "done",
+      "webhook_created_at": "2026-08-22 17:19:34.180577+00",
+      "webhook_processed_at": "2026-08-22 17:19:36.42+00",
+      "sale_created_at": "2026-08-22T17:19:32.694456+00:00",
+      "date_created_marketplace": "2026-08-22T17:19:25+00:00",
+      "latency_webhook_received_minus_mp_ms": 9180,
+      "latency_sale_persisted_minus_webhook_ms": -1486,
+      "latency_sale_persisted_minus_mp_ms": 7694
+    },
+    {
+      "external_order_id": "2000018066219698",
+      "webhook_event_id": "8922e02d-fbc6-4cec-a374-7d4d83c26b55",
+      "webhook_status": "done",
+      "webhook_created_at": "2026-08-22 17:19:34.120036+00",
+      "webhook_processed_at": "2026-08-22 17:19:35.25+00",
+      "sale_created_at": "2026-08-22T17:19:32.694456+00:00",
+      "date_created_marketplace": "2026-08-22T17:19:25+00:00",
+      "latency_webhook_received_minus_mp_ms": 9120,
+      "latency_sale_persisted_minus_webhook_ms": -1426,
+      "latency_sale_persisted_minus_mp_ms": 7694
+    },
+    {
+      "external_order_id": "2000018066219698",
+      "webhook_event_id": "6062535b-9a2b-42c2-8994-2f12d19c9033",
+      "webhook_status": "done",
+      "webhook_created_at": "2026-08-22 17:19:31.718567+00",
+      "webhook_processed_at": "2026-08-22 17:19:33.98+00",
+      "sale_created_at": "2026-08-22T17:19:32.694456+00:00",
+      "date_created_marketplace": "2026-08-22T17:19:25+00:00",
+      "latency_webhook_received_minus_mp_ms": 6718,
+      "latency_sale_persisted_minus_webhook_ms": 976,
+      "latency_sale_persisted_minus_mp_ms": 7694
+    },
+    {
+      "external_order_id": "2000018066151622",
+      "webhook_event_id": "f82c6d51-d9db-4ecb-8910-432d59fc6f7d",
+      "webhook_status": "done",
+      "webhook_created_at": "2026-08-22 17:16:16.996225+00",
+      "webhook_processed_at": "2026-08-22 17:16:18.205+00",
+      "sale_created_at": "2026-08-22T17:14:44.428628+00:00",
+      "date_created_marketplace": "2026-08-22T17:14:37+00:00",
+      "latency_webhook_received_minus_mp_ms": 99996,
+      "latency_sale_persisted_minus_webhook_ms": -92568,
+      "latency_sale_persisted_minus_mp_ms": 7428
+    }
+  ],
+  "webhook_events_for_known_orders": [
+    {
+      "completed_at": "2026-08-22 14:26:13.398+00",
+      "created_at": "2026-08-22 14:26:12.13535+00",
+      "id": "33a7033b-bccf-4b62-a651-f257e1b29e7e",
+      "processed_at": "2026-08-22 14:26:13.398+00",
+      "resource": "/orders/2000018063922238",
+      "status": "done",
+      "topic": "orders_v2"
+    },
+    {
+      "completed_at": "2026-08-22 14:24:37.68+00",
+      "created_at": "2026-08-22 14:24:36.654915+00",
+      "id": "8c19b6bd-67a9-40f0-9124-6e8e76f7744f",
+      "processed_at": "2026-08-22 14:24:37.68+00",
+      "resource": "/orders/2000018063922238",
+      "status": "done",
+      "topic": "orders_v2"
+    },
+    {
+      "completed_at": "2026-08-22 14:24:37.018+00",
+      "created_at": "2026-08-22 14:24:35.974969+00",
+      "id": "1a87752c-1317-4cb3-acf3-2880f352e342",
+      "processed_at": "2026-08-22 14:24:37.018+00",
+      "resource": "/orders/2000018063922238",
+      "status": "done",
+      "topic": "orders_v2"
+    },
+    {
+      "completed_at": "2026-08-22 14:24:36.502+00",
+      "created_at": "2026-08-22 14:24:35.242404+00",
+      "id": "7357825c-02cd-4e7c-bebd-6d0d0e800f28",
+      "processed_at": "2026-08-22 14:24:36.502+00",
+      "resource": "/orders/2000018063922238",
+      "status": "done",
+      "topic": "orders_v2"
+    },
+    {
+      "completed_at": "2026-08-22 14:24:34.231+00",
+      "created_at": "2026-08-22 14:24:32.646389+00",
+      "id": "d19215bc-59f1-4c62-ad46-a3e0325c51b4",
+      "processed_at": "2026-08-22 14:24:34.231+00",
+      "resource": "/orders/2000018063922238",
+      "status": "done",
+      "topic": "orders_v2"
+    },
+    {
+      "completed_at": "2026-08-21 20:33:13.847+00",
+      "created_at": "2026-08-21 20:33:12.548251+00",
+      "id": "9fb26f69-237f-4af3-b5a9-0e5376073b34",
+      "processed_at": "2026-08-21 20:33:13.847+00",
+      "resource": "/orders/2000018055213616",
+      "status": "done",
+      "topic": "orders_v2"
+    },
+    {
+      "completed_at": "2026-08-21 20:31:40.545+00",
+      "created_at": "2026-08-21 20:31:39.495865+00",
+      "id": "46a45497-b98f-4e8d-b42f-e2fcc82c402d",
+      "processed_at": "2026-08-21 20:31:40.545+00",
+      "resource": "/orders/2000018055213616",
+      "status": "done",
+      "topic": "orders_v2"
+    },
+    {
+      "completed_at": "2026-08-21 20:31:38.696+00",
+      "created_at": "2026-08-21 20:31:37.48449+00",
+      "id": "4972f566-85dd-47fb-93fd-59642b9e3129",
+      "processed_at": "2026-08-21 20:31:38.696+00",
+      "resource": "/orders/2000018055213616",
+      "status": "done",
+      "topic": "orders_v2"
+    },
+    {
+      "completed_at": "2026-08-21 20:31:37.621+00",
+      "created_at": "2026-08-21 20:31:36.377744+00",
+      "id": "066b6af4-6383-4a20-a053-deffb40eaf0e",
+      "processed_at": "2026-08-21 20:31:37.621+00",
+      "resource": "/orders/2000018055213616",
+      "status": "done",
+      "topic": "orders_v2"
+    },
+    {
+      "completed_at": "2026-08-21 20:31:37.559+00",
+      "created_at": "2026-08-21 20:31:35.528921+00",
+      "id": "f2f4016a-a952-43fe-860c-2557e1634373",
+      "processed_at": "2026-08-21 20:31:37.559+00",
+      "resource": "/orders/2000018055213616",
+      "status": "done",
+      "topic": "orders_v2"
+    },
+    {
+      "completed_at": "2026-08-21 01:01:20.236+00",
+      "created_at": "2026-08-21 01:01:19.697189+00",
+      "id": "a43085f4-7203-4824-addb-d27a6ffce074",
+      "processed_at": "2026-08-21 01:01:20.236+00",
+      "resource": "/orders/2000018031307152",
+      "status": "ignored",
+      "topic": "orders_v2"
+    },
+    {
+      "completed_at": "2026-08-21 01:01:17.16+00",
+      "created_at": "2026-08-21 01:01:16.624148+00",
+      "id": "766edae3-ee8a-485b-bea6-6295f77d28ff",
+      "processed_at": "2026-08-21 01:01:17.16+00",
+      "resource": "/orders/2000018031307152",
+      "status": "ignored",
+      "topic": "orders_v2"
+    },
+    {
+      "completed_at": "2026-08-21 01:01:16.646+00",
+      "created_at": "2026-08-21 01:01:16.028012+00",
+      "id": "7c640a91-46e9-4b30-bdaf-5a2ff9467cb1",
+      "processed_at": "2026-08-21 01:01:16.646+00",
+      "resource": "/orders/2000018031307152",
+      "status": "ignored",
+      "topic": "orders_v2"
+    },
+    {
+      "completed_at": "2026-08-21 01:01:15.387+00",
+      "created_at": "2026-08-21 01:01:14.760074+00",
+      "id": "d3ae0a9e-dd7b-4663-ba43-c49d031e8337",
+      "processed_at": "2026-08-21 01:01:15.387+00",
+      "resource": "/orders/2000018031307152",
+      "status": "ignored",
+      "topic": "orders_v2"
+    },
+    {
+      "completed_at": "2026-08-21 00:59:39.194+00",
+      "created_at": "2026-08-21 00:59:38.573809+00",
+      "id": "44bb7b0c-7b35-4e06-be7e-63468e7f06b1",
+      "processed_at": "2026-08-21 00:59:39.194+00",
+      "resource": "/orders/2000018031307152",
+      "status": "ignored",
+      "topic": "orders_v2"
+    },
+    {
+      "completed_at": "2026-08-21 00:58:42.864+00",
+      "created_at": "2026-08-21 00:58:42.374062+00",
+      "id": "6c903b87-d4bc-4dc5-8f6d-7682e58ff119",
+      "processed_at": "2026-08-21 00:58:42.864+00",
+      "resource": "/orders/2000018031307152",
+      "status": "ignored",
+      "topic": "orders_v2"
+    },
+    {
+      "completed_at": "2026-08-20 13:14:32.287+00",
+      "created_at": "2026-08-20 13:14:31.577832+00",
+      "id": "33f1f666-610b-498f-9b8b-c860e590d11b",
+      "processed_at": "2026-08-20 13:14:32.287+00",
+      "resource": "/orders/2000018031307152",
+      "status": "ignored",
+      "topic": "orders_v2"
+    },
+    {
+      "completed_at": "2026-08-20 13:13:45.999+00",
+      "created_at": "2026-08-20 13:13:45.467559+00",
+      "id": "a9cb67bc-1eb7-4d6a-ad18-674cba302135",
+      "processed_at": "2026-08-20 13:13:45.999+00",
+      "resource": "/orders/2000018031307152",
+      "status": "ignored",
+      "topic": "orders_v2"
+    },
+    {
+      "completed_at": "2026-08-20 13:13:45.735+00",
+      "created_at": "2026-08-20 13:13:45.049151+00",
+      "id": "182b5a00-638c-4a87-83f9-06e0ba28fd2b",
+      "processed_at": "2026-08-20 13:13:45.735+00",
+      "resource": "/orders/2000018031307152",
+      "status": "ignored",
+      "topic": "orders_v2"
+    }
+  ],
+  "t20_expired_legacy": [
+    {
+      "admission_result": "EXPIRED",
+      "cycle_key": "p0_3c1b-t20-mt3bv784_0",
+      "external_order_id": "T20P_mt3bv784_0",
+      "id": "c28c64bb-52b3-43bc-8bef-fc1383cf22d8",
+      "reserved_at": "2026-08-21 19:13:52.347016+00"
+    },
+    {
+      "admission_result": "EXPIRED",
+      "cycle_key": "p0_3c1b-t20-mt3bw39c_0",
+      "external_order_id": "T20P_mt3bw39c_0",
+      "id": "463b39d6-56c8-49fd-9167-09282da565f5",
+      "reserved_at": "2026-08-21 19:14:33.902172+00"
+    }
+  ],
+  "natural_runs": {
+    "marketplace": [
+      {
+        "conclusion": "success",
+        "createdAt": "2026-08-22T17:50:17Z",
+        "databaseId": 32588937895,
+        "event": "schedule",
+        "headSha": "18ad658cbec29745a68e8406a0e281344eea8397"
+      },
+      {
+        "conclusion": "success",
+        "createdAt": "2026-08-22T17:26:38Z",
+        "databaseId": 32587740795,
+        "event": "schedule",
+        "headSha": "92a3a54a4bda3b678852939f48223ffc34f67a99"
+      }
+    ],
+    "billing": [
+      {
+        "conclusion": "success",
+        "createdAt": "2026-08-22T18:09:43Z",
+        "databaseId": 32589914616,
+        "event": "schedule",
+        "headSha": "18ad658cbec29745a68e8406a0e281344eea8397"
+      },
+      {
+        "conclusion": "success",
+        "createdAt": "2026-08-22T17:52:37Z",
+        "databaseId": 32589055550,
+        "event": "schedule",
+        "headSha": "18ad658cbec29745a68e8406a0e281344eea8397"
+      }
+    ]
+  },
+  "prod": "UNTOUCHED"
+}

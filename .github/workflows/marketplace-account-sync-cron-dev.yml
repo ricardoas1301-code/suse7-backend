@@ -6,12 +6,13 @@ name: Marketplace Account Sync Cron (DEV)
 #   Body: {"limit":1}
 # Vercel DEV: DEV_JOB_SECRET ou JOB_SECRET com o mesmo valor do GitHub.
 #
-# P0.2-M.1 — limit conservador (1 job/conta/onda). Schedule permanece OFF até homologação completa.
+# P0.2-M.1 — limit conservador (1 job/conta/onda).
+#
+# P0.4 — SUPERSEDED: owner canônico DEV = suse7-scheduler/marketplace-account-sync-dev.yml
+# Manter schedule OFF aqui evita dual-scheduler acidental com o scheduler repo.
+# workflow_dispatch permanece apenas para recovery/manual ops excepcionais.
 
 on:
-  # PAUSA TEMPORÁRIA P0.2 homologação runtime (2026-08-20) — reativar schedule após ticks controlados validados.
-  # schedule:
-  #   - cron: "*/1 * * * *"
   workflow_dispatch: {}
 
 concurrency:
