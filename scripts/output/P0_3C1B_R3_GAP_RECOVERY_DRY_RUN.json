@@ -1,0 +1,18 @@
+{
+  "ok": true,
+  "generated_at": "2026-08-22T16:08:13.690Z",
+  "rf_account_id": "359327e4-9902-4213-a1c3-1de702ef92ee",
+  "scanned": 25,
+  "manual_review_candidates": [
+    {
+      "external_order_id": "2000018055213616",
+      "date": "2026-08-21T20:31:28+00:00",
+      "classification": "MANUAL_REVIEW",
+      "reason": "cycle_window_unresolved",
+      "skipped": false,
+      "dry_run": true
+    }
+  ],
+  "skipped_count": 24,
+  "materialized": 0
+}

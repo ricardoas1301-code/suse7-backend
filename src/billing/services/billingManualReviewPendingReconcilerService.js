@@ -16,8 +16,10 @@ import {
   materializeManualReviewPendingAfterSale,
   promoteManualReviewPendingToReservation,
   reclassifyManualReviewPendingCommercially,
+  resolveManualReviewPendingCycle,
   resolveManualReviewReconciliationAction,
   resolveUsageLimitForManualReviewPromote,
+  normalizePendingCycleKeyForUpsert,
   upsertManualReviewPendingAdmission,
 } from "./billingManualReviewPendingService.js";
 import {
@@ -81,7 +83,7 @@ export async function reconcileOneManualReviewPendingAdmission(supabase, pending
     });
     await upsertManualReviewPendingAdmission(supabase, userId, {
       subscription_id: String(pendingRow.subscription_id),
-      cycle_key: String(pendingRow.cycle_key),
+      cycle_key: normalizePendingCycleKeyForUpsert(pendingRow.cycle_key),
       external_order_id: externalOrderId,
       marketplace: String(pendingRow.marketplace),
       marketplace_account_id: String(pendingRow.marketplace_account_id),
@@ -101,7 +103,7 @@ export async function reconcileOneManualReviewPendingAdmission(supabase, pending
   if (action.action === "remain_pending") {
     await upsertManualReviewPendingAdmission(supabase, userId, {
       subscription_id: String(pendingRow.subscription_id),
-      cycle_key: String(pendingRow.cycle_key),
+      cycle_key: normalizePendingCycleKeyForUpsert(pendingRow.cycle_key),
       external_order_id: externalOrderId,
       marketplace: String(pendingRow.marketplace),
       marketplace_account_id: String(pendingRow.marketplace_account_id),
@@ -123,11 +125,39 @@ export async function reconcileOneManualReviewPendingAdmission(supabase, pending
         : classified.cycle_key != null
           ? String(classified.cycle_key)
           : null;
+    const rowCycleKey = normalizePendingCycleKeyForUpsert(pendingRow.cycle_key);
 
-    if (!pendingCycleKeysAligned(pendingRow.cycle_key, targetCycleKey)) {
+    if (!rowCycleKey && targetCycleKey) {
+      const resolveResult = await resolveManualReviewPendingCycle(supabase, userId, {
+        admission_id: admissionId,
+        cycle_key: targetCycleKey,
+        resolution_reason: action.reason,
+      });
+      if (!resolveResult.ok) {
+        await upsertManualReviewPendingAdmission(supabase, userId, {
+          subscription_id: String(pendingRow.subscription_id),
+          cycle_key: null,
+          external_order_id: externalOrderId,
+          marketplace: String(pendingRow.marketplace),
+          marketplace_account_id: String(pendingRow.marketplace_account_id),
+          period_class: classified.class,
+          classification_reason: String(resolveResult.reason ?? "cycle_resolve_failed"),
+          snapshot_origin: pendingRow.snapshot_origin,
+          official_order_at: classified.official_order_at ?? pendingRow.official_order_at,
+          next_recovery_at: computeManualReviewNextRecoveryAt(
+            options.now instanceof Date ? options.now : new Date(),
+          ),
+        });
+        return {
+          ok: true,
+          outcome: "remain_pending",
+          reason: resolveResult.reason ?? "cycle_resolve_failed",
+        };
+      }
+    } else if (!pendingCycleKeysAligned(rowCycleKey, targetCycleKey)) {
       await upsertManualReviewPendingAdmission(supabase, userId, {
         subscription_id: String(pendingRow.subscription_id),
-        cycle_key: String(pendingRow.cycle_key),
+        cycle_key: rowCycleKey,
         external_order_id: externalOrderId,
         marketplace: String(pendingRow.marketplace),
         marketplace_account_id: String(pendingRow.marketplace_account_id),
@@ -166,10 +196,13 @@ export async function reconcileOneManualReviewPendingAdmission(supabase, pending
   });
 
   if (!promoteResult.ok) {
+    if (promoteResult.reason === "cycle_unresolved") {
+      return { ok: true, outcome: "remain_pending", reason: "cycle_unresolved" };
+    }
     if (promoteResult.reason === "baby_hard_limit_reached") {
       await upsertManualReviewPendingAdmission(supabase, userId, {
         subscription_id: String(pendingRow.subscription_id),
-        cycle_key: String(pendingRow.cycle_key),
+        cycle_key: normalizePendingCycleKeyForUpsert(pendingRow.cycle_key),
         external_order_id: externalOrderId,
         marketplace: String(pendingRow.marketplace),
         marketplace_account_id: String(pendingRow.marketplace_account_id),

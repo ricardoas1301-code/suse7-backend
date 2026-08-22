@@ -1,0 +1,194 @@
+{
+  "ok": true,
+  "generated_at_utc": "2026-08-22T16:03:05.868Z",
+  "project_ref": "alkelcaoexxbamqddaqv",
+  "temporal": {
+    "git_branch": "fix/ml-oauth-dev-persist-reconnect",
+    "git_head": "8978c983b16a8b413f1717f5f46d3bdae9d5aed8",
+    "git_head_subject": "feat(billing): add C.1M3 unresolved manual review cycle model",
+    "git_main_head": "2eda27b31d3af55be024447aecdedc49d8fa311b",
+    "backend_dev_baseline_note": "4af0002 = DEV hardening deploy; main HEAD separate",
+    "c1m3_commit": "8978c983b16a8b413f1717f5f46d3bdae9d5aed8",
+    "github_marketplace_schedule_last": null
+  },
+  "checkpoint": {
+    "source": "P0_3C1M3_DEV_HOMOLOGATION.json",
+    "timestamp": "2026-08-21T20:28:07.892Z",
+    "sales_orders_total": 846,
+    "watermark": "2026-08-21 19:05:07+00",
+    "rf_pending_count": 9
+  },
+  "rf": {
+    "account_id": "359327e4-9902-4213-a1c3-1de702ef92ee",
+    "sales_orders_total": 847,
+    "sales_delta_since_checkpoint": 1,
+    "max_date_created_marketplace": "2026-08-21T20:31:28+00:00",
+    "watermark": "2026-08-21T20:31:28+00:00",
+    "ml_sales_last_sync_at": "2026-08-22T15:54:24.432+00:00",
+    "new_orders_since_checkpoint": [],
+    "new_orders_count": 0,
+    "pending_admissions_count": 9,
+    "pending_admissions": [
+      {
+        "id": "3c94b4f2-c025-4ac4-a1c0-127b2cedbc59",
+        "external_order_id": "2000018053992512",
+        "cycle_key": "p0_3c1b-t20-mt3bxnw5_4",
+        "idempotency_key": "billable_sale:56a32441-b4ec-4de2-8657-0b237b8e4c15:p0_3c1b-t20-mt3bxnw5_4:mercado_livre:359327e4-9902-4213-a1c3-1de702ef92ee:2000018053992512",
+        "official_order_at": "2026-08-21T19:05:07+00:00",
+        "classification_reason": "cycle_identity_unresolved",
+        "snapshot_origin": "operational_sync",
+        "admission_result": "PENDING_MANUAL_REVIEW"
+      },
+      {
+        "id": "058edc71-4dbd-4fb8-8167-8160dc9dc94b",
+        "external_order_id": "2000018040503820",
+        "cycle_key": "p0_3c1b-t20-mt3bxnw5_4",
+        "idempotency_key": "billable_sale:56a32441-b4ec-4de2-8657-0b237b8e4c15:p0_3c1b-t20-mt3bxnw5_4:mercado_livre:359327e4-9902-4213-a1c3-1de702ef92ee:2000018040503820",
+        "official_order_at": "2026-08-20T22:22:22+00:00",
+        "classification_reason": "cycle_identity_unresolved",
+        "snapshot_origin": "operational_sync",
+        "admission_result": "PENDING_MANUAL_REVIEW"
+      },
+      {
+        "id": "3302438b-72ca-47ab-a43a-fb9e6cf824b1",
+        "external_order_id": "2000018038839852",
+        "cycle_key": "p0_3c1b-t20-mt3bxnw5_4",
+        "idempotency_key": "billable_sale:56a32441-b4ec-4de2-8657-0b237b8e4c15:p0_3c1b-t20-mt3bxnw5_4:mercado_livre:359327e4-9902-4213-a1c3-1de702ef92ee:2000018038839852",
+        "official_order_at": "2026-08-20T20:36:24+00:00",
+        "classification_reason": "cycle_identity_unresolved",
+        "snapshot_origin": "operational_sync",
+        "admission_result": "PENDING_MANUAL_REVIEW"
+      },
+      {
+        "id": "c3569727-e926-47f7-956c-9b1bb0936417",
+        "external_order_id": "2000018037118698",
+        "cycle_key": "p0_3c1b-t20-mt3bxnw5_4",
+        "idempotency_key": "billable_sale:56a32441-b4ec-4de2-8657-0b237b8e4c15:p0_3c1b-t20-mt3bxnw5_4:mercado_livre:359327e4-9902-4213-a1c3-1de702ef92ee:2000018037118698",
+        "official_order_at": "2026-08-20T18:51:15+00:00",
+        "classification_reason": "cycle_identity_unresolved",
+        "snapshot_origin": "operational_sync",
+        "admission_result": "PENDING_MANUAL_REVIEW"
+      },
+      {
+        "id": "7394ea7a-28da-42ad-bb74-f3e6713f7ae8",
+        "external_order_id": "2000018050953590",
+        "cycle_key": "p0_3c1b-t20-mt3bxnw5_4",
+        "idempotency_key": "billable_sale:56a32441-b4ec-4de2-8657-0b237b8e4c15:p0_3c1b-t20-mt3bxnw5_4:mercado_livre:359327e4-9902-4213-a1c3-1de702ef92ee:2000018050953590",
+        "official_order_at": "2026-08-21T15:51:06+00:00",
+        "classification_reason": "cycle_identity_unresolved",
+        "snapshot_origin": "operational_sync",
+        "admission_result": "PENDING_MANUAL_REVIEW"
+      },
+      {
+        "id": "a843c92e-b669-4ae9-90e1-d117a33c2622",
+        "external_order_id": "2000018032949392",
+        "cycle_key": "p0_3c1b-t20-mt3bxnw5_4",
+        "idempotency_key": "billable_sale:56a32441-b4ec-4de2-8657-0b237b8e4c15:p0_3c1b-t20-mt3bxnw5_4:mercado_livre:359327e4-9902-4213-a1c3-1de702ef92ee:2000018032949392",
+        "official_order_at": "2026-08-20T14:52:01+00:00",
+        "classification_reason": "cycle_identity_unresolved",
+        "snapshot_origin": "operational_sync",
+        "admission_result": "PENDING_MANUAL_REVIEW"
+      },
+      {
+        "id": "c820b2b3-9bc7-45dc-847b-16dd3a8512e4",
+        "external_order_id": "2000018032559544",
+        "cycle_key": "p0_3c1b-t20-mt3bxnw5_4",
+        "idempotency_key": "billable_sale:56a32441-b4ec-4de2-8657-0b237b8e4c15:p0_3c1b-t20-mt3bxnw5_4:mercado_livre:359327e4-9902-4213-a1c3-1de702ef92ee:2000018032559544",
+        "official_order_at": "2026-08-20T14:29:17+00:00",
+        "classification_reason": "cycle_identity_unresolved",
+        "snapshot_origin": "operational_sync",
+        "admission_result": "PENDING_MANUAL_REVIEW"
+      },
+      {
+        "id": "17802411-c323-407e-ab8d-159a0ea740b7",
+        "external_order_id": "2000018031307152",
+        "cycle_key": "p0_3c1b-t20-mt3bxnw5_4",
+        "idempotency_key": "billable_sale:56a32441-b4ec-4de2-8657-0b237b8e4c15:p0_3c1b-t20-mt3bxnw5_4:mercado_livre:359327e4-9902-4213-a1c3-1de702ef92ee:2000018031307152",
+        "official_order_at": "2026-08-20T13:12:56+00:00",
+        "classification_reason": "cycle_identity_unresolved",
+        "snapshot_origin": "operational_sync",
+        "admission_result": "PENDING_MANUAL_REVIEW"
+      },
+      {
+        "id": "c2ed2586-6608-4ebb-b1e5-b1bbc27ad81f",
+        "external_order_id": "2000018030147554",
+        "cycle_key": "p0_3c1b-t20-mt3bxnw5_4",
+        "idempotency_key": "billable_sale:56a32441-b4ec-4de2-8657-0b237b8e4c15:p0_3c1b-t20-mt3bxnw5_4:mercado_livre:359327e4-9902-4213-a1c3-1de702ef92ee:2000018030147554",
+        "official_order_at": "2026-08-20T11:40:46+00:00",
+        "classification_reason": "cycle_identity_unresolved",
+        "snapshot_origin": "operational_sync",
+        "admission_result": "PENDING_MANUAL_REVIEW"
+      }
+    ],
+    "witness": {
+      "external_order_id": "2000018031307152",
+      "sale": 0,
+      "pending": 1,
+      "admission_id": "17802411-c323-407e-ab8d-159a0ea740b7",
+      "cycle_key": "p0_3c1b-t20-mt3bxnw5_4",
+      "reserved": 0
+    },
+    "set_diff": {
+      "probe_from": "2026-08-20T16:03:02.709Z",
+      "probe_to": "2026-08-22T16:03:02.709Z",
+      "ml_count": 6,
+      "db_count": 6,
+      "missing_count": 0,
+      "missing_sample": []
+    },
+    "sales_api_visibility": {
+      "list_top15_count": 0,
+      "new_orders_visible_in_top15": 0,
+      "new_orders_visible": [],
+      "duplicates_in_top15": true
+    }
+  },
+  "compares": {
+    "super_metal": {
+      "label": "super_metal",
+      "account_id": "9ee145d1-b6ff-4a44-a0ca-3bab5d7e9ef0",
+      "ml_nickname": "SUPER METALRIO",
+      "sales_total": 1100,
+      "watermark": "2026-08-22T14:24:25+00:00",
+      "ml_sales_last_sync_at": "2026-08-22T15:54:23.06+00:00",
+      "latest_order": {
+        "external_order_id": "2000018063922238",
+        "date_created_marketplace": "2026-08-22T14:24:25+00:00",
+        "created_at": "2026-08-22T14:24:33.177749+00:00"
+      },
+      "recent_job_counts": {
+        "ml_historical_sales_backfill:done": 10,
+        "ml_initial_sales_recent:done": 1,
+        "ml_enable_webhook_monitoring:done": 1,
+        "ml_initial_customers_recent:done": 1,
+        "ml_initial_products:done": 1,
+        "ml_initial_fees:done": 1,
+        "ml_initial_listings_current:done": 1
+      }
+    },
+    "insprazzo": {
+      "label": "insprazzo",
+      "account_id": "f4b8e92b-5416-422d-835e-b95e7ded28e4",
+      "ml_nickname": "INSPIRAZZO",
+      "sales_total": 1818,
+      "watermark": "2026-08-22T02:49:43+00:00",
+      "ml_sales_last_sync_at": "2026-08-22T15:54:21.618+00:00",
+      "latest_order": {
+        "external_order_id": "2000018060170020",
+        "date_created_marketplace": "2026-08-22T02:49:43+00:00",
+        "created_at": "2026-08-22T02:49:50.152101+00:00"
+      },
+      "recent_job_counts": {
+        "ml_historical_sales_backfill:done": 10,
+        "ml_initial_sales_recent:done": 1,
+        "ml_enable_webhook_monitoring:done": 1,
+        "ml_initial_customers_recent:done": 1,
+        "ml_initial_products:done": 1,
+        "ml_initial_fees:done": 1,
+        "ml_initial_listings_current:done": 1
+      }
+    }
+  },
+  "phase0_verdict": "PASS",
+  "block_reason": null
+}

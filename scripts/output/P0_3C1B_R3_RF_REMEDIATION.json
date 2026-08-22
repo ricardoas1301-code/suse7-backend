@@ -1,0 +1,10 @@
+{
+  "ok": true,
+  "mode": "dry_run",
+  "generated_at": "2026-08-22T16:07:53.611Z",
+  "expected_count": 9,
+  "candidate_count": 0,
+  "candidates": [],
+  "witness_admission_id": "17802411-c323-407e-ab8d-159a0ea740b7",
+  "already_remediated": true
+}

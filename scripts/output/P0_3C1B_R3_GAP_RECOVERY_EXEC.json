@@ -1,0 +1,12 @@
+{
+  "ok": true,
+  "materialized": 1,
+  "details": [
+    {
+      "external_order_id": "2000018055213616",
+      "ok": true,
+      "reason": null,
+      "admission_id": "b5c83db0-9a98-4751-ad3a-76196196ef20"
+    }
+  ]
+}

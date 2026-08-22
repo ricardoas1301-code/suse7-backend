@@ -80,8 +80,8 @@ check("H5 budget SSOT 45s", BILLING_RECONCILER_INVOCATION_BUDGET_MS === 45_000);
 
 // H6–H9 cycle
 check(
-  "H6 remain_pending preserves row cycle_key on upsert",
-  reconcilerSvcSrc.includes("cycle_key: String(pendingRow.cycle_key)") &&
+  "H6 remain_pending uses normalized cycle_key on upsert",
+  reconcilerSvcSrc.includes("normalizePendingCycleKeyForUpsert(pendingRow.cycle_key)") &&
     reconcilerSvcSrc.includes('outcome: "remain_pending"'),
 );
 check(
@@ -90,10 +90,13 @@ check(
     reconcilerSvcSrc.includes("cycle_identity_unresolved"),
 );
 check(
-  "H8 indeterminate cycle skips materialization",
-  fs
+  "H8 v2 materializes unresolved pending (no skip indeterminate)",
+  !fs
     .readFileSync(path.join(root, "src/billing/services/billingManualReviewPendingService.js"), "utf8")
-    .includes("cycle_identity_indeterminate"),
+    .includes('reason: "cycle_identity_indeterminate"') &&
+    fs
+      .readFileSync(path.join(root, "src/billing/services/billingManualReviewPendingService.js"), "utf8")
+      .includes("billing_upsert_manual_review_pending_v2"),
 );
 const indeterminate = resolvePendingMaterializationCycleKey(
   { manual_review_required: true, reason: "quota_counting_started_at_missing" },

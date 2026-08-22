@@ -80,7 +80,7 @@ export function computeManualReviewNextRecoveryAt(now = new Date()) {
  * @param {string} userId
  * @param {{
  *   subscription_id: string;
- *   cycle_key: string;
+ *   cycle_key?: string | null;
  *   external_order_id: string;
  *   marketplace: string;
  *   marketplace_account_id: string;
@@ -105,10 +105,15 @@ export async function upsertManualReviewPendingAdmission(supabase, userId, input
         ? String(input.next_recovery_at)
         : computeManualReviewNextRecoveryAt().toISOString();
 
-  const { data, error } = await supabase.rpc("billing_upsert_manual_review_pending_v1", {
+  const cycleKey =
+    input.cycle_key != null && String(input.cycle_key).trim() !== ""
+      ? String(input.cycle_key)
+      : null;
+
+  const { data, error } = await supabase.rpc("billing_upsert_manual_review_pending_v2", {
     p_user_id: userId,
     p_subscription_id: input.subscription_id,
-    p_cycle_key: input.cycle_key,
+    p_cycle_key: cycleKey,
     p_external_order_id: input.external_order_id,
     p_marketplace: input.marketplace,
     p_marketplace_account_id: input.marketplace_account_id,
@@ -129,10 +134,52 @@ export async function upsertManualReviewPendingAdmission(supabase, userId, input
     created: Boolean(row.created),
     duplicate: Boolean(row.duplicate),
     admission_id: row.admission_id ?? null,
+    cycle_unresolved: Boolean(row.cycle_unresolved),
     reason: row.reason ?? null,
   });
 
   return row;
+}
+
+/**
+ * @param {import("@supabase/supabase-js").SupabaseClient} supabase
+ * @param {string} userId
+ * @param {{
+ *   admission_id: string;
+ *   cycle_key: string;
+ *   resolution_reason?: string | null;
+ * }} input
+ */
+export async function resolveManualReviewPendingCycle(supabase, userId, input) {
+  const { data, error } = await supabase.rpc("billing_resolve_pending_cycle_v1", {
+    p_user_id: userId,
+    p_admission_id: input.admission_id,
+    p_cycle_key: input.cycle_key,
+    p_resolution_reason: input.resolution_reason ?? null,
+  });
+
+  if (error) throw error;
+
+  const row = data && typeof data === "object" ? /** @type {Record<string, unknown>} */ (data) : {};
+  logBilling("billing", "BILLING_MANUAL_REVIEW_RESOLVE_CYCLE", {
+    user_id: userId,
+    admission_id: input.admission_id,
+    ok: Boolean(row.ok),
+    resolved: Boolean(row.resolved),
+    reason: row.reason ?? null,
+    cycle_key: row.cycle_key ?? null,
+  });
+
+  return row;
+}
+
+/**
+ * @param {unknown} cycleKey
+ */
+export function normalizePendingCycleKeyForUpsert(cycleKey) {
+  if (cycleKey == null) return null;
+  const trimmed = String(cycleKey).trim();
+  return trimmed !== "" ? trimmed : null;
 }
 
 /**
@@ -243,15 +290,6 @@ export async function materializeManualReviewPendingAfterSale(supabase, userId, 
     now: input.now instanceof Date ? input.now : new Date(),
   });
   const cycleKey = resolvePendingMaterializationCycleKey(classified, mergedMeta);
-
-  if (!cycleKey) {
-    return {
-      ok: false,
-      skipped: true,
-      reason: "cycle_identity_indeterminate",
-      classification_reason: classified.reason ?? null,
-    };
-  }
 
   const official =
     resolveOfficialOrderAt({
