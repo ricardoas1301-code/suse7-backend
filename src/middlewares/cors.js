@@ -78,6 +78,7 @@ export function applyCors(req, res) {
   const allowedOrigins = new Set([
     "https://suse7.com.br",
     "https://www.suse7.com.br",
+    "https://suse7-frontend-dev.vercel.app",
     "http://localhost:5173",
     "http://localhost:5174",
     "http://localhost:5175",

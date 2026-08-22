@@ -482,14 +482,23 @@ export function buildSaleDetailGeneralBlock(row, order, item = null) {
       ? /** @type {Record<string, unknown>} */ (item.raw_json)
       : null;
 
-  const saleNumberRaw =
-    row.sale_display_code != null
-      ? String(row.sale_display_code).trim()
+  const technicalOrderId =
+    order?.external_order_id != null
+      ? String(order.external_order_id).trim()
       : row.external_order_id != null
         ? String(row.external_order_id).trim()
-        : order?.external_order_id != null
-          ? String(order.external_order_id).trim()
-          : "";
+        : "";
+
+  const sellerFacingPackId =
+    order?.external_pack_id != null && String(order.external_pack_id).trim() !== ""
+      ? String(order.external_pack_id).trim()
+      : null;
+
+  const saleNumberRaw =
+    sellerFacingPackId ??
+    (row.sale_display_code != null
+      ? String(row.sale_display_code).trim()
+      : technicalOrderId || "");
 
   const sale_status_label = resolveSaleOperationalStatusLabel(
     orderRaw,
@@ -522,7 +531,8 @@ export function buildSaleDetailGeneralBlock(row, order, item = null) {
     sale_date: row.sale_date ?? null,
     sale_number: saleNumberRaw || null,
     sale_number_display: formatMlSaleNumberDisplay(saleNumberRaw),
-    external_order_id: saleNumberRaw || null,
+    external_order_id: technicalOrderId || null,
+    external_pack_id: sellerFacingPackId,
     marketplace: row.marketplace ?? null,
     marketplace_label: row.marketplace_label ?? null,
     buyer_display_name: row.buyer_display_name ?? null,

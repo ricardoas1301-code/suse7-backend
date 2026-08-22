@@ -81,25 +81,48 @@ export function pickLatestAmong(rows, types) {
 }
 
 /**
+ * Job histórico marcado done 1/1 sem orders_search real (evidência contaminada).
+ * @param {Record<string, unknown>} job
+ */
+export function isContaminatedHistoricalDoneJob(job) {
+  const st = String(job?.status || "").toLowerCase();
+  if (st !== "done") return false;
+  const m = job?.metadata && typeof job.metadata === "object" ? /** @type {Record<string, unknown>} */ (job.metadata) : {};
+  const soft = m.soft_yield_reason != null ? String(m.soft_yield_reason).trim() : "";
+  const searchStarted = m.last_orders_search_started_at;
+  return soft === "before_orders_search" && (searchStarted == null || String(searchStarted).trim() === "");
+}
+
+/**
+ * @param {Record<string, unknown>} job
+ */
+function effectiveHistoricalJobStatus(job) {
+  if (isContaminatedHistoricalDoneJob(job)) return "pending";
+  return String(job.status || "").toLowerCase();
+}
+
+/**
  * @param {Record<string, unknown>[]} rows
  */
 export function aggregateHistoricalSalesJobs(rows) {
   const hs = rows.filter((r) => String(r.job_type || "") === "ml_historical_sales_backfill");
   if (hs.length === 0) return null;
-  const states = hs.map((r) => String(r.status || "").toLowerCase());
+  const states = hs.map((r) => effectiveHistoricalJobStatus(r));
   let status = "pending";
   if (states.some((s) => s === "running")) status = "running";
   else if (states.some((s) => s === "error")) status = "error";
   else if (states.every((s) => s === "done")) status = "done";
   const pc = hs.reduce((a, r) => a + (Number(r.progress_current) || 0), 0);
   const pt = hs.reduce((a, r) => a + (Number(r.progress_total) || 0), 0);
-  const doneWindows = hs.filter((r) => String(r.status || "").toLowerCase() === "done").length;
+  const doneWindows = hs.filter((r) => effectiveHistoricalJobStatus(r) === "done").length;
+  const contaminatedWindows = hs.filter((r) => isContaminatedHistoricalDoneJob(r)).length;
   return {
     status,
     progress_current: pc,
     progress_total: pt > 0 ? pt : hs.length,
     windows_total: hs.length,
     windows_done: doneWindows,
+    windows_contaminated_done: contaminatedWindows,
     windows_pending: hs.filter((r) => String(r.status || "").toLowerCase() === "pending").length,
     windows_running: hs.filter((r) => String(r.status || "").toLowerCase() === "running").length,
   };

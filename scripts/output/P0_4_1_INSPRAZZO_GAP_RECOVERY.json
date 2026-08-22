@@ -1,0 +1,62 @@
+{
+  "ok": false,
+  "imported": 96,
+  "skipped": 0,
+  "errors": 0,
+  "sales_before": 1820,
+  "sales_after": 1916,
+  "sales_delta": 96,
+  "jan_feb_remaining_gap": 15,
+  "billing_admissions_created_during_run": 10,
+  "zero_retrocharge_expected": true,
+  "import_sample": [
+    {
+      "external_order_id": "2000014479401852",
+      "ok": true
+    },
+    {
+      "external_order_id": "2000014486717262",
+      "ok": true
+    },
+    {
+      "external_order_id": "2000014489728656",
+      "ok": true
+    },
+    {
+      "external_order_id": "2000014499415794",
+      "ok": true
+    },
+    {
+      "external_order_id": "2000014502368788",
+      "ok": true
+    },
+    {
+      "external_order_id": "2000014515692918",
+      "ok": true
+    },
+    {
+      "external_order_id": "2000014518610562",
+      "ok": true
+    },
+    {
+      "external_order_id": "2000014521500534",
+      "ok": true
+    },
+    {
+      "external_order_id": "2000014528319704",
+      "ok": true
+    },
+    {
+      "external_order_id": "2000014535416892",
+      "ok": true
+    }
+  ],
+  "recovery_jobs_created": [
+    904,
+    903
+  ],
+  "w3_w4_preserved": [
+    "8f08e2c5-52ab-4e0d-b804-babf9feef6ef",
+    "acf757c5-ed89-432e-9f56-fb13e7cc8986"
+  ]
+}

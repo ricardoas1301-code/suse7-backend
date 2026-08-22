@@ -894,12 +894,19 @@ export function buildVendasListRow(ctx) {
     item.created_at ??
     null;
 
-  const sale_display_code =
+  const technical_order_id =
     order?.external_order_id != null && String(order.external_order_id).trim() !== ""
       ? String(order.external_order_id).trim()
       : item.external_order_id != null && String(item.external_order_id).trim() !== ""
         ? String(item.external_order_id).trim()
         : null;
+
+  const pack_id =
+    order?.external_pack_id != null && String(order.external_pack_id).trim() !== ""
+      ? String(order.external_pack_id).trim()
+      : null;
+
+  const sale_display_code = pack_id ?? technical_order_id;
 
   const listing_id_display =
     listing?.external_listing_id != null && String(listing.external_listing_id).trim() !== ""
@@ -914,7 +921,8 @@ export function buildVendasListRow(ctx) {
     item_id: String(item.id),
     sale_item_id: String(item.id),
     sales_order_id: item.sales_order_id != null ? String(item.sales_order_id) : null,
-    external_order_id: sale_display_code,
+    external_order_id: technical_order_id,
+    external_pack_id: pack_id,
     external_order_item_id: extItem || null,
     order_internal_id: order?.id != null ? String(order.id) : null,
     marketplace,

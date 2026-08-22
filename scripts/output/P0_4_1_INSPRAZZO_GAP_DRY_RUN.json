@@ -1,0 +1,38 @@
+{
+  "generated_at": "2026-08-22T19:20:36.137Z",
+  "mission": "P0.4.1_INSPRAZZO_EXACT_GAP",
+  "account": {
+    "id": "f4b8e92b-5416-422d-835e-b95e7ded28e4",
+    "ml_nickname": "INSPIRAZZO"
+  },
+  "sales_total_before": 1916,
+  "full_gap_range": {
+    "from": "2025-12-23T20:54:01.392Z",
+    "to": "2026-02-21T20:54:01.392Z",
+    "ml_count": 96,
+    "db_count": 96,
+    "missing_count": 0
+  },
+  "w4": {
+    "from": "2025-12-23T20:54:01.392Z",
+    "to": "2026-01-22T20:54:01.392Z",
+    "ml_count": 39,
+    "db_count": 39,
+    "missing_count": 0
+  },
+  "w3": {
+    "from": "2026-01-22T20:54:01.392Z",
+    "to": "2026-02-21T20:54:01.392Z",
+    "ml_count": 57,
+    "db_count": 57,
+    "missing_count": 0
+  },
+  "union_check": {
+    "w3_plus_w4_ml": 96,
+    "note": "missing set is computed on full range union, not assumed 39+57=102"
+  },
+  "missing_order_ids": [],
+  "missing_sample": [],
+  "earliest_missing": null,
+  "latest_missing": null
+}
