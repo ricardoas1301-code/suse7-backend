@@ -10,19 +10,10 @@
 //   no preflight porque Origin não bateu na allowlist (127.0.0.1 vs localhost, porta, etc.)
 // ==================================================
 
-/**
- * @param {string | undefined} origin
- */
-function isLocalDevOrigin(origin) {
-  if (!origin) return false;
-  try {
-    const u = new URL(origin);
-    const h = u.hostname.toLowerCase();
-    return h === "localhost" || h === "127.0.0.1" || h === "[::1]" || h === "::1";
-  } catch {
-    return false;
-  }
-}
+import {
+  buildAllowedOrigins,
+  resolvePermittedOrigin,
+} from "./corsAllowlist.js";
 
 /**
  * @param {import("http").IncomingMessage} req
@@ -75,41 +66,7 @@ export function applyCors(req, res) {
   // ------------------------------
   // ORIGENS PERMITIDAS (Allowlist + CORS_ALLOWED_ORIGINS)
   // ------------------------------
-  const allowedOrigins = new Set([
-    "https://suse7.com.br",
-    "https://www.suse7.com.br",
-    "https://suse7-frontend-dev.vercel.app",
-    "http://localhost:5173",
-    "http://localhost:5174",
-    "http://localhost:5175",
-    "http://localhost:5176",
-    "https://localhost:5173",
-    "http://localhost:3000",
-    "https://localhost:3000",
-    "http://localhost:3001",
-    "http://127.0.0.1:5173",
-    "http://127.0.0.1:5174",
-    "http://127.0.0.1:5175",
-    "http://127.0.0.1:5176",
-    "https://127.0.0.1:5173",
-    "http://127.0.0.1:3000",
-    "http://127.0.0.1:3001",
-    "http://[::1]:5173",
-    "http://[::1]:5174",
-    "http://[::1]:5175",
-    "http://[::1]:5176",
-    "http://[::1]:3000",
-  ]);
-
-  const extraRaw = [process.env.CORS_ALLOWED_ORIGINS, process.env.CORS_ORIGINS]
-    .filter(Boolean)
-    .join(",");
-  if (extraRaw.trim()) {
-    for (const o of extraRaw.split(",")) {
-      const t = o.trim();
-      if (t) allowedOrigins.add(t);
-    }
-  }
+  const allowedOrigins = buildAllowedOrigins();
 
   const origin = req.headers?.origin;
   const referer = req.headers?.referer;
@@ -126,11 +83,9 @@ export function applyCors(req, res) {
 
   /** Origem autorizada a receber Access-Control-Allow-Origin espelhado */
   const originCandidate = origin ?? inferredOrigin;
-  const originPermitida =
-    originCandidate &&
-    (allowedOrigins.has(originCandidate) || (!strictLocal && isLocalDevOrigin(originCandidate)))
-      ? originCandidate
-      : null;
+  const originPermitida = originCandidate
+    ? resolvePermittedOrigin(originCandidate, allowedOrigins, { strictLocal })
+    : null;
 
   if (req.method === "OPTIONS" && process.env.S7_CORS_DEBUG === "1") {
     console.info("[S7_CORS_DEBUG]", {

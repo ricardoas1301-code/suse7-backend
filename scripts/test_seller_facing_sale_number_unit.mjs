@@ -34,6 +34,10 @@ assert(
   "I5_scanner_origin",
   resolveSnapshotOriginForSyncType("ml_incremental_sales_poll") === BILLING_SNAPSHOT_ORIGIN.OPERATIONAL_SYNC,
 );
+assert(
+  "P0_4_3_historical_not_operational",
+  resolveSnapshotOriginForSyncType("ml_historical_sales_backfill") !== BILLING_SNAPSHOT_ORIGIN.OPERATIONAL_SYNC,
+);
 
 if (failures.length) {
   console.error(JSON.stringify({ ok: false, failures }));

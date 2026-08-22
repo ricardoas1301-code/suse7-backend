@@ -24,6 +24,7 @@ import {
 import { readSuspensionFallbackEntitlement } from "./billingSuspensionFallbackEntitlementService.js";
 import { loadSellerEntitlementOverlay } from "./billingSellerEntitlementStoreService.js";
 import {
+  isOnboardingImportOrigin,
   normalizeBillingSnapshotOrigin,
   shouldBypassAtomicQuotaReservation,
 } from "./billingQuotaEligibilityService.js";
@@ -86,6 +87,12 @@ function resolveObservationLogEvent(periodClass, reason) {
 function shouldMaterializeManualReviewPending(options, periodClass) {
   const admission = options.atomic_admission;
   if (!admission) return false;
+  const origin = normalizeBillingSnapshotOrigin(
+    options.snapshot_origin ?? admission.snapshot_origin,
+  );
+  if (isOnboardingImportOrigin(origin)) return false;
+  if (periodClass === BILLING_SALE_PERIOD_CLASS.IMPORTACAO_HISTORICA) return false;
+  if (admission.reason === "onboarding_import") return false;
   return (
     Boolean(admission.manual_review_required) ||
     Boolean(admission.schedule_reconciliation) ||

@@ -15,8 +15,11 @@ import {
   preflightBillableSaleEntitlementState,
   reserveBillableSaleAfterOfficialDate,
 } from "../../../../billing/services/billingBillableSalePreflightService.js";
-import { BILLING_SNAPSHOT_ORIGIN } from "../../../../billing/billingConstants.js";
-import { normalizeBillingSnapshotOrigin } from "../../../../billing/services/billingQuotaEligibilityService.js";
+import { BILLING_SALE_PERIOD_CLASS, BILLING_SNAPSHOT_ORIGIN } from "../../../../billing/billingConstants.js";
+import {
+  isOnboardingImportOrigin,
+  normalizeBillingSnapshotOrigin,
+} from "../../../../billing/services/billingQuotaEligibilityService.js";
 import { buildDevGlobalMaintenanceBlockedApplyResult } from "../../../../domain/dev/devGlobalMaintenanceMode.js";
 
 /**
@@ -441,6 +444,19 @@ export async function applyMlOrderDetailToMarketplaceSales(
       : null;
 
   if (isNewSale && !atomicAdmission) {
+    // Histórico/onboarding — zero admission operacional; observação only (P0.4.3).
+    if (isOnboardingImportOrigin(snapshotOrigin)) {
+      logStep("entitlement historical import bypass");
+      atomicAdmission = {
+        admit: true,
+        process_sale: true,
+        reason: "onboarding_import",
+        period_class: BILLING_SALE_PERIOD_CLASS.IMPORTACAO_HISTORICA,
+        snapshot_origin: snapshotOrigin,
+        atomic: false,
+        quota_bypassed: true,
+      };
+    } else {
     // 6.9A.9 — sem admission prévia: reserva só após date_created oficial (nunca pré-GET).
     logStep("entitlement admission after official date");
     atomicAdmission = await reserveBillableSaleAfterOfficialDate(supabase, userId, {
@@ -481,6 +497,7 @@ export async function applyMlOrderDetailToMarketplaceSales(
         domain_code: atomicAdmission?.domain_code ?? null,
         webhook_ok: true,
       };
+    }
     }
   }
 
