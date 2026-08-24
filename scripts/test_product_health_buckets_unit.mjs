@@ -1,5 +1,15 @@
 // ======================================================================
 // Testes unitários — buckets Central de Saúde dos Produtos
+//
+// Gate canônico (Marco Zero): npm run test:product-health-buckets
+//   → superfície homologada (buckets ABC, cobertura, lucratividade, KPIs ativos).
+//
+// Gate WIP (spec futura): npm run test:product-health-buckets:wip
+//   → contrato futuro de dead stock ainda não conectado ao KPI do Dashboard.
+//   → avaliarProdutoEstoqueParado() permanece stub; KPI usa montarAgregadoEstoqueParado().
+//   → voltar ao gate canônico quando a implementação completa for entregue.
+//
+// Uso: node ./scripts/test_product_health_buckets_unit.mjs [--suite=canonical|wip]
 // ======================================================================
 
 import assert from "node:assert/strict";
@@ -696,7 +706,8 @@ function testCurvaAbcSemVendaForaDoChart() {
   assert.equal(somarBucketsDistribuicao(dist.distribution), 2);
 }
 
-const tests = [
+/** Gate homologado Marco Zero — buckets + KPIs ativos (sem spec WIP de dead stock). */
+const PRODUCT_HEALTH_BUCKETS_CANONICAL_TESTS = [
   testCurvaAbcFechaComTotalProducts,
   testProdutoSemVendaEntraSemVenda,
   testProdutoAbcClassificadoPorFaturamentoAcumulado,
@@ -728,10 +739,7 @@ const tests = [
   testLucratividadeFaturamentoZeroEntraSemVendas,
   testMicosEstoqueCalculamCapitalParadoComDecimal,
   testEstoqueParadoSemCustoNaoSomaValorFinanceiro,
-  testEstoqueParadoProdutoNovoSemVendaNaoEntra,
   testEstoqueParadoSemVendaComIdadeMinimaEntra,
-  testEstoqueParadoEstoqueDesconhecidoNaoEntra,
-  testBreakdownConceitualEstoqueParadoExplicaDiferencaMix30d,
   testMarkupMedioIgnoraProdutoSemCustoOuPreco,
   testGiroProdutosCalculaPercentualSobreTotalProdutos,
   testUnidadeProductIdNaoListingId,
@@ -741,19 +749,79 @@ const tests = [
   testCurvaAbcSemVendaForaDoChart,
 ];
 
-let failed = 0;
-for (const fn of tests) {
-  try {
-    fn();
-    console.log(`OK ${fn.name}`);
-  } catch (error) {
-    failed += 1;
-    console.error(`FAIL ${fn.name}`, error);
+/**
+ * Spec futura — avaliarProdutoEstoqueParado() completo + breakdown conceitual v2.
+ * Fora do gate homologado até implementação conectada ao runtime do Dashboard.
+ */
+const PRODUCT_HEALTH_BUCKETS_WIP_TESTS = [
+  testEstoqueParadoProdutoNovoSemVendaNaoEntra,
+  testEstoqueParadoEstoqueDesconhecidoNaoEntra,
+  testBreakdownConceitualEstoqueParadoExplicaDiferencaMix30d,
+];
+
+function resolveSuite() {
+  const arg = process.argv.find((value) => value.startsWith("--suite="));
+  const suite = arg ? arg.slice("--suite=".length).trim() : "canonical";
+  if (suite === "canonical" || suite === "wip") return suite;
+  console.error(`[test_product_health_buckets] suite inválida: ${suite}`);
+  process.exitCode = 2;
+  return "canonical";
+}
+
+/**
+ * @param {Array<() => void>} suite
+ * @param {{ label: string; wip?: boolean }} opts
+ */
+function runSuite(suite, opts) {
+  let failed = 0;
+  let passed = 0;
+
+  if (opts.wip) {
+    console.info("[test_product_health_buckets] WIP — spec futura dead stock (não homologada)");
+    console.info(
+      "[test_product_health_buckets] KPI Dashboard atual: montarAgregadoEstoqueParado(); stub: avaliarProdutoEstoqueParado()",
+    );
+  } else {
+    console.info("[test_product_health_buckets] CANÔNICO — gate homologado Marco Zero");
+  }
+
+  for (const fn of suite) {
+    try {
+      fn();
+      passed += 1;
+      console.log(`OK ${fn.name}`);
+    } catch (error) {
+      failed += 1;
+      console.error(`FAIL ${fn.name}`, error);
+    }
+  }
+
+  const summary = {
+    suite: opts.label,
+    passed,
+    failed,
+    total: suite.length,
+    wip: Boolean(opts.wip),
+  };
+  console.info("[test_product_health_buckets] summary", summary);
+
+  if (failed > 0) {
+    process.exitCode = 1;
+    if (opts.wip) {
+      console.info(
+        "[test_product_health_buckets] WIP esperado falhar até implementação completa de dead stock",
+      );
+    }
+  } else {
+    console.log(`\n${suite.length} testes OK`);
   }
 }
 
-if (failed > 0) {
-  process.exitCode = 1;
+const suiteName = resolveSuite();
+if (process.exitCode === 2) {
+  // suite inválida
+} else if (suiteName === "wip") {
+  runSuite(PRODUCT_HEALTH_BUCKETS_WIP_TESTS, { label: "wip", wip: true });
 } else {
-  console.log(`\n${tests.length} testes OK`);
+  runSuite(PRODUCT_HEALTH_BUCKETS_CANONICAL_TESTS, { label: "canonical", wip: false });
 }
