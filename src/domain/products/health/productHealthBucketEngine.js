@@ -50,15 +50,15 @@ export function logProductHealthDashboard(label, payload = {}) {
  * @returns {string}
  */
 export function resolverChaveBucketCoberturaEstoque(snapshot) {
-  if (!produtoTeveVendaNaJanela(snapshot)) return "no_turnover";
-
   const stockKnown =
     snapshot.stock_known === true || isStockQuantityKnown(snapshot.stock_quantity);
 
   if (!stockKnown) return PRODUCT_HEALTH_STOCK_UNKNOWN_BUCKET_KEY;
 
-  const stock = readKnownStockQuantity(snapshot.stock_quantity) ?? 0;
   const recentSales = Number(snapshot.recent_sales_30d ?? snapshot.quantity_sold_period ?? 0) || 0;
+  if (recentSales <= 0) return "no_turnover";
+
+  const stock = readKnownStockQuantity(snapshot.stock_quantity) ?? 0;
 
   if (stock <= 0) return "rupture";
 

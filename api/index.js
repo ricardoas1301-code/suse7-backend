@@ -529,18 +529,6 @@ export default async function handler(req, res) {
       const mod = await import("../src/handlers/ml/listingsHealthBackfill.js");
       return await mod.default(req, res);
     }
-    if (path === "/api/ml/backfill-listing-quality") {
-      const mod = await import("../src/handlers/ml/listingsListingQualityBackfill.js");
-      return await mod.default(req, res);
-    }
-    if (path === "/api/ml/listings/accumulated-performance" && req.method === "GET") {
-      const mod = await import("../src/handlers/ml/listingAccumulatedPerformance.js");
-      return await mod.default(req, res);
-    }
-    if (path === "/api/ml/listings/catalog-pricing-health-buckets" && req.method === "GET") {
-      const mod = await import("../src/handlers/ml/catalogPricingHealthBuckets.js");
-      return mod.handleMlListingsCatalogPricingHealthBuckets(req, res);
-    }
     if (path === "/api/ml/listings") {
       const mod = await import("../src/handlers/ml/listingsList.js");
       return await mod.default(req, res);
@@ -637,10 +625,6 @@ export default async function handler(req, res) {
       const mod = await import("../src/handlers/sales/summary.js");
       return mod.default(req, res);
     }
-    if (path === "/api/dev/billing/entitlement-unclassified-probe" && req.method === "GET") {
-      const mod = await import("../src/handlers/dev/billingEntitlementUnclassifiedProbe.js");
-      return mod.default(req, res);
-    }
     if (
       (path === "/api/dev/sales/refresh-financial-contracts" ||
         /^\/api\/dev\/sales\/[^/]+\/refresh-financial-contract$/.test(path)) &&
@@ -713,10 +697,6 @@ export default async function handler(req, res) {
     if (path === "/api/products/catalog-financial") {
       const mod = await import("../src/handlers/products/catalogFinancial.js");
       return mod.handleProductsCatalogFinancial(req, res);
-    }
-    if (path === "/api/products/catalog-health-buckets") {
-      const mod = await import("../src/handlers/products/catalogHealthBuckets.js");
-      return mod.handleProductsCatalogHealthBuckets(req, res);
     }
     if (path === "/api/dashboard/products-health-summary" && req.method === "GET") {
       const mod = await import("../src/handlers/dashboard/productsHealthSummary.js");

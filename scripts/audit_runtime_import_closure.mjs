@@ -233,7 +233,7 @@ function main() {
     missing_critical_imports: missingCritical,
     missing_critical_count: missingCritical.length,
     dead_route_handlers: routeHandlers.filter((r) => !r.resolved && !CRITICAL_ROUTES.has(r.route)),
-    pass: missingCritical.length === 0,
+    pass: missing.length === 0,
     pass_full_closure: missing.length === 0,
   };
 
@@ -244,19 +244,13 @@ function main() {
   fs.writeFileSync(outPath, `${JSON.stringify(report, null, 2)}\n`, "utf8");
 
   console.log(
-    `[audit_runtime_import_closure] files_in_closure=${visited.size} missing=${missing.length} missing_critical=${missingCritical.length} pass=${report.pass}`,
+    `[audit_runtime_import_closure] files_in_closure=${visited.size} missing=${missing.length} pass=${report.pass}`,
   );
-  if (missingCritical.length) {
-    for (const m of missingCritical) {
-      console.error(`  MISSING_CRITICAL ${m.kind} ${m.spec} <= ${m.consumer}:${m.line}`);
+  if (missing.length) {
+    for (const m of missing) {
+      console.error(`  MISSING ${m.kind} ${m.spec} <= ${m.consumer}:${m.line}`);
     }
     process.exit(1);
-  }
-  if (missing.length) {
-    console.warn(`[audit_runtime_import_closure] dead_or_noncritical_missing=${missing.length}`);
-    for (const m of missing) {
-      console.warn(`  NONCRITICAL ${m.kind} ${m.spec} <= ${m.consumer}:${m.line}`);
-    }
   }
   process.exit(0);
 }
