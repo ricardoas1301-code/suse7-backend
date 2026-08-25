@@ -18,6 +18,7 @@ import {
 } from "./_helpers/mlWebhookOrderProcessorOutcome.js";
 import { ML_MARKETPLACE_SLUG } from "./_helpers/mlMarketplace.js";
 import { evaluateDevGlobalMaintenanceWebhookEvent } from "../../domain/dev/devGlobalMaintenanceMode.js";
+import { resolveMlAccountLifecycleReadyForSalesIngress } from "../../services/marketplace/mlAccountLifecycleSalesIngressGate.js";
 
 /**
  * @returns {import("@supabase/supabase-js").SupabaseClient}
@@ -481,6 +482,22 @@ async function processOrderEvent(supabase, event, resolvedContext = null) {
 
   const { userId, marketplaceAccountId } =
     resolvedContext != null ? resolvedContext : await resolveEventContext(supabase, event);
+
+  const lifecycle = await resolveMlAccountLifecycleReadyForSalesIngress(supabase, marketplaceAccountId);
+  if (!lifecycle.ready) {
+    console.info("[ml-webhook-events-job] order_skipped_lifecycle", {
+      event_id: event.id ?? null,
+      order_id: orderId,
+      marketplace_account_id: marketplaceAccountId,
+      user_id: userId,
+      reason: lifecycle.reason,
+    });
+    const err = new Error(`LIFECYCLE_NOT_READY:${lifecycle.reason || "unknown"}`);
+    /** @type {any} */ (err).code = "LIFECYCLE_NOT_READY";
+    /** @type {any} */ (err).retryable = true;
+    throw err;
+  }
+
   const { data: account } = await supabase
     .from("marketplace_accounts")
     .select("seller_company_id")

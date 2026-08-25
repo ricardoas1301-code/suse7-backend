@@ -2,12 +2,16 @@
 // resolveConfigurationSnapshot — projeção canônica (sem I/O, sem writes)
 // ======================================================================
 
-import { projetarPercentualConfiguracao, TOTAL_MILESTONES_CONFIGURACAO } from "./escopoConfiguracaoInicial.js";
+import {
+  projetarPercentualConfiguracao,
+  TOTAL_MILESTONES_BLOQUEANTES_CONFIGURACAO,
+} from "./escopoConfiguracaoInicial.js";
 import {
   CONFIGURATION_STATUS,
   MILESTONE_IDS,
   MILESTONE_ORDER,
   MILESTONE_STATUS,
+  milestoneBloqueiaConfiguracaoInicial,
 } from "./milestonesConfiguracaoInicial.js";
 import {
   montarAcaoNavegacaoMarketplace,
@@ -68,6 +72,7 @@ export function resolveConfigurationSnapshot(ctx) {
 
   for (const id of MILESTONE_ORDER) {
     const evaluation = evaluators[id];
+    const isBlocking = milestoneBloqueiaConfiguracaoInicial(id);
     const status =
       latchedComplete || evaluation.completed
         ? MILESTONE_STATUS.COMPLETED
@@ -77,7 +82,7 @@ export function resolveConfigurationSnapshot(ctx) {
     const item = {
       id,
       status,
-      required: true,
+      required: isBlocking,
     };
 
     if (id === MILESTONE_IDS.FIRST_MARKETPLACE_CONNECTION) {
@@ -90,26 +95,30 @@ export function resolveConfigurationSnapshot(ctx) {
 
   const milestones = MILESTONE_ORDER.map((id) => milestoneMap[id]);
 
-  const completedCount = latchedComplete
-    ? TOTAL_MILESTONES_CONFIGURACAO
-    : milestones.filter((m) => m.status === MILESTONE_STATUS.COMPLETED).length;
+  const blockingMilestones = milestones.filter((m) => m.required);
+  const blockingCompletedCount = latchedComplete
+    ? TOTAL_MILESTONES_BLOQUEANTES_CONFIGURACAO
+    : blockingMilestones.filter((m) => m.status === MILESTONE_STATUS.COMPLETED).length;
 
   const configurationStatus = latchedComplete
     ? CONFIGURATION_STATUS.COMPLETED
-    : completedCount >= TOTAL_MILESTONES_CONFIGURACAO
+    : blockingCompletedCount >= TOTAL_MILESTONES_BLOQUEANTES_CONFIGURACAO
       ? CONFIGURATION_STATUS.COMPLETED
       : CONFIGURATION_STATUS.IN_PROGRESS;
 
   const percent = latchedComplete
     ? 100
-    : projetarPercentualConfiguracao(completedCount, TOTAL_MILESTONES_CONFIGURACAO);
+    : projetarPercentualConfiguracao(
+        blockingCompletedCount,
+        TOTAL_MILESTONES_BLOQUEANTES_CONFIGURACAO,
+      );
 
   return {
     ok: true,
     configuration: {
       status: configurationStatus,
-      completed: completedCount,
-      total: TOTAL_MILESTONES_CONFIGURACAO,
+      completed: blockingCompletedCount,
+      total: TOTAL_MILESTONES_BLOQUEANTES_CONFIGURACAO,
       percent,
       completed_at: latchedComplete ? profile?.initial_configuration_completed_at ?? null : null,
     },
@@ -127,7 +136,7 @@ export function resolveConfigurationSnapshot(ctx) {
 }
 
 /**
- * Futuro write-path (NÃO chamar no GET): latch monotônico ao atingir 6/6.
+ * Latch monotônico ao completar milestones bloqueantes (M1–M5).
  * @param {import("@supabase/supabase-js").SupabaseClient} supabase
  * @param {string} userId
  * @param {ReturnType<typeof resolveConfigurationSnapshot>} snapshot

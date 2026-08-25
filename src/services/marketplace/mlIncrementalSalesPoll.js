@@ -21,6 +21,7 @@ import {
   fetchMarketplaceAccountsWithActiveMlPipeline,
 } from "./marketplaceAccountConnectionHealth.js";
 import { evaluateDevGlobalMaintenanceGate } from "../../domain/dev/devGlobalMaintenanceMode.js";
+import { resolveMlAccountLifecycleReadyForSalesIngress } from "./mlAccountLifecycleSalesIngressGate.js";
 
 const ORDER_TIMEOUT_MS = Math.min(
   180000,
@@ -325,6 +326,16 @@ export async function runIncrementalMlSalesPollWave(supabase, opts = {}) {
         marketplace_account_id: accountId,
         external_seller_id: acc?.external_seller_id ?? null,
         reason: maintenanceGate.reason,
+      });
+      continue;
+    }
+
+    const lifecycle = await resolveMlAccountLifecycleReadyForSalesIngress(supabase, accountId);
+    if (!lifecycle.ready) {
+      console.info("[sales-sync] incremental_poll_account_skipped_lifecycle", {
+        marketplace_account_id: accountId,
+        external_seller_id: acc?.external_seller_id ?? null,
+        reason: lifecycle.reason,
       });
       continue;
     }

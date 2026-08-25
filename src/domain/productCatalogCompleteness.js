@@ -18,40 +18,29 @@ export function normalizeSkuForDbLookup(sku) {
 }
 
 /**
- * Custos obrigatórios para liberar análise financeira completa nos anúncios.
+ * Parse monetário de produto (não usar para % operacional da empresa).
+ * @param {unknown} raw
+ * @returns {number}
+ */
+function parseProductMoney(raw) {
+  if (raw == null || raw === "") return NaN;
+  if (typeof raw === "number") return raw;
+  return parseFloat(String(raw).trim().replace(",", "."));
+}
+
+/**
+ * Custos obrigatórios do produto para liberar análise financeira.
+ * Regra S1.10: somente custo do produto (> 0).
+ * Embalagem (`packaging_cost`) e Insumo (`operational_cost` no produto) são opcionais.
+ * Não confundir com custo operacional (%) da empresa (`seller_companies.operational_cost_rate`).
  * @param {unknown} costPrice
- * @param {unknown} packagingCost
- * @param {unknown} operationalCost
+ * @param {unknown} [_packagingCost]
+ * @param {unknown} [_operationalCostInsumo]
  * @returns {boolean}
  */
-export function hasRequiredProductCosts(costPrice, packagingCost, operationalCost) {
-  const cp =
-    costPrice == null || costPrice === ""
-      ? NaN
-      : typeof costPrice === "number"
-        ? costPrice
-        : parseFloat(String(costPrice).trim().replace(",", "."));
-  const pk =
-    packagingCost == null || packagingCost === ""
-      ? NaN
-      : typeof packagingCost === "number"
-        ? packagingCost
-        : parseFloat(String(packagingCost).trim().replace(",", "."));
-  const op =
-    operationalCost == null || operationalCost === ""
-      ? NaN
-      : typeof operationalCost === "number"
-        ? operationalCost
-        : parseFloat(String(operationalCost).trim().replace(",", "."));
-
-  return (
-    Number.isFinite(cp) &&
-    cp > 0 &&
-    Number.isFinite(pk) &&
-    pk >= 0 &&
-    Number.isFinite(op) &&
-    op >= 0
-  );
+export function hasRequiredProductCosts(costPrice, _packagingCost, _operationalCostInsumo) {
+  const cp = parseProductMoney(costPrice);
+  return Number.isFinite(cp) && cp > 0;
 }
 
 /**
@@ -62,14 +51,7 @@ export function hasRequiredProductCosts(costPrice, packagingCost, operationalCos
  * @returns {string}
  */
 export function buildMissingRequiredProductCostsPostgrestOrFilter() {
-  return [
-    "cost_price.is.null",
-    "cost_price.lte.0",
-    "packaging_cost.is.null",
-    "packaging_cost.lt.0",
-    "operational_cost.is.null",
-    "operational_cost.lt.0",
-  ].join(",");
+  return ["cost_price.is.null", "cost_price.lte.0"].join(",");
 }
 
 /**

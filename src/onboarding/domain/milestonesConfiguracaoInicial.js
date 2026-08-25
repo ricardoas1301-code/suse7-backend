@@ -21,6 +21,23 @@ export const MILESTONE_ORDER = [
   MILESTONE_IDS.FIRST_MARKETPLACE_CONNECTION,
 ];
 
+/** M1–M5 — bloqueiam liberação do app (S1.09). M6 fica fora. */
+export const MILESTONE_ORDER_BLOQUEANTE = [
+  MILESTONE_IDS.COMPANY_DATA,
+  MILESTONE_IDS.LEGAL_ACCEPTANCE,
+  MILESTONE_IDS.TAX_RATE,
+  MILESTONE_IDS.OPERATIONAL_COST,
+  MILESTONE_IDS.OPERATIONAL_CYCLE,
+];
+
+/**
+ * @param {string | null | undefined} milestoneId
+ */
+export function milestoneBloqueiaConfiguracaoInicial(milestoneId) {
+  const id = String(milestoneId ?? "").trim();
+  return MILESTONE_ORDER_BLOQUEANTE.includes(/** @type {*} */ (id));
+}
+
 export const MILESTONE_STATUS = /** @type {const} */ ({
   PENDING: "PENDING",
   COMPLETED: "COMPLETED",

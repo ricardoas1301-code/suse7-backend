@@ -10,6 +10,7 @@ import {
   resolveCatalogCompleteness,
 } from "../productCatalogCompleteness.js";
 import { syncListingsFinancialBlockForProduct } from "../../handlers/ml/_helpers/mlListingProductLink.js";
+import { aplicarCutoverPrimeiroCustoProdutoEmVendasPendentes } from "./aplicarCutoverPrimeiroCustoProduto.js";
 
 const UUID_REGEX =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -48,6 +49,18 @@ export function parseMoneyDecimalString(raw, opts = {}) {
 /**
  * @param {{ cost_price?: unknown; packaging_cost?: unknown; operational_cost?: unknown }} payload
  */
+/**
+ * Embalagem / Insumo (campo products.operational_cost) opcionais → default 0.00.
+ * Não altera regra de custo operacional (%) da empresa.
+ * @param {unknown} raw
+ */
+function parseOptionalProductMoneyOrZero(raw) {
+  if (raw == null || String(raw).trim() === "") {
+    return { ok: true, value: "0.00" };
+  }
+  return parseMoneyDecimalString(raw, { allowZero: true });
+}
+
 export function validateProductCostsPayload(payload) {
   const costPrice = parseMoneyDecimalString(payload?.cost_price, { allowZero: false });
   if (!costPrice.ok) {
@@ -59,7 +72,7 @@ export function validateProductCostsPayload(payload) {
     };
   }
 
-  const packagingCost = parseMoneyDecimalString(payload?.packaging_cost, { allowZero: true });
+  const packagingCost = parseOptionalProductMoneyOrZero(payload?.packaging_cost);
   if (!packagingCost.ok) {
     return {
       ok: false,
@@ -69,12 +82,13 @@ export function validateProductCostsPayload(payload) {
     };
   }
 
-  const operationalCost = parseMoneyDecimalString(payload?.operational_cost, { allowZero: true });
+  // products.operational_cost = Insumo (expedição), NÃO custo operacional da empresa
+  const operationalCost = parseOptionalProductMoneyOrZero(payload?.operational_cost);
   if (!operationalCost.ok) {
     return {
       ok: false,
       code: operationalCost.code,
-      message: operationalCost.message || "Custo operacional inválido",
+      message: operationalCost.message || "Custo de insumo inválido",
       field: "operational_cost",
     };
   }
@@ -89,7 +103,8 @@ export function validateProductCostsPayload(payload) {
     return {
       ok: false,
       code: "INCOMPLETE_COSTS",
-      message: "Preencha custo do produto (> 0), embalagem e operacional",
+      message: "Preencha o custo do produto (> 0)",
+      field: "cost_price",
     };
   }
 
@@ -133,6 +148,8 @@ export async function persistProductCostsForUser({ supabase, userId, productId, 
     return { ok: false, code: "PRODUCT_NOT_FOUND", message: "Produto não encontrado" };
   }
 
+  const previousCostPrice = existing.cost_price;
+
   const catalogCompleteness = resolveCatalogCompleteness(costs, {
     catalog_source: existing.catalog_source,
   });
@@ -159,9 +176,27 @@ export async function persistProductCostsForUser({ supabase, userId, productId, 
     /* não bloqueia persistência — espelha tolerância do upsert */
   }
 
+  /** @type {Record<string, unknown> | null} */
+  let cutover = null;
+  try {
+    cutover = await aplicarCutoverPrimeiroCustoProdutoEmVendasPendentes({
+      supabase,
+      userId,
+      productId: pid,
+      costs,
+      previousCostPrice,
+    });
+  } catch (e) {
+    console.warn("[S7_PRODUCT_COST_CUTOVER] failed", {
+      product_id: pid,
+      message: e?.message ? String(e.message) : String(e),
+    });
+  }
+
   return {
     ok: true,
     product_id: pid,
     catalog_completeness: catalogCompleteness,
+    cost_cutover: cutover,
   };
 }

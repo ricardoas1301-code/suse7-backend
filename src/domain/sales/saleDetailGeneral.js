@@ -9,6 +9,7 @@ import {
   buildSaleTypeDisplay,
   resolveSaleChannelKind,
 } from "./mercadoLivreSaleTypeDisplay.js";
+import { resolveSellerFacingSaleNumberFromOrder } from "./resolveSellerFacingSaleNumber.js";
 
 const BRAZIL_TZ = "America/Sao_Paulo";
 
@@ -489,11 +490,7 @@ export function buildSaleDetailGeneralBlock(row, order, item = null) {
         ? String(row.external_order_id).trim()
         : "";
 
-  const sellerFacingPackId =
-    order?.external_pack_id != null && String(order.external_pack_id).trim() !== ""
-      ? String(order.external_pack_id).trim()
-      : null;
-
+  const sellerFacingPackId = resolveSellerFacingSaleNumberFromOrder(order ?? null);
   const saleNumberRaw =
     sellerFacingPackId ??
     (row.sale_display_code != null

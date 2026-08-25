@@ -78,6 +78,28 @@ export function buildOperationalTasksPayload(counts = {}) {
       ? String(counts.mlMarketplaceAccountId).trim()
       : null;
 
+  // S1.09 — sem conta ML: pendência flutuante "Conectar marketplace" (fora do modal M1–M5).
+  if (mlPhase === "none" && !mlAccountId) {
+    tasks.push({
+      id: "marketplace_connect_pending",
+      type: "marketplace_connect_pending",
+      title: "Conectar marketplace",
+      description:
+        "Conecte sua conta do Mercado Livre para importar anúncios, produtos e vendas no SUSE7.",
+      status: "requires_action",
+      priority: "critical",
+      icon: "marketplace_connect",
+      marketplace: "mercado_livre",
+      action: {
+        type: "open_marketplace_connect",
+        label: "Conectar marketplace",
+      },
+      scope: "marketplace",
+      dedupe_key: "marketplace_connect_pending",
+      sort_order: 0,
+    });
+  }
+
   if (mlPhase === "awaiting_start" && mlAccountId) {
     tasks.push({
       id: "ml_initial_sync_pending",

@@ -6,6 +6,7 @@
 import { computeProductReadiness } from "../../domain/productReadiness.js";
 import { hasRequiredProductCosts, normalizeSkuForDbLookup } from "../../domain/productCatalogCompleteness.js";
 import { resolveSaleOperationalStatusLabel, attachFreshMercadoLivreShipmentSnapshot } from "../../domain/sales/saleDetailGeneral.js";
+import { resolveSaleDisplayIdentifiers } from "../../domain/sales/resolveSellerFacingSaleNumber.js";
 import { buildSaleDetailFinancialBreakdown } from "./saleDetailFinancial.js";
 import { finalizeSaleDetailFinancialWithContingency } from "../../domain/sales/saleDetailContingencyMargin.js";
 import { getValidMLToken } from "../ml/_helpers/mlToken.js";
@@ -894,19 +895,10 @@ export function buildVendasListRow(ctx) {
     item.created_at ??
     null;
 
-  const technical_order_id =
-    order?.external_order_id != null && String(order.external_order_id).trim() !== ""
-      ? String(order.external_order_id).trim()
-      : item.external_order_id != null && String(item.external_order_id).trim() !== ""
-        ? String(item.external_order_id).trim()
-        : null;
-
-  const pack_id =
-    order?.external_pack_id != null && String(order.external_pack_id).trim() !== ""
-      ? String(order.external_pack_id).trim()
-      : null;
-
-  const sale_display_code = pack_id ?? technical_order_id;
+  const displayIds = resolveSaleDisplayIdentifiers(order ?? null, item);
+  const technical_order_id = displayIds.technical_order_id;
+  const pack_id = displayIds.pack_id;
+  const sale_display_code = displayIds.sale_display_code;
 
   const listing_id_display =
     listing?.external_listing_id != null && String(listing.external_listing_id).trim() !== ""

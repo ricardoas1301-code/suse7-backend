@@ -299,6 +299,55 @@ export default async function handleMarketplaceAccountSyncStatus(req, res, path)
       account,
       rows
     );
+
+    // S1.03 — jobs já concluídos sem products_universe_total: enriquecer com distinct product_id.
+    const productsRow = checklist.find((r) => String(r.key) === "products");
+    if (productsRow && String(productsRow.status).toLowerCase() === "done") {
+      const meta =
+        productsRow.metadata && typeof productsRow.metadata === "object" && !Array.isArray(productsRow.metadata)
+          ? /** @type {Record<string, unknown>} */ (productsRow.metadata)
+          : {};
+      if (meta.products_universe_total == null) {
+        try {
+          const sellerCompanyId =
+            account?.seller_company_id != null && String(account.seller_company_id).trim() !== ""
+              ? String(account.seller_company_id).trim()
+              : null;
+          let q = supabase
+            .from("marketplace_listings")
+            .select("product_id")
+            .eq("user_id", String(account.user_id || user.id))
+            .eq("marketplace_account_id", accountId)
+            .not("product_id", "is", null)
+            .limit(10000);
+          if (sellerCompanyId) q = q.eq("seller_company_id", sellerCompanyId);
+          const { data: distinctRows } = await q;
+          if (Array.isArray(distinctRows)) {
+            const set = new Set(
+              distinctRows
+                .map((r) => (r?.product_id != null ? String(r.product_id) : ""))
+                .filter(Boolean),
+            );
+            const universe = set.size;
+            productsRow.progress_current = universe;
+            productsRow.progress_total = universe;
+            productsRow.metadata = { ...meta, products_universe_total: universe };
+          }
+        } catch (enrichErr) {
+          console.warn("[marketplace/sync-status] products_universe_enrich_warn", {
+            marketplace_account_id: accountId,
+            message: enrichErr?.message ?? String(enrichErr),
+          });
+        }
+      } else {
+        const universe = Number(meta.products_universe_total);
+        if (Number.isFinite(universe) && universe >= 0) {
+          productsRow.progress_current = universe;
+          productsRow.progress_total = universe;
+        }
+      }
+    }
+
     const historicalCustomersAgg = aggregateHistoricalCustomersJobs(rows);
 
     const coverageRollup = await fetchMlHistoricalCoverageRollupForAccount(

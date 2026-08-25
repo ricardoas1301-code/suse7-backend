@@ -12,17 +12,21 @@ export const ESCOPO_CONFIGURACAO_INICIAL = /** @type {const} */ ({
 
 export const TOTAL_MILESTONES_CONFIGURACAO = 6;
 
+/** Milestones que bloqueiam o app gate (S1.09 — M6 fora do bloqueio). */
+export const TOTAL_MILESTONES_BLOQUEANTES_CONFIGURACAO = 5;
+
 /**
- * Contrato latch histórico vs projeção (01B.1).
- * - progress/percent: sempre derivado dos milestones (nunca persistido como autoridade).
- * - initial_configuration_completed_at: latch monotônico; quando setado, config permanece 100%.
- * - Estado intermediário 6/6 sem latch: status COMPLETED, percent 100, completed_at null.
- *   GET não repara; write paths futuros devem setar latch na transição real 5/6→6/6.
+ * Contrato latch histórico vs projeção (01B.1 + S1.09).
+ * - progress/percent: derivado dos milestones *bloqueantes* M1–M5 (nunca persistido como autoridade).
+ * - FIRST_MARKETPLACE_CONNECTION (M6): informativo / OT — não bloqueia conclusão da configuração inicial.
+ * - initial_configuration_completed_at: latch monotônico ao completar M1–M5.
+ * - GET não repara; write paths setam latch na transição real.
  */
 export const CONTRATO_LATCH_CONCLUSAO_CONFIGURACAO = /** @type {const} */ ({
-  PROGRESS_SOURCE: "MILESTONES_PROJECTED",
+  PROGRESS_SOURCE: "BLOCKING_MILESTONES_PROJECTED",
   LATCH_FIELD: "initial_configuration_completed_at",
-  INTERMEDIATE_6_OF_6_WITHOUT_LATCH: {
+  BLOCKING_TOTAL: TOTAL_MILESTONES_BLOQUEANTES_CONFIGURACAO,
+  INTERMEDIATE_ALL_BLOCKING_WITHOUT_LATCH: {
     status: "COMPLETED",
     percent: 100,
     completed_at: null,
@@ -34,8 +38,11 @@ export const CONTRATO_LATCH_CONCLUSAO_CONFIGURACAO = /** @type {const} */ ({
  * @param {number} completed
  * @param {number} [total]
  */
-export function projetarPercentualConfiguracao(completed, total = TOTAL_MILESTONES_CONFIGURACAO) {
-  const safeTotal = Math.max(1, Number(total) || TOTAL_MILESTONES_CONFIGURACAO);
+export function projetarPercentualConfiguracao(
+  completed,
+  total = TOTAL_MILESTONES_BLOQUEANTES_CONFIGURACAO,
+) {
+  const safeTotal = Math.max(1, Number(total) || TOTAL_MILESTONES_BLOQUEANTES_CONFIGURACAO);
   const safeCompleted = Math.max(0, Math.min(safeTotal, Number(completed) || 0));
   return Math.round((safeCompleted / safeTotal) * 100);
 }

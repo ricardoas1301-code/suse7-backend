@@ -406,7 +406,7 @@ export default async function handleSalesDetail(req, res) {
     if (orderId) {
       const { data: ord, error: ordErr } = await supabase
         .from("sales_orders")
-        .select("id,order_status,external_order_id,raw_json,marketplace_account_id,marketplace,seller_company_id")
+        .select("id,order_status,external_order_id,external_pack_id,raw_json,marketplace_account_id,marketplace,seller_company_id")
         .eq("user_id", user.id)
         .eq("id", orderId)
         .maybeSingle();

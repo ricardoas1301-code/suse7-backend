@@ -121,7 +121,7 @@ async function fetchOrdersById(supabase, userId, orderIds) {
     const { data, error } = await supabase
       .from("sales_orders")
       .select(
-        "id,user_id,marketplace,marketplace_account_id,seller_company_id,external_order_id,order_status,date_created_marketplace,date_closed_marketplace,paid_at,raw_json,created_at",
+        "id,user_id,marketplace,marketplace_account_id,seller_company_id,external_order_id,external_pack_id,order_status,date_created_marketplace,date_closed_marketplace,paid_at,raw_json,created_at",
       )
       .eq("user_id", userId)
       .in("id", chunk);

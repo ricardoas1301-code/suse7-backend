@@ -123,7 +123,14 @@ export async function runMlInitialProductsSyncJobTurn(supabase, job, runtime) {
 
     await patchMarketplaceSyncJob(supabase, String(jRow.id), {
       progress_total: progressTotal,
-      metadata: { ...metaBase, products_phase: "counted_pending_links" },
+      metadata: {
+        ...metaBase,
+        products_phase: "counted_pending_links",
+        listings_pending_product_link_total: progressTotal,
+        products_created_total: 0,
+        listings_linked_existing_product_total: 0,
+        listings_linked_new_product_total: 0,
+      },
     });
     jRow.progress_total = progressTotal;
   }
@@ -137,14 +144,37 @@ export async function runMlInitialProductsSyncJobTurn(supabase, job, runtime) {
   });
 
   if (progressTotal === 0) {
+    let productsUniverse = 0;
+    try {
+      const { data: distinctRows } = await supabase
+        .from("marketplace_listings")
+        .select("product_id")
+        .eq("user_id", userId)
+        .eq("marketplace_account_id", accountId)
+        .eq("seller_company_id", sellerCompanyId)
+        .in("marketplace", ML_MARKETPLACE_LISTING_ALIASES)
+        .not("product_id", "is", null)
+        .limit(10000);
+      if (Array.isArray(distinctRows)) {
+        productsUniverse = new Set(
+          distinctRows
+            .map((r) => (r?.product_id != null ? String(r.product_id) : ""))
+            .filter(Boolean),
+        ).size;
+      }
+    } catch {
+      productsUniverse = 0;
+    }
+
     await completeMarketplaceSyncJob(supabase, String(jRow.id), {
-      progress_total: 0,
-      progress_current: 0,
+      progress_total: productsUniverse,
+      progress_current: productsUniverse,
       last_cursor: null,
       last_synced_at: new Date().toISOString(),
       metadata: {
         ...metaBase,
         note: "nenhum_anúncio_sem_produto_nesta_conta",
+        products_universe_total: productsUniverse,
         step_result: stepResult(),
       },
     });
@@ -152,6 +182,7 @@ export async function runMlInitialProductsSyncJobTurn(supabase, job, runtime) {
       job_id: jRow.id,
       marketplace_account_id: accountId,
       scannedTotal: 0,
+      products_universe_total: productsUniverse,
     });
     return { stopped: true, done: true };
   }
@@ -201,9 +232,45 @@ export async function runMlInitialProductsSyncJobTurn(supabase, job, runtime) {
     });
 
     if (list.length === 0) {
+      // S1.03 — ao concluir, progresso = universo real de produtos (não anúncios s/ vínculo).
+      let productsUniverse = aggProductsCreated;
+      try {
+        const { count: linkedProductsCount, error: univErr } = await supabase
+          .from("marketplace_listings")
+          .select("product_id", { count: "exact", head: true })
+          .eq("user_id", userId)
+          .eq("marketplace_account_id", accountId)
+          .eq("seller_company_id", sellerCompanyId)
+          .in("marketplace", ML_MARKETPLACE_LISTING_ALIASES)
+          .not("product_id", "is", null);
+        if (!univErr && typeof linkedProductsCount === "number") {
+          // count exact com select product_id conta linhas; preferir distinct via RPC-less fallback
+          productsUniverse = linkedProductsCount;
+        }
+        const { data: distinctRows } = await supabase
+          .from("marketplace_listings")
+          .select("product_id")
+          .eq("user_id", userId)
+          .eq("marketplace_account_id", accountId)
+          .eq("seller_company_id", sellerCompanyId)
+          .in("marketplace", ML_MARKETPLACE_LISTING_ALIASES)
+          .not("product_id", "is", null)
+          .limit(10000);
+        if (Array.isArray(distinctRows)) {
+          const set = new Set(
+            distinctRows
+              .map((r) => (r?.product_id != null ? String(r.product_id) : ""))
+              .filter(Boolean),
+          );
+          productsUniverse = set.size;
+        }
+      } catch {
+        /* mantém fallback products_created */
+      }
+
       await completeMarketplaceSyncJob(supabase, String(jRow.id), {
-        progress_total: progressTotal,
-        progress_current: progressTotal,
+        progress_total: productsUniverse,
+        progress_current: productsUniverse,
         last_cursor: null,
         last_synced_at: new Date().toISOString(),
         metadata: {
@@ -212,6 +279,8 @@ export async function runMlInitialProductsSyncJobTurn(supabase, job, runtime) {
           listings_linked_existing_product_total: aggLinkedExisting,
           listings_linked_new_product_total: aggLinkedNew,
           listings_skipped_no_sku_total: aggSkippedNoSku,
+          listings_pending_product_link_total: progressTotal,
+          products_universe_total: productsUniverse,
           warnings_sample: aggWarnings.slice(-30),
           step_result: stepResult(),
         },
@@ -220,6 +289,7 @@ export async function runMlInitialProductsSyncJobTurn(supabase, job, runtime) {
         job_id: jRow.id,
         marketplace_account_id: accountId,
         scanned_total: progressTotal,
+        products_universe_total: productsUniverse,
         products_created_total: aggProductsCreated,
         listings_linked_existing_product_total: aggLinkedExisting,
         listings_linked_new_product_total: aggLinkedNew,
@@ -282,8 +352,10 @@ export async function runMlInitialProductsSyncJobTurn(supabase, job, runtime) {
     aggSkippedNoSku += pageSkippedNoSku;
 
     scannedTotal += list.length;
+    const productsHandled = aggProductsCreated + aggLinkedExisting + aggLinkedNew;
     const progressCap = progressTotal != null ? progressTotal : scannedTotal;
-    const progressDisplay = Math.min(scannedTotal, progressCap);
+    // S1.03 — progress_current = resultados de produto; progress_total = anúncios s/ vínculo (universo de trabalho)
+    const progressDisplay = Math.min(Math.max(productsHandled, scannedTotal), progressCap);
 
     const lastId = list[list.length - 1]?.id != null ? String(list[list.length - 1].id) : null;
     cursor = { id_after: lastId };
@@ -296,10 +368,14 @@ export async function runMlInitialProductsSyncJobTurn(supabase, job, runtime) {
       last_synced_at: nowIso,
       metadata: {
         ...metaBase,
+        products_phase: "linking",
+        listings_pending_product_link_total: progressTotal,
+        listings_scanned_total: scannedTotal,
         products_created_total: aggProductsCreated,
         listings_linked_existing_product_total: aggLinkedExisting,
         listings_linked_new_product_total: aggLinkedNew,
         listings_skipped_no_sku_total: aggSkippedNoSku,
+        products_handled_total: productsHandled,
         warnings_sample: aggWarnings.slice(-30),
         step_result: stepResult(),
         last_batch_entries: entries.length,

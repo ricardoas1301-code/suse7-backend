@@ -47,3 +47,53 @@ export function cicloOperacionalValoresValidos(closesAt, workingDays) {
   if (days.length === 0) return false;
   return Boolean(normalizarHoraEncerramentoOperacional(closesAt));
 }
+
+const HORA_ENCERRAMENTO_PATTERN = /^(\d{1,2}):(\d{2})(?::(\d{2}))?$/;
+
+/**
+ * Valida payload explícito de confirmação (não aplica defaults silenciosos).
+ * @param {Record<string, unknown> | null | undefined} body
+ */
+export function validarPayloadConfirmacaoCicloOperacional(body) {
+  const b = body && typeof body === "object" ? body : {};
+  const closesRaw = b.operational_day_closes_at ?? b.closes_at ?? b.close_time;
+  const closesStr = String(closesRaw ?? "").trim();
+  if (!closesStr || !HORA_ENCERRAMENTO_PATTERN.test(closesStr)) {
+    return {
+      ok: false,
+      code: "CLOSE_TIME_INVALID",
+      message: "Horário de encerramento operacional inválido.",
+    };
+  }
+
+  const daysRaw = b.operational_working_days ?? b.working_days;
+  if (!Array.isArray(daysRaw)) {
+    return {
+      ok: false,
+      code: "WORKING_DAYS_INVALID",
+      message: "Dias de operação inválidos.",
+    };
+  }
+
+  const workingDays = [
+    ...new Set(
+      daysRaw
+        .map((day) => Number(day))
+        .filter((day) => Number.isInteger(day) && day >= 0 && day <= 6),
+    ),
+  ].sort((a, b) => a - b);
+
+  if (workingDays.length === 0) {
+    return {
+      ok: false,
+      code: "WORKING_DAYS_EMPTY",
+      message: "Selecione pelo menos um dia de operação.",
+    };
+  }
+
+  return {
+    ok: true,
+    closesAt: normalizarHoraEncerramentoOperacional(closesStr),
+    workingDays,
+  };
+}

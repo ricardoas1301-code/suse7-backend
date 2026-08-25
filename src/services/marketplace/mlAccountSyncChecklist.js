@@ -23,7 +23,7 @@ export const ML_ACCOUNT_SYNC_CHECKLIST_DEFS = [
     sync_layer: "hot",
   },
   { key: "fees", label: "Taxas", job_types: ["ml_initial_fees"], sync_layer: "hot" },
-  { key: "products", label: "Produtos/SKU", job_types: ["ml_initial_products"], sync_layer: "hot" },
+  { key: "products", label: "Produtos", job_types: ["ml_initial_products"], sync_layer: "hot" },
   {
     key: "customers",
     label: "Clientes 360",

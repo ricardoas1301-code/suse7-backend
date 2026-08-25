@@ -27,6 +27,21 @@ assert(
   resolveSellerFacingSaleNumberFromOrder({ external_order_id: "2000018050953590" }) === "2000018050953590",
 );
 assert(
+  "S1_07_pack_from_raw_when_column_missing",
+  resolveSellerFacingSaleNumberFromOrder({
+    external_order_id: "2000018050953590",
+    raw_json: { pack_id: "2000014643438253" },
+  }) === "2000014643438253",
+);
+assert(
+  "S1_07_column_beats_raw",
+  resolveSellerFacingSaleNumberFromOrder({
+    external_pack_id: "COL_PACK",
+    external_order_id: "OID",
+    raw_json: { pack_id: "RAW_PACK" },
+  }) === "COL_PACK",
+);
+assert(
   "I8_historical_origin",
   resolveSnapshotOriginForSyncType("ml_historical_sales_backfill") === BILLING_SNAPSHOT_ORIGIN.ONBOARDING_IMPORT,
 );
@@ -43,4 +58,4 @@ if (failures.length) {
   console.error(JSON.stringify({ ok: false, failures }));
   process.exit(1);
 }
-console.log(JSON.stringify({ ok: true, tests: 5 }));
+console.log(JSON.stringify({ ok: true, tests: 7 }));
