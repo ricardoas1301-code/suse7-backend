@@ -35,6 +35,7 @@ import { runMlSalesHotJobPostCompletion, shouldEnqueueHistoricalAfterHotSalesCom
 import {
   ensureMarketplaceSyncJobRunning,
   patchMarketplaceSyncJob,
+  releaseMarketplaceSyncJobForContinuation,
   completeMarketplaceSyncJob,
   failMarketplaceSyncJob,
   heartbeatMarketplaceSyncJob,
@@ -216,6 +217,7 @@ function buildSalesBatchSoftYield(deadline, state, reason = "soft_deadline_exhau
   return {
     stopped: true,
     yielded: true,
+    continuation_released: true,
     yield_reason: reason,
     processedInThisRun: state.processedInThisRun,
     progress_current: state.processedTotal,
@@ -915,7 +917,17 @@ async function processMlSalesBatchJobInner(supabase, ctx) {
 
   const safePatchProgress = async (patch, reason) => {
     try {
-      await patchMarketplaceSyncJob(supabase, String(jRow.id), patch, { existingJob: jRow });
+      const softYieldMeta =
+        patch?.metadata &&
+        typeof patch.metadata === "object" &&
+        /** @type {Record<string, unknown>} */ (patch.metadata).soft_yield_reason != null &&
+        String(/** @type {Record<string, unknown>} */ (patch.metadata).soft_yield_reason).trim() !== "";
+      const skipLeaseRenew =
+        softYieldMeta || String(reason || "").startsWith("soft_deadline");
+      await patchMarketplaceSyncJob(supabase, String(jRow.id), patch, {
+        existingJob: jRow,
+        skipLeaseRenew,
+      });
       if (patch.metadata && typeof patch.metadata === "object") {
         jRow = {
           ...jRow,
@@ -924,6 +936,7 @@ async function processMlSalesBatchJobInner(supabase, ctx) {
         ctx.setState({ jRow });
       }
       if (
+        !skipLeaseRenew &&
         shouldFlushHybridHeartbeat({ ordersSinceHeartbeat, lastHeartbeatMs }) &&
         (patch.progress_current != null || patch.last_cursor != null)
       ) {
@@ -938,6 +951,30 @@ async function processMlSalesBatchJobInner(supabase, ctx) {
         message: e?.message ?? String(e),
       });
     }
+  };
+
+  /**
+   * Soft yield: persiste progresso sem renovar lease e libera job para pending.
+   * @param {string} reason
+   */
+  const finalizeSalesSoftYield = async (reason) => {
+    try {
+      await releaseMarketplaceSyncJobForContinuation(supabase, String(jRow.id), {
+        existingJob: jRow,
+        soft_yield_reason: reason,
+      });
+    } catch (e) {
+      console.warn("[ML_INITIAL_SALES_SYNC_SOFT_YIELD_RELEASE_WARN]", {
+        job_id: jRow.id,
+        reason,
+        message: e?.message ?? String(e),
+      });
+    }
+    return buildSalesBatchSoftYield(
+      invocationDeadline,
+      { jRow, processedInThisRun, processedTotal, progressTotal },
+      reason
+    );
   };
 
   const buildCoverageRow = (status, finishedAt) => {
@@ -995,11 +1032,7 @@ async function processMlSalesBatchJobInner(supabase, ctx) {
         "soft_deadline_before_orders_search"
       );
       await flushCoverage("running", null);
-      return buildSalesBatchSoftYield(
-        invocationDeadline,
-        { jRow, processedInThisRun, processedTotal, progressTotal },
-        "soft_deadline_before_orders_search"
-      );
+      return await finalizeSalesSoftYield("soft_deadline_before_orders_search");
     }
     await maybeFlushHybridHeartbeat("time_or_volume_tick");
     await safePatchProgress(
@@ -1069,11 +1102,7 @@ async function processMlSalesBatchJobInner(supabase, ctx) {
           "soft_deadline_ml_backoff"
         );
         await flushCoverage("running", null);
-        return buildSalesBatchSoftYield(
-          invocationDeadline,
-          { jRow, processedInThisRun, processedTotal, progressTotal },
-          "ml_backoff_yield"
-        );
+        return await finalizeSalesSoftYield("ml_backoff_yield");
       }
       const em = e?.message ? String(e.message) : String(e);
       const code = e && typeof e === "object" && "status" in e ? String(/** @type {{ status?: number }} */ (e).status) : "orders_search_fetch_error";
@@ -1399,11 +1428,7 @@ async function processMlSalesBatchJobInner(supabase, ctx) {
         "soft_deadline_before_order_batch"
       );
       await flushCoverage("running", null);
-      return buildSalesBatchSoftYield(
-        invocationDeadline,
-        { jRow, processedInThisRun, processedTotal, progressTotal },
-        "soft_deadline_before_order_batch"
-      );
+      return await finalizeSalesSoftYield("soft_deadline_before_order_batch");
     }
 
     const detailConcurrency = resolveOrderDetailConcurrency();
@@ -1442,9 +1467,7 @@ async function processMlSalesBatchJobInner(supabase, ctx) {
           "soft_deadline_mid_batch"
         );
         await flushCoverage("running", null);
-        return buildSalesBatchSoftYield(
-          invocationDeadline,
-          { jRow, processedInThisRun, processedTotal, progressTotal },
+        return await finalizeSalesSoftYield(
           pair.backoff_yield ? "ml_backoff_yield" : "soft_deadline_before_order_detail"
         );
       }
@@ -1594,11 +1617,7 @@ async function processMlSalesBatchJobInner(supabase, ctx) {
           "soft_deadline_before_order_persist"
         );
         await flushCoverage("running", null);
-        return buildSalesBatchSoftYield(
-          invocationDeadline,
-          { jRow, processedInThisRun, processedTotal, progressTotal },
-          "soft_deadline_before_order_persist"
-        );
+        return await finalizeSalesSoftYield("soft_deadline_before_order_persist");
       }
 
       try {
@@ -1778,11 +1797,7 @@ async function processMlSalesBatchJobInner(supabase, ctx) {
 
   await flushCoverage("running", null);
   if (invocationDeadline.isSoftExpired()) {
-    return buildSalesBatchSoftYield(
-      invocationDeadline,
-      { jRow, processedInThisRun, processedTotal, progressTotal },
-      "soft_deadline_exhausted"
-    );
+    return await finalizeSalesSoftYield("soft_deadline_exhausted");
   }
   return {
     stopped: false,
@@ -2002,15 +2017,38 @@ async function dispatchJobChunk(supabase, job, runtime) {
     const out = await runMlInitialListingsSyncJobTurn(supabase, job, { deadlineMs: runtime.deadlineMs });
     if (out?.done) done();
     const pir = Number(out?.listingsProcessedInRun ?? 0) || 0;
-    return {
+    /** @type {Record<string, unknown>} */
+    const result = {
       stopped: out.stopped,
       done: out.done,
       processedInThisRun: pir,
     };
+    if (!out?.done) {
+      await releaseMarketplaceSyncJobForContinuation(supabase, String(job.id), {
+        existingJob: job,
+        soft_yield_reason: "listings_turn_budget_exhausted",
+      });
+      result.continuation_released = true;
+      result.yielded = true;
+      result.yield_reason = "listings_turn_budget_exhausted";
+    }
+    return result;
   }
   if (t === "ml_initial_products") {
     const out = await runMlInitialProductsSyncJobTurn(supabase, job, { deadlineMs: runtime.deadlineMs });
     if (out?.done) done();
+    if (out && !out.done) {
+      await releaseMarketplaceSyncJobForContinuation(supabase, String(job.id), {
+        existingJob: job,
+        soft_yield_reason: "products_turn_budget_exhausted",
+      });
+      return {
+        ...out,
+        continuation_released: true,
+        yielded: true,
+        yield_reason: "products_turn_budget_exhausted",
+      };
+    }
     return out;
   }
   if (t === "ml_initial_fees") {

@@ -83,13 +83,81 @@ export async function patchMarketplaceSyncJob(supabase, jobId, patch, opts = {})
       : await loadJobMetadataFromDb(supabase, jobId);
     const patchMeta = /** @type {Record<string, unknown>} */ (safe.metadata);
     const merged = mergeOperationalSyncJobMetadata(existingMeta, patchMeta);
-    rowPatch.metadata = opts.skipLeaseRenew
+    // Soft yield / continuation must NOT renew lease — otherwise the worker exits while
+    // the job looks "freshly leased" and stale recovery is delayed or skipped.
+    const softYieldPatch = patchMeta.soft_yield_reason != null && String(patchMeta.soft_yield_reason).trim() !== "";
+    const skipRenew = opts.skipLeaseRenew === true || softYieldPatch;
+    rowPatch.metadata = skipRenew
       ? merged
       : buildLeaseHeartbeatMetadataPatch(merged, resolveSyncExecutorId(), Date.now());
   }
 
   const { error } = await supabase.from("marketplace_account_sync_jobs").update(rowPatch).eq("id", jobId);
   if (error) throw error;
+}
+
+/**
+ * CPJ2 T16 — após soft yield / turno incompleto: libera lease e recola como pending
+ * para retomada automática no próximo drain (sem depender de stale recovery por horas).
+ *
+ * @param {import("@supabase/supabase-js").SupabaseClient} supabase
+ * @param {string} jobId
+ * @param {{
+ *   existingJob?: Record<string, unknown>;
+ *   soft_yield_reason?: string;
+ *   extraMeta?: Record<string, unknown>;
+ * }} [opts]
+ * @returns {Promise<{ released: boolean }>}
+ */
+export async function releaseMarketplaceSyncJobForContinuation(supabase, jobId, opts = {}) {
+  const id = String(jobId || "").trim();
+  if (!id) return { released: false };
+
+  const nowIso = new Date().toISOString();
+  const existingMeta = opts.existingJob
+    ? readJobMetadataObject(opts.existingJob)
+    : await loadJobMetadataFromDb(supabase, id);
+  const reason =
+    opts.soft_yield_reason != null && String(opts.soft_yield_reason).trim() !== ""
+      ? String(opts.soft_yield_reason).trim()
+      : existingMeta.soft_yield_reason != null && String(existingMeta.soft_yield_reason).trim() !== ""
+        ? String(existingMeta.soft_yield_reason).trim()
+        : "turn_budget_exhausted";
+  const extra = opts.extraMeta && typeof opts.extraMeta === "object" ? opts.extraMeta : {};
+
+  /** @type {Record<string, unknown>} */
+  const metadata = {
+    ...existingMeta,
+    ...extra,
+    soft_yield_reason: reason,
+    soft_yield_at: nowIso,
+    lease_owner: null,
+    lease_expires_at: null,
+  };
+
+  const { data, error } = await supabase
+    .from("marketplace_account_sync_jobs")
+    .update({
+      status: "pending",
+      finished_at: null,
+      error_message: null,
+      updated_at: nowIso,
+      metadata,
+    })
+    .eq("id", id)
+    .eq("status", "running")
+    .select("id")
+    .maybeSingle();
+
+  if (error) throw error;
+  if (data?.id) {
+    console.info("[S7][marketplace-sync-soft-yield-released]", {
+      job_id: id,
+      soft_yield_reason: reason,
+    });
+    return { released: true };
+  }
+  return { released: false };
 }
 
 /**
