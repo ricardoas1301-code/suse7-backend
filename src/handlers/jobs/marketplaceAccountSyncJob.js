@@ -21,6 +21,11 @@
 
 import { createClient } from "@supabase/supabase-js";
 import { config } from "../../infra/config.js";
+import {
+  evaluateMarketplaceSyncWakeExecution,
+  resolveMarketplaceSyncWakeDefaultLimit,
+  resolveMarketplaceSyncWakeSource,
+} from "../../domain/marketplace/marketplaceSyncWakePolicy.js";
 import { runMarketplaceAccountSyncWorker, runScopedMarketplaceSyncJobDrain } from "../../services/marketplace/marketplaceAccountSyncWorker.js";
 
 function resolveSupabaseHostForLog() {
@@ -166,6 +171,32 @@ export async function handleJobsMarketplaceAccountSync(req, res) {
     console.info("[marketplace-account-sync-job] auth_ok", { auth_mode: auth.mode });
   }
 
+  const wakeAt = new Date().toISOString();
+  const wakeSource = resolveMarketplaceSyncWakeSource(req, { authMode: auth.mode });
+  const wakeDecision = evaluateMarketplaceSyncWakeExecution({ wakeSource });
+  console.info("[marketplace-account-sync-job] wake_policy", {
+    wake_source: wakeSource,
+    wake_at: wakeAt,
+    vercel_wake_enabled: wakeDecision.vercel_wake_enabled,
+    execute: wakeDecision.execute,
+    skip_reason: wakeDecision.skip_reason,
+    vercel_env: process.env.VERCEL_ENV ?? null,
+  });
+
+  if (!wakeDecision.execute) {
+    return res.status(200).json({
+      ok: true,
+      skipped: true,
+      reason: wakeDecision.skip_reason,
+      wake_source: wakeSource,
+      wake_at: wakeAt,
+      chunks_processed: 0,
+      auth_mode: auth.mode === "none" ? "none" : auth.mode,
+      hint:
+        "Vercel Cron marketplace wake desabilitado (MARKETPLACE_SYNC_VERCEL_WAKE_ENABLED). Anti-dual até cutover.",
+    });
+  }
+
   console.log("[MARKETPLACE_SYNC_JOB_ENV]", {
     supabase_host: resolveSupabaseHostForLog(),
     vercel_env: process.env.VERCEL_ENV ?? null,
@@ -215,11 +246,14 @@ export async function handleJobsMarketplaceAccountSync(req, res) {
   const rawBudgetMs = body.budget_ms ?? body.budgetMs ?? req.query?.budget_ms ?? req.query?.budgetMs;
   /** @type {{ maxChunks?: number; jobId?: string; budgetMs?: number }} */
   const workerOpts = {};
-  if (rawLimit != null && String(rawLimit).trim() !== "") {
-    const n = parseInt(String(rawLimit), 10);
-    if (Number.isFinite(n)) {
-      workerOpts.maxChunks = Math.max(1, Math.min(50, n));
-    }
+  const parsedLimit =
+    rawLimit != null && String(rawLimit).trim() !== "" ? parseInt(String(rawLimit), 10) : null;
+  const defaultLimit = resolveMarketplaceSyncWakeDefaultLimit({
+    wakeSource,
+    requestedLimit: Number.isFinite(parsedLimit) ? parsedLimit : null,
+  });
+  if (defaultLimit != null) {
+    workerOpts.maxChunks = defaultLimit;
   }
   if (rawJobId != null && String(rawJobId).trim() !== "") {
     workerOpts.jobId = String(rawJobId).trim();
@@ -230,7 +264,11 @@ export async function handleJobsMarketplaceAccountSync(req, res) {
   }
 
   try {
-    logSyncCheckpoint(4, { stage: "worker_dispatch_start", worker_opts: workerOpts });
+    logSyncCheckpoint(4, {
+      stage: "worker_dispatch_start",
+      worker_opts: workerOpts,
+      wake_source: wakeSource,
+    });
     const out =
       workerOpts.jobId != null
         ? await runScopedMarketplaceSyncJobDrain(supabase, workerOpts.jobId, {
@@ -242,6 +280,7 @@ export async function handleJobsMarketplaceAccountSync(req, res) {
       chunks_processed: out?.chunks_processed ?? (out?.ok ? 1 : 0),
       scoped_job_id: workerOpts.jobId ?? null,
       server_processing_ms: out?.server_processing_ms ?? null,
+      wake_source: wakeSource,
     });
     logSyncCheckpoint(6, {
       stage: "incremental_sales_poll_done",
@@ -250,6 +289,8 @@ export async function handleJobsMarketplaceAccountSync(req, res) {
     console.log("[MARKETPLACE_SYNC_JOB_SUMMARY]", {
       chunks_processed: out?.chunks_processed ?? 0,
       requested_limit_chunks: workerOpts.maxChunks ?? null,
+      wake_source: wakeSource,
+      wake_at: wakeAt,
     });
     logSyncCheckpoint(7, {
       stage: "response_ok",
@@ -257,6 +298,8 @@ export async function handleJobsMarketplaceAccountSync(req, res) {
     });
     return res.status(200).json({
       ok: true,
+      wake_source: wakeSource,
+      wake_at: wakeAt,
       ...(Object.keys(workerOpts).length ? { worker_opts: workerOpts } : {}),
       ...(workerOpts.maxChunks != null ? { requested_limit_chunks: workerOpts.maxChunks } : {}),
       ...out,
@@ -264,7 +307,7 @@ export async function handleJobsMarketplaceAccountSync(req, res) {
       auth_mode: auth.mode === "none" ? "none" : auth.mode,
       hint: workerOpts.jobId
         ? "Scoped drain: job_id processado exclusivamente (requer X-Job-Secret)."
-        : "Agende este endpoint em cron (ex.: Vercel/GitHub Actions) com X-Job-Secret.",
+        : "Wake: Vercel Cron (flag) ou X-Job-Secret (GH/nudges). Um primário por ambiente no cutover.",
     });
   } catch (e) {
     console.error("[jobs/marketplace-account-sync] fatal", {
@@ -272,10 +315,12 @@ export async function handleJobsMarketplaceAccountSync(req, res) {
       name: e?.name ?? null,
       code: e?.code ?? null,
       stack: e?.stack ?? null,
+      wake_source: wakeSource,
     });
     return res.status(500).json({
       ok: false,
       error: e?.message ? String(e.message) : "Falha no worker de sync marketplace",
+      wake_source: wakeSource,
     });
   }
 }
