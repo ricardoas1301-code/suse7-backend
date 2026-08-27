@@ -7,12 +7,16 @@ import { createClient } from "@supabase/supabase-js";
 import { config } from "../../infra/config.js";
 import { ok, fail, getTraceId } from "../../infra/http.js";
 import { processDailySalesSummaryAutomationMotor } from "../../domain/notifications/central/sales/processDailySalesSummaryAutomationMotor.js";
+import {
+  evaluateDailySalesWakeExecution,
+  resolveDailySalesWakeSource,
+} from "../../domain/notifications/central/sales/dailySalesSummaryWakePolicy.js";
 import { logCentralNotification } from "../../domain/notifications/central/observability/centralNotificationLog.js";
 
 /**
  * @param {import("http").IncomingMessage} req
  */
-function evaluateDailySalesSummaryJobAuth(req) {
+export function evaluateDailySalesSummaryJobAuth(req) {
   const jobSecret = config.jobSecret != null ? String(config.jobSecret).trim() : "";
   const cronSecret = config.cronSecret != null ? String(config.cronSecret).trim() : "";
   const headerSecret =
@@ -88,23 +92,59 @@ export async function handleJobsDailySalesSummaryAutomation(req, res) {
   }
 
   const auth = evaluateDailySalesSummaryJobAuth(req);
+  const wakeAt = new Date().toISOString();
+  const wakeSource = resolveDailySalesWakeSource(req, { authMode: auth.mode });
 
   logCentralNotification("DAILY_SALES_SUMMARY_JOB_START", {
     traceId,
     method,
+    wake_source: wakeSource,
+    wake_at: wakeAt,
     trigger:
-      auth.mode === "cron-secret"
+      wakeSource === "vercel_cron"
         ? "vercel_cron"
         : auth.mode === "x-job-secret"
           ? "job_secret"
-          : "open",
+          : auth.mode === "cron-secret"
+            ? "cron_secret"
+            : "open",
     auth_mode: auth.mode ?? "denied",
     vercel_env: process.env.VERCEL_ENV ?? null,
     cron_invocation: req.headers["x-vercel-cron"] != null ? String(req.headers["x-vercel-cron"]) : null,
   });
 
+  // Auth primeiro: secret invalido nunca vira skip (nao mascara 401).
   if (!auth.allow) {
     return fail(res, { code: "UNAUTHORIZED", message: "Token de job inválido" }, 401, traceId);
+  }
+
+  const wakeDecision = evaluateDailySalesWakeExecution({ wakeSource });
+  logCentralNotification("DAILY_SALES_SUMMARY_WAKE_POLICY", {
+    traceId,
+    wake_source: wakeSource,
+    wake_at: wakeAt,
+    vercel_wake_enabled: wakeDecision.vercel_wake_enabled,
+    execute: wakeDecision.execute,
+    skip_reason: wakeDecision.skip_reason,
+  });
+
+  if (!wakeDecision.execute) {
+    return ok(res, {
+      ok: true,
+      skipped: true,
+      reason: wakeDecision.skip_reason,
+      wake_source: wakeSource,
+      wake_at: wakeAt,
+      wake_enabled: wakeDecision.vercel_wake_enabled,
+      job: "daily-sales-summary-automation",
+      processed_count: 0,
+      scanned: 0,
+      completed: 0,
+      failed: 0,
+      skipped_rules: 0,
+      hint: "Vercel Cron Daily Sales wake desabilitado (DAILY_SALES_VERCEL_WAKE_ENABLED). Anti-dual ate cutover.",
+      traceId,
+    });
   }
 
   if (!config.supabaseUrl?.trim() || !config.supabaseServiceRoleKey?.trim()) {
@@ -156,8 +196,21 @@ export async function handleJobsDailySalesSummaryAutomation(req, res) {
           }))
         : [],
     });
-    logCentralNotification("DAILY_SALES_SUMMARY_JOB_OK", { traceId, ...result });
-    return ok(res, { ok: true, job: "daily-sales-summary-automation", ...result, traceId });
+    logCentralNotification("DAILY_SALES_SUMMARY_JOB_OK", {
+      traceId,
+      wake_source: wakeSource,
+      wake_at: wakeAt,
+      ...result,
+    });
+    return ok(res, {
+      ok: true,
+      job: "daily-sales-summary-automation",
+      wake_source: wakeSource,
+      wake_at: wakeAt,
+      wake_enabled: wakeDecision.vercel_wake_enabled,
+      ...result,
+      traceId,
+    });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Falha no motor de resumo diário.";
     logCentralNotification("DAILY_SALES_SUMMARY_JOB_ERR", { traceId, message });
