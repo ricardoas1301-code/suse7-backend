@@ -62,6 +62,32 @@ function pickExternalListingIdForCatalog(item, row, listingId) {
 }
 
 /**
+ * Serializa o Set interno de anúncios vinculados (agregação em memória) para o contrato JSON.
+ * Ordenação estável; sem inventar "listing principal".
+ * @param {unknown} raw
+ * @returns {string[]}
+ */
+export function serializeLinkedListingIds(raw) {
+  /** @type {Iterable<unknown>} */
+  let values = [];
+  if (raw instanceof Set) values = raw;
+  else if (Array.isArray(raw)) values = raw;
+  else return [];
+
+  /** @type {string[]} */
+  const out = [];
+  const seen = new Set();
+  for (const v of values) {
+    const id = v != null ? String(v).trim() : "";
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    out.push(id);
+  }
+  out.sort((a, b) => a.localeCompare(b));
+  return out;
+}
+
+/**
  * @param {{
  *   marketplace?: string | null;
  *   marketplace_account_id?: string | null;
@@ -916,9 +942,13 @@ export async function buildSaleExecutiveSummary(supabase, userId, filters, optio
   const productSorted = [...productAgg.values()]
     .map((entry) => {
       const finalized = finalizeRankingEntry(entry);
+      const linkedListingIds = serializeLinkedListingIds(entry.linked_listing_ids);
+      // Remove Set interno do spread — só a coleção serializada segue no contrato.
+      const { linked_listing_ids: _linkedSet, ...rest } = finalized;
       return {
-        ...finalized,
-        linked_listings_count: entry.linked_listing_ids?.size ?? 0,
+        ...rest,
+        linked_listings_count: linkedListingIds.length,
+        linked_listing_ids: linkedListingIds,
       };
     })
     .sort((a, b) => {
@@ -941,6 +971,9 @@ export async function buildSaleExecutiveSummary(supabase, userId, filters, optio
           average_ticket_brl = null;
         }
       }
+      const linkedListingIds = Array.isArray(row.linked_listing_ids)
+        ? row.linked_listing_ids.map((id) => String(id).trim()).filter(Boolean)
+        : [];
       return {
       rank: i + 1,
       product_id: row.product_id,
@@ -956,7 +989,8 @@ export async function buildSaleExecutiveSummary(supabase, userId, filters, optio
       margin_percent: row.margin_percent,
       contribution_margin_percent: row.contribution_margin_percent,
       average_ticket_brl,
-      linked_listings_count: row.linked_listings_count,
+      linked_listings_count: linkedListingIds.length,
+      linked_listing_ids: linkedListingIds,
     };
     });
 
