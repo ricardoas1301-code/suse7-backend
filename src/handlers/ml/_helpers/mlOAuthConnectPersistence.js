@@ -851,6 +851,27 @@ export async function persistMlTokens(supabase, row) {
   }
 
   if (insErr) {
+    const code = String(insErr.code ?? "");
+    const msg = String(insErr.message ?? "").toLowerCase();
+    const details = String(insErr.details ?? "").toLowerCase();
+    if (
+      code === "23505" &&
+      (msg.includes("user_id") || details.includes("user_id")) &&
+      (msg.includes("marketplace") || details.includes("marketplace")) &&
+      !msg.includes("ml_user_id") &&
+      !details.includes("ml_user_id")
+    ) {
+      const err = {
+        code: "23505",
+        message:
+          "Constraint UNIQUE legado (user_id, marketplace) bloqueou a 2ª conta ML. Aplique a migration multi-conta (ml_tokens_user_marketplace_ml_user_uidx).",
+        details: insErr.details ?? null,
+        hint: "CPJ2-T1: remova UNIQUE mono-conta e use (user_id, marketplace, ml_user_id).",
+        constraint: insErr.constraint ?? null,
+      };
+      logPersistTokensSupabaseError(rowForLog, "persist_tokens_insert_legacy_unique_collision", err);
+      return { ok: false, error: err, marketplace_account_id: persistedMarketplaceAccountId };
+    }
     logPersistTokensSupabaseError(rowForLog, "persist_tokens_insert_failed", insErr);
     return { ok: false, error: insErr, marketplace_account_id: persistedMarketplaceAccountId };
   }

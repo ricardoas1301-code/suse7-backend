@@ -61,6 +61,14 @@ export function buildSkuDependencyPendingDescription(count) {
  *   universeStable?: boolean;
  *   mlInitialSyncPhase?: "none" | "awaiting_start" | "in_progress";
  *   mlMarketplaceAccountId?: string | null;
+ *   mlAccountSyncStates?: Array<{
+ *     marketplace_account_id: string;
+ *     phase: "none" | "awaiting_start" | "in_progress";
+ *     account_label?: string | null;
+ *     account_avatar_url?: string | null;
+ *     ml_nickname?: string | null;
+ *     status?: string | null;
+ *   }>;
  *   profilePhotoUrl?: string | null;
  *   companyLogoUrl?: string | null;
  *   primaryCompany?: Record<string, unknown> | null;
@@ -78,8 +86,14 @@ export function buildOperationalTasksPayload(counts = {}) {
       ? String(counts.mlMarketplaceAccountId).trim()
       : null;
 
+  const accountStates = Array.isArray(counts.mlAccountSyncStates)
+    ? counts.mlAccountSyncStates.filter(
+        (s) => s?.marketplace_account_id && String(s.marketplace_account_id).trim() !== "",
+      )
+    : [];
+
   // S1.09 — sem conta ML: pendência flutuante "Conectar marketplace" (fora do modal M1–M5).
-  if (mlPhase === "none" && !mlAccountId) {
+  if (accountStates.length === 0 && mlPhase === "none" && !mlAccountId) {
     tasks.push({
       id: "marketplace_connect_pending",
       type: "marketplace_connect_pending",
@@ -100,7 +114,79 @@ export function buildOperationalTasksPayload(counts = {}) {
     });
   }
 
-  if (mlPhase === "awaiting_start" && mlAccountId) {
+  // CPJ-2 T1 — uma pendência por connection/account (não singleton).
+  if (accountStates.length > 0) {
+    let sortBase = 1;
+    for (const st of accountStates) {
+      const accountId = String(st.marketplace_account_id).trim();
+      const phase = String(st.phase ?? "none").trim();
+      if (phase !== "awaiting_start" && phase !== "in_progress") continue;
+      const label =
+        (st.account_label != null && String(st.account_label).trim()) ||
+        (st.ml_nickname != null && String(st.ml_nickname).trim()) ||
+        null;
+      const avatar =
+        st.account_avatar_url != null && String(st.account_avatar_url).trim() !== ""
+          ? String(st.account_avatar_url).trim()
+          : null;
+      const titleSuffix = label ? ` — ${label}` : "";
+      if (phase === "awaiting_start") {
+        const needsReauth = ["invalid", "expired", "error"].includes(
+          String(st.status ?? "").trim().toLowerCase(),
+        );
+        tasks.push({
+          id: `ml_initial_sync_pending:${accountId}`,
+          type: "ml_initial_sync_pending",
+          title: needsReauth
+            ? `Reconectar Mercado Livre${titleSuffix}`
+            : `Sincronizar Mercado Livre${titleSuffix}`,
+          description: needsReauth
+            ? "A conta precisa ser reautenticada antes de iniciar a sincronização inicial."
+            : label
+              ? `A sincronização inicial de ${label} ainda não foi iniciada.`
+              : "Importe seus dados do Mercado Livre para começar a trabalhar com suas vendas, anúncios e produtos no SUSE7.",
+          status: "requires_action",
+          priority: "critical",
+          icon: "marketplace_sync",
+          marketplace: "mercado_livre",
+          marketplace_account_id: accountId,
+          account_label: label,
+          account_avatar_url: avatar,
+          action: {
+            type: needsReauth ? "open_marketplace_connect" : "open_ml_initial_sync_modal",
+            label: needsReauth ? "Reconectar" : "Sincronizar",
+          },
+          scope: "marketplace",
+          dedupe_key: `ml_initial_sync_pending:${accountId}`,
+          sort_order: sortBase++,
+        });
+      } else {
+        tasks.push({
+          id: `ml_initial_sync_in_progress:${accountId}`,
+          type: "ml_initial_sync_in_progress",
+          title: `Sincronizando Mercado Livre${titleSuffix}`,
+          description: label
+            ? `Estamos importando os dados de ${label}. Você pode continuar usando o SUSE7.`
+            : "Estamos importando seus dados. Você pode continuar usando o SUSE7 enquanto isso.",
+          status: "processing",
+          priority: "high",
+          icon: "marketplace_sync",
+          marketplace: "mercado_livre",
+          marketplace_account_id: accountId,
+          account_label: label,
+          account_avatar_url: avatar,
+          action: {
+            type: "open_ml_sync_modal",
+            label: "Ver sincronização",
+          },
+          scope: "marketplace",
+          dedupe_key: `ml_initial_sync_in_progress:${accountId}`,
+          sort_order: sortBase++,
+        });
+      }
+    }
+  } else if (mlPhase === "awaiting_start" && mlAccountId) {
+    // Compat single-account legado (sem array de estados).
     tasks.push({
       id: "ml_initial_sync_pending",
       type: "ml_initial_sync_pending",

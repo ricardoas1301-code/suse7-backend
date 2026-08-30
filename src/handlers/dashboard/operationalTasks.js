@@ -70,6 +70,7 @@ export async function handleDashboardOperationalTasks(req, res) {
       universeStable: universe.stable,
       mlInitialSyncPhase: mlSyncPhase.phase,
       mlMarketplaceAccountId: mlSyncPhase.marketplace_account_id,
+      mlAccountSyncStates: Array.isArray(mlSyncPhase.accounts) ? mlSyncPhase.accounts : [],
       profilePhotoUrl: profileRes.data?.photo_url ?? null,
       companyLogoUrl: primaryCompany?.logo_url ?? null,
       primaryCompany: primaryCompany ?? null,

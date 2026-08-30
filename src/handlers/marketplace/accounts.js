@@ -245,15 +245,23 @@ export default async function handleMarketplaceAccounts(req, res) {
     const accountIdsForPipeline = data.map((r) => String(r?.id || "").trim()).filter(Boolean);
     const pipelineSet = await fetchMarketplaceAccountsWithActiveMlPipeline(supabase, accountIdsForPipeline, mpSlug);
 
-    let mlSyncPhase = /** @type {{ phase: "none" | "awaiting_start" | "in_progress"; marketplace_account_id: string | null }} */ ({
+    let mlSyncPhase = /** @type {{ phase: "none" | "awaiting_start" | "in_progress"; marketplace_account_id: string | null; accounts?: Array<{ marketplace_account_id: string; phase: string }> }} */ ({
       phase: "none",
       marketplace_account_id: null,
+      accounts: [],
     });
     if (!filterMarketplace || filterMarketplace === ML_MARKETPLACE_SLUG) {
       try {
         mlSyncPhase = await resolveMlInitialSyncOperationalPhase(supabase, user.id);
       } catch {
-        mlSyncPhase = { phase: "none", marketplace_account_id: null };
+        mlSyncPhase = { phase: "none", marketplace_account_id: null, accounts: [] };
+      }
+    }
+    /** @type {Map<string, string>} */
+    const phaseByAccountId = new Map();
+    for (const st of mlSyncPhase.accounts ?? []) {
+      if (st?.marketplace_account_id) {
+        phaseByAccountId.set(String(st.marketplace_account_id), String(st.phase ?? "none"));
       }
     }
 
@@ -289,11 +297,7 @@ export default async function handleMarketplaceAccounts(req, res) {
           ? await fetchMlTokenProbeForMlSeller(supabase, user.id, mpSlug, ext, String(row.id))
           : await fetchMlTokenProbeForUser(supabase, user.id, mpSlug);
         const pack = buildMlConnectionUiPack(rowEnriched, tokenProbe, pipelineSet.has(String(row.id)));
-        const accountPhase =
-          mlSyncPhase.marketplace_account_id != null &&
-          String(mlSyncPhase.marketplace_account_id) === String(row.id)
-            ? mlSyncPhase.phase
-            : "none";
+        const accountPhase = phaseByAccountId.get(String(row.id)) ?? "none";
         const integrationPresentation = buildMarketplaceIntegrationPresentation({
           connectionPack: pack,
           mlInitialSyncPhase: accountPhase,
