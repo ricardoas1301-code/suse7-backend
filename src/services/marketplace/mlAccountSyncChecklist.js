@@ -3,6 +3,10 @@
 // entre GET sync-status e GET import-intelligence.
 // ======================================================================
 
+import {
+  hasEngagedRealOrActiveSync,
+  resolveEffectiveSyncJobStatus,
+} from "../../domain/marketplace/isEffectiveSyncSuccess.js";
 import { ML_SALES_HOT_TYPES } from "./createMlInitialSyncJobs.js";
 
 /**
@@ -198,7 +202,7 @@ export function buildMlAccountSyncChecklist(account, rows) {
     }
 
     const job = pickLatestAmong(rows, def.job_types);
-    const st = job?.status != null ? String(job.status) : "pending";
+    const st = job ? resolveEffectiveSyncJobStatus(job) : "pending";
     checklist.push({
       key: def.key,
       label: def.label,
@@ -218,5 +222,11 @@ export function buildMlAccountSyncChecklist(account, rows) {
     .map((x) => String(x.status || ""));
   const hotAllDone = gateStatuses.length > 0 && gateStatuses.every((s) => s === "done");
 
-  return { checklist, historicalSalesAgg, hotAllDone, hasEngagedInitialSync: rows.length > 0 };
+  return {
+    checklist,
+    historicalSalesAgg,
+    hotAllDone,
+    // Só stubs de maintenance NÃO engajam sync real (seller ainda precisa iniciar).
+    hasEngagedInitialSync: hasEngagedRealOrActiveSync(rows),
+  };
 }

@@ -4,6 +4,7 @@
 
 import { ML_MARKETPLACE_SLUG } from "../../handlers/ml/_helpers/mlMarketplace.js";
 import { ML_LISTINGS_TYPES } from "../../services/marketplace/createMlInitialSyncJobs.js";
+import { isEffectiveSyncSuccess } from "../marketplace/isEffectiveSyncSuccess.js";
 import { resolveInitialSyncUniverseStable } from "./initialSyncUniverseStable.js";
 
 const PRODUCTS_JOB_TYPE = "ml_initial_products";
@@ -17,6 +18,9 @@ const ACTIVE_JOB_STATUSES = new Set(["pending", "queued", "running", "processing
  *   status: string;
  *   account_label: string | null;
  *   account_avatar_url: string | null;
+ *   store_name: string | null;
+ *   store_document_cnpj: string | null;
+ *   store_logo_url: string | null;
  *   ml_nickname: string | null;
  *   external_seller_id: string | null;
  * }} MlAccountSyncOperationalState
@@ -61,14 +65,20 @@ export async function resolveMlInitialSyncOperationalPhase(supabase, userId) {
         .filter(Boolean),
     ),
   ];
-  /** @type {Map<string, { trade_name?: string | null; company_name?: string | null; logo_url?: string | null; avatar_url?: string | null }>} */
+  /** @type {Map<string, { trade_name?: string | null; company_name?: string | null; logo_url?: string | null; document_cnpj?: string | null }>} */
   const companyById = new Map();
   if (companyIds.length) {
-    const { data: cos } = await supabase
+    const { data: cos, error: coErr } = await supabase
       .from("seller_companies")
-      .select("id, trade_name, company_name, logo_url, avatar_url")
+      .select("id, trade_name, company_name, logo_url, document_cnpj")
       .eq("user_id", uid)
       .in("id", companyIds);
+    if (coErr) {
+      console.warn("[ml/ot] seller_companies lookup failed", {
+        code: coErr.code,
+        message: coErr.message,
+      });
+    }
     for (const c of cos ?? []) {
       if (c?.id) companyById.set(String(c.id), c);
     }
@@ -78,7 +88,7 @@ export async function resolveMlInitialSyncOperationalPhase(supabase, userId) {
   let jobRows = [];
   const { data: jobs, error: jobErr } = await supabase
     .from("marketplace_account_sync_jobs")
-    .select("marketplace_account_id, job_type, status")
+    .select("marketplace_account_id, job_type, status, metadata")
     .in("marketplace_account_id", accountIds);
 
   if (jobErr) {
@@ -101,17 +111,22 @@ export async function resolveMlInitialSyncOperationalPhase(supabase, userId) {
     const status = String(row?.status ?? "").trim().toLowerCase() || "unknown";
     const coId = row?.seller_company_id != null ? String(row.seller_company_id).trim() : "";
     const co = coId ? companyById.get(coId) : null;
-    const alias = row?.account_alias != null ? String(row.account_alias).trim() : "";
     const nick = row?.ml_nickname != null ? String(row.ml_nickname).trim() : "";
     const trade = co?.trade_name != null ? String(co.trade_name).trim() : "";
     const cname = co?.company_name != null ? String(co.company_name).trim() : "";
-    const label = alias || nick || trade || cname || null;
-    const avatar =
+    // Identidade da LOJA = SSOT seller_companies (não nickname/alias da conta ML).
+    const storeName = trade || cname || null;
+    const storeDoc =
+      co?.document_cnpj != null && String(co.document_cnpj).trim() !== ""
+        ? String(co.document_cnpj).replace(/\D/g, "")
+        : null;
+    const storeLogo =
       co?.logo_url != null && String(co.logo_url).trim() !== ""
         ? String(co.logo_url).trim()
-        : co?.avatar_url != null && String(co.avatar_url).trim() !== ""
-          ? String(co.avatar_url).trim()
-          : null;
+        : null;
+    // account_label permanece como nome da loja para compat de consumidores existentes.
+    const label = storeName;
+    const avatar = storeLogo;
 
     const accountJobs = jobRows.filter((j) => String(j?.marketplace_account_id ?? "") === accountId);
 
@@ -132,20 +147,22 @@ export async function resolveMlInitialSyncOperationalPhase(supabase, userId) {
       } else if (!universe.stable) {
         // Universo ainda instável, mas jobs desta conta já pararam → tratar como in_progress leve
         // apenas se ainda faltam etapas canônicas desta conta.
+        // Maintenance stub (done+skipped) NÃO conta como sucesso real.
         const listingsDone = accountJobs.some(
-          (j) => ML_LISTINGS_TYPES.includes(String(j.job_type)) && String(j.status).toLowerCase() === "done",
+          (j) => ML_LISTINGS_TYPES.includes(String(j.job_type)) && isEffectiveSyncSuccess(j),
         );
         const productsDone = accountJobs.some(
-          (j) => String(j.job_type) === PRODUCTS_JOB_TYPE && String(j.status).toLowerCase() === "done",
+          (j) => String(j.job_type) === PRODUCTS_JOB_TYPE && isEffectiveSyncSuccess(j),
         );
         phase = !listingsDone || !productsDone ? "in_progress" : "none";
       } else {
         const listingsDone = accountJobs.some(
-          (j) => ML_LISTINGS_TYPES.includes(String(j.job_type)) && String(j.status).toLowerCase() === "done",
+          (j) => ML_LISTINGS_TYPES.includes(String(j.job_type)) && isEffectiveSyncSuccess(j),
         );
         const productsDone = accountJobs.some(
-          (j) => String(j.job_type) === PRODUCTS_JOB_TYPE && String(j.status).toLowerCase() === "done",
+          (j) => String(j.job_type) === PRODUCTS_JOB_TYPE && isEffectiveSyncSuccess(j),
         );
+        // Só stubs de maintenance → awaiting_start (seller precisa rodar sync real).
         phase = !listingsDone || !productsDone ? "awaiting_start" : "none";
       }
     }
@@ -156,6 +173,9 @@ export async function resolveMlInitialSyncOperationalPhase(supabase, userId) {
       status,
       account_label: label,
       account_avatar_url: avatar,
+      store_name: storeName,
+      store_document_cnpj: storeDoc,
+      store_logo_url: storeLogo,
       ml_nickname: nick || null,
       external_seller_id:
         row?.external_seller_id != null ? String(row.external_seller_id).trim() : null,

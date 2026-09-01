@@ -66,6 +66,9 @@ export function buildSkuDependencyPendingDescription(count) {
  *     phase: "none" | "awaiting_start" | "in_progress";
  *     account_label?: string | null;
  *     account_avatar_url?: string | null;
+ *     store_name?: string | null;
+ *     store_document_cnpj?: string | null;
+ *     store_logo_url?: string | null;
  *     ml_nickname?: string | null;
  *     status?: string | null;
  *   }>;
@@ -97,7 +100,7 @@ export function buildOperationalTasksPayload(counts = {}) {
     tasks.push({
       id: "marketplace_connect_pending",
       type: "marketplace_connect_pending",
-      title: "Conectar marketplace",
+      title: "Conectar Mercado Livre",
       description:
         "Conecte sua conta do Mercado Livre para importar anúncios, produtos e vendas no SUSE7.",
       status: "requires_action",
@@ -106,7 +109,7 @@ export function buildOperationalTasksPayload(counts = {}) {
       marketplace: "mercado_livre",
       action: {
         type: "open_marketplace_connect",
-        label: "Conectar marketplace",
+        label: "Conectar",
       },
       scope: "marketplace",
       dedupe_key: "marketplace_connect_pending",
@@ -121,15 +124,20 @@ export function buildOperationalTasksPayload(counts = {}) {
       const accountId = String(st.marketplace_account_id).trim();
       const phase = String(st.phase ?? "none").trim();
       if (phase !== "awaiting_start" && phase !== "in_progress") continue;
-      const label =
+
+      const storeName =
+        (st.store_name != null && String(st.store_name).trim()) ||
         (st.account_label != null && String(st.account_label).trim()) ||
-        (st.ml_nickname != null && String(st.ml_nickname).trim()) ||
         null;
-      const avatar =
-        st.account_avatar_url != null && String(st.account_avatar_url).trim() !== ""
-          ? String(st.account_avatar_url).trim()
+      const storeLogo =
+        (st.store_logo_url != null && String(st.store_logo_url).trim()) ||
+        (st.account_avatar_url != null && String(st.account_avatar_url).trim()) ||
+        null;
+      const storeDoc =
+        st.store_document_cnpj != null && String(st.store_document_cnpj).trim() !== ""
+          ? String(st.store_document_cnpj).replace(/\D/g, "")
           : null;
-      const titleSuffix = label ? ` — ${label}` : "";
+
       if (phase === "awaiting_start") {
         const needsReauth = ["invalid", "expired", "error"].includes(
           String(st.status ?? "").trim().toLowerCase(),
@@ -137,21 +145,21 @@ export function buildOperationalTasksPayload(counts = {}) {
         tasks.push({
           id: `ml_initial_sync_pending:${accountId}`,
           type: "ml_initial_sync_pending",
-          title: needsReauth
-            ? `Reconectar Mercado Livre${titleSuffix}`
-            : `Sincronizar Mercado Livre${titleSuffix}`,
+          // Título = AÇÃO + MARKETPLACE (identidade da loja fica no bloco separado).
+          title: needsReauth ? "Reconectar Mercado Livre" : "Sincronizar Mercado Livre",
           description: needsReauth
             ? "A conta precisa ser reautenticada antes de iniciar a sincronização inicial."
-            : label
-              ? `A sincronização inicial de ${label} ainda não foi iniciada.`
-              : "Importe seus dados do Mercado Livre para começar a trabalhar com suas vendas, anúncios e produtos no SUSE7.",
+            : "Importe seus dados do Mercado Livre para começar a trabalhar com suas vendas, anúncios e produtos no SUSE7.",
           status: "requires_action",
           priority: "critical",
           icon: "marketplace_sync",
           marketplace: "mercado_livre",
           marketplace_account_id: accountId,
-          account_label: label,
-          account_avatar_url: avatar,
+          account_label: storeName,
+          account_avatar_url: storeLogo,
+          store_name: storeName,
+          store_document_cnpj: storeDoc,
+          store_logo_url: storeLogo,
           action: {
             type: needsReauth ? "open_marketplace_connect" : "open_ml_initial_sync_modal",
             label: needsReauth ? "Reconectar" : "Sincronizar",
@@ -164,17 +172,18 @@ export function buildOperationalTasksPayload(counts = {}) {
         tasks.push({
           id: `ml_initial_sync_in_progress:${accountId}`,
           type: "ml_initial_sync_in_progress",
-          title: `Sincronizando Mercado Livre${titleSuffix}`,
-          description: label
-            ? `Estamos importando os dados de ${label}. Você pode continuar usando o SUSE7.`
-            : "Estamos importando seus dados. Você pode continuar usando o SUSE7 enquanto isso.",
+          title: "Sincronizando Mercado Livre",
+          description: "Estamos importando seus dados. Você pode continuar usando o SUSE7 enquanto isso.",
           status: "processing",
           priority: "high",
           icon: "marketplace_sync",
           marketplace: "mercado_livre",
           marketplace_account_id: accountId,
-          account_label: label,
-          account_avatar_url: avatar,
+          account_label: storeName,
+          account_avatar_url: storeLogo,
+          store_name: storeName,
+          store_document_cnpj: storeDoc,
+          store_logo_url: storeLogo,
           action: {
             type: "open_ml_sync_modal",
             label: "Ver sincronização",

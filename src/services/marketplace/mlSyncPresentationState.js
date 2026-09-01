@@ -97,10 +97,24 @@ export function resolveMlSellerSyncPresentationState(ctx) {
     summaryLabel = "Concluído com avisos";
     sellerHeadline = summaryLabel;
   } else if (overall === "done") {
-    displayOverall = "done";
-    summaryTone = "ok";
-    summaryLabel = "Concluída";
-    sellerHeadline = "Integração Mercado Livre";
+    // Badge terminal só quando NÃO há etapa obrigatória pendente/running/erro
+    // (counters/checklist incluem historical; overall hot-only não basta).
+    if (pendingCount > 0 || runningCount > 0 || errorCount > 0) {
+      displayOverall = runningCount > 0 || historicalActive ? "running" : "background_sync";
+      summaryTone = errorCount > 0 ? "error" : "processing";
+      summaryLabel = errorCount > 0 ? "Com pendências" : runningCount > 0 ? "Em andamento" : "Com pendências";
+      sellerHeadline =
+        errorCount > 0
+          ? "Sincronização com pendências"
+          : historicalActive
+            ? "Importação histórica em andamento"
+            : "Sincronização com etapas pendentes";
+    } else {
+      displayOverall = "done";
+      summaryTone = "ok";
+      summaryLabel = "Concluída";
+      sellerHeadline = "Integração Mercado Livre";
+    }
   } else if (pendingCount > 0) {
     summaryTone = "warn";
     summaryLabel = "Com pendências";
@@ -108,7 +122,11 @@ export function resolveMlSellerSyncPresentationState(ctx) {
   }
 
   const fullyComplete =
-    overall === "done" && !historicalActive && runningCount === 0 && errorCount === 0;
+    overall === "done" &&
+    !historicalActive &&
+    runningCount === 0 &&
+    errorCount === 0 &&
+    pendingCount === 0;
 
   return {
     display_overall: displayOverall,

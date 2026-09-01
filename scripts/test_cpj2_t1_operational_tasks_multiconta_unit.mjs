@@ -34,7 +34,34 @@ assert.equal(rp.action?.type, "open_ml_sync_modal");
 assert.equal(go.action?.type, "open_marketplace_connect");
 assert.equal(rp.account_label, "SMR - RP");
 assert.equal(go.account_label, "SMR - GO");
+assert.equal(rp.title, "Sincronizando Mercado Livre");
+assert.equal(go.title, "Reconectar Mercado Livre");
+assert.ok(!String(rp.title).includes("—"));
+assert.ok(!String(go.title).includes("—"));
+assert.equal(rp.store_name, "SMR - RP");
+assert.equal(go.store_name, "SMR - GO");
 assert.notEqual(rp.dedupe_key, go.dedupe_key);
+
+const withStoreDoc = buildOperationalTasksPayload({
+  universeStable: true,
+  mlAccountSyncStates: [
+    {
+      marketplace_account_id: "22222222-2222-4222-8222-222222222222",
+      phase: "awaiting_start",
+      store_name: "SMR - GO",
+      store_document_cnpj: "73151110000209",
+      store_logo_url: "https://example.com/go.png",
+      ml_nickname: "CHURRASCO SMR",
+      status: "active",
+    },
+  ],
+});
+const goStore = withStoreDoc.tasks.find((t) => t.type === "ml_initial_sync_pending");
+assert.equal(goStore?.title, "Sincronizar Mercado Livre");
+assert.equal(goStore?.store_name, "SMR - GO");
+assert.equal(goStore?.store_document_cnpj, "73151110000209");
+assert.notEqual(goStore?.store_name, "CHURRASCO SMR");
+assert.ok(!String(goStore?.title || "").includes("CHURRASCO"));
 
 const single = buildOperationalTasksPayload({
   universeStable: true,
