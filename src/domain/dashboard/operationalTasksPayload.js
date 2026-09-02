@@ -64,6 +64,7 @@ export function buildSkuDependencyPendingDescription(count) {
  *   mlAccountSyncStates?: Array<{
  *     marketplace_account_id: string;
  *     phase: "none" | "awaiting_start" | "in_progress";
+ *     seller_company_id?: string | null;
  *     account_label?: string | null;
  *     account_avatar_url?: string | null;
  *     store_name?: string | null;
@@ -138,6 +139,11 @@ export function buildOperationalTasksPayload(counts = {}) {
           ? String(st.store_document_cnpj).replace(/\D/g, "")
           : null;
 
+      const sellerCompanyId =
+        st.seller_company_id != null && String(st.seller_company_id).trim() !== ""
+          ? String(st.seller_company_id).trim()
+          : null;
+
       if (phase === "awaiting_start") {
         const needsReauth = ["invalid", "expired", "error"].includes(
           String(st.status ?? "").trim().toLowerCase(),
@@ -155,6 +161,7 @@ export function buildOperationalTasksPayload(counts = {}) {
           icon: "marketplace_sync",
           marketplace: "mercado_livre",
           marketplace_account_id: accountId,
+          seller_company_id: sellerCompanyId,
           account_label: storeName,
           account_avatar_url: storeLogo,
           store_name: storeName,
@@ -179,6 +186,7 @@ export function buildOperationalTasksPayload(counts = {}) {
           icon: "marketplace_sync",
           marketplace: "mercado_livre",
           marketplace_account_id: accountId,
+          seller_company_id: sellerCompanyId,
           account_label: storeName,
           account_avatar_url: storeLogo,
           store_name: storeName,

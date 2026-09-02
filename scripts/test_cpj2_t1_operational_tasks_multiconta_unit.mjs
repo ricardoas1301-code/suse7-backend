@@ -11,6 +11,7 @@ const dual = buildOperationalTasksPayload({
     {
       marketplace_account_id: "11111111-1111-4111-8111-111111111111",
       phase: "in_progress",
+      seller_company_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
       account_label: "SMR - RP",
       account_avatar_url: "https://example.com/rp.png",
       status: "active",
@@ -18,6 +19,7 @@ const dual = buildOperationalTasksPayload({
     {
       marketplace_account_id: "22222222-2222-4222-8222-222222222222",
       phase: "awaiting_start",
+      seller_company_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
       account_label: "SMR - GO",
       account_avatar_url: "https://example.com/go.png",
       status: "invalid",
@@ -32,6 +34,9 @@ assert.ok(rp);
 assert.ok(go);
 assert.equal(rp.action?.type, "open_ml_sync_modal");
 assert.equal(go.action?.type, "open_marketplace_connect");
+assert.equal(rp.seller_company_id, "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
+assert.equal(go.seller_company_id, "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb");
+assert.notEqual(rp.seller_company_id, go.seller_company_id);
 assert.equal(rp.account_label, "SMR - RP");
 assert.equal(go.account_label, "SMR - GO");
 assert.equal(rp.title, "Sincronizando Mercado Livre");

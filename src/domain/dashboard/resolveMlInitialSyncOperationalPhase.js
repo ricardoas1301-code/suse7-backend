@@ -16,6 +16,7 @@ const ACTIVE_JOB_STATUSES = new Set(["pending", "queued", "running", "processing
  *   marketplace_account_id: string;
  *   phase: MlInitialSyncPhase;
  *   status: string;
+ *   seller_company_id: string | null;
  *   account_label: string | null;
  *   account_avatar_url: string | null;
  *   store_name: string | null;
@@ -171,6 +172,7 @@ export async function resolveMlInitialSyncOperationalPhase(supabase, userId) {
       marketplace_account_id: accountId,
       phase,
       status,
+      seller_company_id: coId || null,
       account_label: label,
       account_avatar_url: avatar,
       store_name: storeName,
