@@ -57,8 +57,18 @@
     "test:marketplace-sync-handler-supabase-config": "node ./scripts/test_marketplace_sync_handler_supabase_config_unit.mjs",
     "test:marketplace-sync-scheduler-historical-order": "node ./scripts/test_marketplace_sync_scheduler_historical_order_unit.mjs",
     "test:snapshot-immutability-stress": "node ./scripts/prove_snapshot_immutability_stress_concurrent.mjs",
+    "test:cps1-t1-plans-catalog": "node ./scripts/test_cps1_t1_catalogo_planos_unit.mjs",
+    "test:cps1-t1-admin-plan-atomic": "node ./scripts/test_cps1_t1_admin_plano_atomico_unit.mjs",
+    "test:cps1-t1-sql-guards": "node ./scripts/test_cps1_t1_pacote_sql_guardas_unit.mjs",
+    "test:cps1-t1": "npm run test:cps1-t1-plans-catalog && npm run test:cps1-t1-admin-plan-atomic && npm run test:cps1-t1-sql-guards && npm run test:cps1-t1-sql-guards-v4 && npm run test:cps1-t1-sql-guards-v5 && npm run test:cps1-t1-sql-guards-v6 && npm run test:cps1-t1-timeouts-v6-1",
     "test": "npm run test:listing-health-buckets && npm run test:product-health-buckets && npm run test:competition-health-buckets && npm run test:pricing-health-buckets",
-    "backfill:recent-cost-snapshots": "node ./scripts/backfill_recent_cost_snapshots_dev.mjs"
+    "backfill:recent-cost-snapshots": "node ./scripts/backfill_recent_cost_snapshots_dev.mjs",
+    "test:cps1-t1-sql-guards-v4": "node ./scripts/test_cps1_t1_pacote_sql_v4_guardas_unit.mjs",
+    "test:cps1-t1-sql-guards-v5": "node ./scripts/test_cps1_t1_pacote_sql_v5_guardas_unit.mjs",
+    "test:cps1-t1-sql-guards-v6": "node ./scripts/test_cps1_t1_pacote_sql_v6_guardas_unit.mjs",
+    "test:cps1-t1-timeouts-v6-1": "node ./scripts/test_cps1_t1_timeouts_pg_settings_v6_1_unit.mjs",
+    "test:cps1-t2-t3-planos-signup-trial": "node ./scripts/test_cps1_t2_t3_planos_signup_trial_unit.mjs",
+    "test:cps1-t4-ciclo-instante": "node ./scripts/test_cps1_t4_ciclo_instante_unit.mjs"
   },
   "dependencies": {
     "@resvg/resvg-js": "^2.6.2",

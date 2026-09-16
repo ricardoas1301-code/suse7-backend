@@ -110,9 +110,10 @@ export async function resolveBillingAccess(supabase, userId, options = {}) {
   const accessProfile = entitlementDto?.access_profile ?? null;
 
   const hardBlockedByUsage = Boolean(
-    usageResolution.hard_blocked ||
+    (usageResolution.hard_blocked ||
       (entitlementDto?.usage_state === "HARD_LIMIT_REACHED" &&
-        accessProfile !== BILLING_ACCESS_PROFILE.ARCHIVE_READ_ONLY)
+        accessProfile !== BILLING_ACCESS_PROFILE.ARCHIVE_READ_ONLY)) &&
+      entitlementDto?.effective_entitlement !== "TRIAL_FULL_ACCESS"
   );
   const paidDetailedRestricted =
     accessProfile === BILLING_ACCESS_PROFILE.EXECUTIVE_ONLY ||

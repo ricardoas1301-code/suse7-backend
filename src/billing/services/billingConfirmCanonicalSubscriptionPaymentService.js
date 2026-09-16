@@ -25,6 +25,7 @@ import { classifyFinancialPaymentEvent } from "./billingFinancialEventClassifica
 import { reevaluateBabyQuotaAfterEntitlementChange } from "./billingBabyQuotaReevaluationService.js";
 import { convergePaidLifecycleAfterMutation } from "./billingPaidLifecycleConvergenceService.js";
 import { assertBillingFinancialMutationsAllowed } from "./billingRuntimeEnvironmentService.js";
+import { transitionConvertTrialToPaid } from "./billingSellerTrialService.js";
 
 /**
  * @param {unknown} value
@@ -184,6 +185,20 @@ export async function confirmCanonicalSubscriptionPayment(supabase, input) {
   });
 
   if (atomic.ok && atomic.idempotent) {
+    try {
+      await transitionConvertTrialToPaid(supabase, userId, {
+        plan_id: String(canonical.plan_id ?? ""),
+        payment_id: asTrimmedString(input.paymentId) ?? asTrimmedString(input.providerPaymentId),
+        idempotency_key: input.correlationId ?? `trial-convert:${canonicalId}:${paymentId ?? ""}`,
+        now: input.now instanceof Date ? input.now : new Date(),
+      });
+    } catch (trialConvertError) {
+      logBilling("billing", "TRIAL_CONVERT_ON_IDEMPOTENT_CONFIRM_FAILED", {
+        user_id: userId,
+        subscription_id: canonicalId,
+        error: trialConvertError instanceof Error ? trialConvertError.message : String(trialConvertError),
+      });
+    }
     return {
       ok: true,
       confirmed: true,
@@ -288,6 +303,21 @@ export async function confirmCanonicalSubscriptionPayment(supabase, input) {
     paidAt,
     source: input.source ?? "confirm_canonical_subscription_payment",
   });
+
+  try {
+    await transitionConvertTrialToPaid(supabase, userId, {
+      plan_id: String(canonical.plan_id ?? ""),
+      payment_id: asTrimmedString(input.paymentId) ?? asTrimmedString(input.providerPaymentId),
+      idempotency_key: input.correlationId ?? `trial-convert:${canonicalId}:${paymentId ?? ""}`,
+      now: input.now instanceof Date ? input.now : new Date(),
+    });
+  } catch (trialConvertError) {
+    logBilling("billing", "TRIAL_CONVERT_ON_CONFIRM_FAILED", {
+      user_id: userId,
+      subscription_id: canonicalId,
+      error: trialConvertError instanceof Error ? trialConvertError.message : String(trialConvertError),
+    });
+  }
 
   const converged = convergePaidLifecycleAfterMutation({
     subscription: {

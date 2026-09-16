@@ -20,6 +20,8 @@ import {
   rpcAbortPendingBirth,
 } from "../services/signupPendingBirthRepository.js";
 import { completeSignupBirthOnce } from "../services/completeSignupBirthService.js";
+import { persistirIntencaoComercialPlano, validarChaveIntencaoComercial } from "../../billing/services/billingCommercialIntentService.js";
+import { BILLING_COMMERCIAL_INTENT_SOURCE } from "../../billing/billingConstants.js";
 import { bootstrapSocialSessionOnce } from "../services/bootstrapSocialSessionService.js";
 import { checkSignupRateLimit, resolveSignupRateLimitKey } from "../infra/signupRateLimit.js";
 
@@ -54,6 +56,14 @@ export async function handleSignupRoutes(req, res, path) {
     const validated = validatePendingBirthPayload(body);
     if (!validated.ok) {
       return fail(res, { code: validated.code, message: validated.message }, 400, traceId);
+    }
+
+    const intencao = await validarChaveIntencaoComercial(
+      supabase,
+      body?.intended_plan_key ?? body?.plan_key ?? body?.plan_slug ?? null
+    );
+    if (intencao.ok) {
+      validated.profilePayload.intended_plan_key = intencao.plan_key;
     }
 
     const rate = checkSignupRateLimit(resolveSignupRateLimitKey(req, validated.normalizedEmail));
@@ -230,6 +240,28 @@ export async function handleSignupRoutes(req, res, path) {
         traceId
       );
     }
+
+    const chaveMeta =
+      auth.user.user_metadata?.intended_plan_key ??
+      auth.user.user_metadata?.plan_key ??
+      null;
+    let chavePending = null;
+    try {
+      const { data: pendingRow } = await supabase
+        .schema("s7_private")
+        .from("signup_pending_births")
+        .select("profile_payload")
+        .eq("auth_user_id", auth.user.id)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      chavePending = pendingRow?.profile_payload?.intended_plan_key ?? null;
+    } catch {
+      chavePending = null;
+    }
+    await persistirIntencaoComercialPlano(auth.supabase, auth.user.id, chavePending ?? chaveMeta, {
+      source: BILLING_COMMERCIAL_INTENT_SOURCE.PUBLIC_PLANS_SIGNUP,
+    }).catch(() => ({ persisted: false }));
 
     return ok(res, { ...completion, traceId });
   }

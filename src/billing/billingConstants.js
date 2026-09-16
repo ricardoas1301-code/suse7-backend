@@ -449,6 +449,16 @@ export const BILLING_TRIAL_METADATA_KEYS = /** @type {const} */ ({
    * NULL enquanto trial_state temporalmente ACTIVE.
    */
   QUOTA_COUNTING_STARTED_AT: "quota_counting_started_at",
+  /** Intenção comercial escolhida no catálogo público — não é plano efetivo. */
+  COMMERCIAL_INTENT_PLAN_KEY: "commercial_intent_plan_key",
+  COMMERCIAL_INTENT_SOURCE: "commercial_intent_source",
+  COMMERCIAL_INTENT_RECORDED_AT: "commercial_intent_recorded_at",
+});
+
+export const BILLING_COMMERCIAL_INTENT_SOURCE = /** @type {const} */ ({
+  PUBLIC_PLANS_SIGNUP: "public_plans_signup",
+  SIGNUP_QUERY: "signup_query",
+  FIRST_ACCESS: "first_access",
 });
 
 /** Períodos canônicos de classificação de venda (S1.HF.6.9A.8). */

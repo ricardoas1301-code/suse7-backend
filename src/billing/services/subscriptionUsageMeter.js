@@ -92,14 +92,34 @@ export function aggregateSubscriptionOrderBreakdownRow(breakdowns, order) {
  * @param {string} userId
  * @param {{ period_start: string; period_end: string }} window
  */
+function aplicarLimiteInferiorDeQuota(query, window, startIso) {
+  const quotaStart = window?.quota_counting_started_at != null ? String(window.quota_counting_started_at).trim() : "";
+  if (!quotaStart) return query;
+  const inicio = Date.parse(startIso);
+  const quota = Date.parse(quotaStart);
+  if (!Number.isFinite(quota)) return query;
+  if (Number.isFinite(inicio) && quota <= inicio) return query;
+  return query.gte("date_created_marketplace", quotaStart);
+}
+
+/**
+ * Contagem canônica — pedidos distintos (sales_orders.id) no ciclo.
+ * `date_created_marketplace` é a data do pedido; sincronização posterior não cria consumo novo.
+ *
+ * @param {import("@supabase/supabase-js").SupabaseClient} supabase
+ * @param {string} userId
+ * @param {{ period_start: string; period_end: string; quota_counting_started_at?: string | null }} window
+ */
 export async function countSellerEcosystemSalesUsage(supabase, userId, window) {
   const { startIso, endIso } = buildWindowIsoRange(window);
-  const { count, error } = await supabase
+  let query = supabase
     .from("sales_orders")
     .select("id", { count: "exact", head: true })
     .eq("user_id", userId)
     .gte("date_created_marketplace", startIso)
     .lte("date_created_marketplace", endIso);
+  query = aplicarLimiteInferiorDeQuota(query, window, startIso);
+  const { count, error } = await query;
 
   if (error) {
     if (isMissingRelationError(error)) return 0;
@@ -149,13 +169,14 @@ export async function buildSellerSalesUsageBreakdowns(supabase, userId, window) 
   for (let page = 0; page < BREAKDOWN_MAX_PAGES; page += 1) {
     const from = page * BREAKDOWN_PAGE_SIZE;
     const to = from + BREAKDOWN_PAGE_SIZE - 1;
-    const { data, error } = await supabase
+    let query = supabase
       .from("sales_orders")
       .select("id, marketplace, marketplace_account_id, seller_company_id, external_order_id")
       .eq("user_id", userId)
       .gte("date_created_marketplace", startIso)
-      .lte("date_created_marketplace", endIso)
-      .range(from, to);
+      .lte("date_created_marketplace", endIso);
+    query = aplicarLimiteInferiorDeQuota(query, window, startIso);
+    const { data, error } = await query.range(from, to);
 
     if (error) {
       if (isMissingRelationError(error)) {

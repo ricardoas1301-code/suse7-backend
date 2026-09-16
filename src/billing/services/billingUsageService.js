@@ -5,6 +5,7 @@
 import { logBilling, logBillingError } from "../billingLog.js";
 import Decimal from "decimal.js";
 import { resolveSellerBillingCycle } from "./billingCycleService.js";
+import { resolverLimiteMensalVendas } from "../domain/catalogoPlanos.js";
 import { getActivePlanById } from "./billingPlanRepository.js";
 import { buildDefaultMonthlySalesUsageResolution } from "./billingUsageFallback.js";
 import {
@@ -13,6 +14,9 @@ import {
   SUBSCRIPTION_USAGE_AGGREGATION_SCOPE,
   SUBSCRIPTION_USAGE_UNIT,
 } from "./subscriptionUsageMeter.js";
+import { loadSellerEntitlementOverlay } from "./billingSellerEntitlementStoreService.js";
+import { resolveTrialTemporalFromMetadata } from "./billingQuotaEligibilityService.js";
+import { BILLING_TRIAL_METADATA_KEYS } from "../billingConstants.js";
 
 export {
   SUBSCRIPTION_USAGE_AGGREGATION_SCOPE,
@@ -36,12 +40,12 @@ async function loadPlanLimitConfig(supabase, planId) {
     .maybeSingle();
   if (error && !isMissingRelationError(error)) throw error;
 
-  const monthlySalesLimit =
-    limitRow?.monthly_sales_limit != null
-      ? Number(limitRow.monthly_sales_limit)
-      : plan.sales_limit_monthly != null
-        ? Number(plan.sales_limit_monthly)
-        : null;
+  // Limite padrão vem do catálogo; `billing_plan_limits` só prevalece em exceção comercial explícita.
+  const { limite: monthlySalesLimit, origem: origemLimite } = resolverLimiteMensalVendas({
+    limiteCatalogo: plan.sales_limit_monthly,
+    limiteConfigurado: limitRow?.monthly_sales_limit,
+    metadataLimite: limitRow?.metadata,
+  });
 
   return {
     plan_id: plan.id,
@@ -50,7 +54,8 @@ async function loadPlanLimitConfig(supabase, planId) {
     display_name: plan.display_name ?? plan.name,
     marketing_name: plan.marketing_name ?? plan.display_name ?? plan.name,
     slug: plan.slug ?? plan.plan_key,
-    monthly_sales_limit: Number.isFinite(monthlySalesLimit) ? monthlySalesLimit : null,
+    monthly_sales_limit: monthlySalesLimit != null && Number.isFinite(monthlySalesLimit) ? monthlySalesLimit : null,
+    monthly_sales_limit_source: origemLimite,
     warning_threshold_percent:
       limitRow?.warning_threshold_percent != null ? Number(limitRow.warning_threshold_percent) : 80,
     grace_period_days: limitRow?.grace_period_days != null ? Number(limitRow.grace_period_days) : 0,
@@ -238,10 +243,22 @@ export function buildSellerUsagePayload(
 export async function resolveMonthlySalesUsage(supabase, userId, planId, cycle = null) {
   try {
     const resolvedCycle = cycle ?? (await resolveSellerBillingCycle(supabase, userId)).cycle;
+    const overlay = await loadSellerEntitlementOverlay(supabase, userId).catch(() => ({ metadata: {} }));
+    const trialTemporal = resolveTrialTemporalFromMetadata(overlay.metadata, new Date());
+    const quotaCountingStartedAt =
+      overlay.metadata && typeof overlay.metadata === "object"
+        ? overlay.metadata[BILLING_TRIAL_METADATA_KEYS.QUOTA_COUNTING_STARTED_AT]
+        : null;
+
     const window = {
       window_kind: resolvedCycle.window_kind,
       period_start: resolvedCycle.period_start,
       period_end: resolvedCycle.period_end,
+      quota_counting_started_at: trialTemporal.active
+        ? null
+        : quotaCountingStartedAt != null
+          ? String(quotaCountingStartedAt)
+          : null,
     };
     const limitConfig = planId ? await loadPlanLimitConfig(supabase, planId) : null;
     const totalSalesMonth = await countSellerEcosystemSales(supabase, userId, window);
@@ -253,34 +270,43 @@ export async function resolveMonthlySalesUsage(supabase, userId, planId, cycle =
       breakdowns,
     });
 
+    const monthlySalesLimit = trialTemporal.active ? null : limitConfig?.monthly_sales_limit ?? null;
+    const hardBlockEnabled = trialTemporal.active ? false : limitConfig?.hard_block_enabled ?? false;
+
     const evaluation = evaluateSalesLimitState({
-      monthly_sales_limit: limitConfig?.monthly_sales_limit ?? null,
+      monthly_sales_limit: monthlySalesLimit,
       current_month_sales: totalSalesMonth,
       warning_threshold_percent: limitConfig?.warning_threshold_percent ?? 80,
       grace_period_days: limitConfig?.grace_period_days ?? 0,
-      hard_block_enabled: limitConfig?.hard_block_enabled ?? false,
+      hard_block_enabled: hardBlockEnabled,
     });
 
     const usage = buildSellerUsagePayload(
       evaluation,
-      limitConfig?.monthly_sales_limit ?? null,
+      monthlySalesLimit,
       totalSalesMonth,
       window.window_kind,
       window.period_start,
       window.period_end,
       { usage_status: "available" },
     );
+    if (trialTemporal.active) {
+      usage.ux_state = "unmetered";
+      usage.trial_quota_bypassed = true;
+    }
 
     return {
       window_kind: window.window_kind,
       period_start: window.period_start,
       period_end: window.period_end,
       aggregation_scope: SUBSCRIPTION_USAGE_AGGREGATION_SCOPE,
-      monthly_sales_limit: limitConfig?.monthly_sales_limit ?? null,
+      monthly_sales_limit: monthlySalesLimit,
+      monthly_sales_limit_source: trialTemporal.active ? "trial_unlimited" : limitConfig?.monthly_sales_limit_source ?? null,
       current_month_sales: totalSalesMonth,
       warning_threshold_percent: limitConfig?.warning_threshold_percent ?? 80,
       grace_period_days: limitConfig?.grace_period_days ?? 0,
-      hard_block_enabled: limitConfig?.hard_block_enabled ?? false,
+      hard_block_enabled: hardBlockEnabled,
+      trial_quota_bypassed: Boolean(trialTemporal.active),
       usage,
       breakdowns: {
         marketplaces: breakdowns.marketplaces,

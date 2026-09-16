@@ -446,6 +446,8 @@ export function inheritBillingCycleFromSupersededSubscriptions(subscriptions, ke
     const status = String(row.status || "").toLowerCase();
     if (status === SUBSCRIPTION_STATUS.CANCELED || status === SUBSCRIPTION_STATUS.REFUNDED) continue;
     if (status === SUBSCRIPTION_STATUS.PENDING) continue;
+    // Primeiro ciclo pago não herda o período Baby/interno — T3: consumo inicial zero.
+    if (String(row.provider || "").toLowerCase() === "internal") continue;
 
     const priority = subscriptionCyclePriority(row, now);
     if (priority >= 98) continue;
@@ -544,6 +546,41 @@ export async function persistComputedBillingCycle(supabase, subscriptionId, cycl
 }
 
 /**
+ * Mesmo instante: `+00:00` e `.000Z` coincidem. Ausente ou inválido nunca equivale.
+ *
+ * @param {unknown} a
+ * @param {unknown} b
+ */
+export function instantesDoCicloSaoOMesmo(a, b) {
+  const da = parseUtcDateTime(a);
+  const db = parseUtcDateTime(b);
+  if (!da || !db) return false;
+  return da.getTime() === db.getTime();
+}
+
+/**
+ * Persistência do ciclo interno só quando start/end mudam de instante ou a data civil de vencimento muda.
+ * `next_due_date` compara YYYY-MM-DD sem conversão de fuso.
+ *
+ * @param {Record<string, unknown> | null | undefined} subscription
+ * @param {{ current_period_start?: unknown; current_period_end?: unknown; next_billing_at?: unknown } | null | undefined} cycle
+ */
+export function cicloInternoPrecisaPersistir(subscription, cycle) {
+  if (!subscription?.current_period_start || !subscription?.current_period_end || !subscription?.next_due_date) {
+    return true;
+  }
+  const duePersistida = parseBillingCivilDate(subscription.next_due_date);
+  const dueComputada = parseBillingCivilDate(cycle?.next_billing_at);
+  if (!duePersistida || !dueComputada || duePersistida !== dueComputada) {
+    return true;
+  }
+  return (
+    !instantesDoCicloSaoOMesmo(subscription.current_period_start, cycle?.current_period_start) ||
+    !instantesDoCicloSaoOMesmo(subscription.current_period_end, cycle?.current_period_end)
+  );
+}
+
+/**
  * @param {import("@supabase/supabase-js").SupabaseClient} supabase
  * @param {string} userId
  * @param {Date} [now]
@@ -574,14 +611,7 @@ export async function resolveSellerBillingCycle(supabase, userId, now = new Date
 
   const cycle = resolveSubscriptionBillingCycle(subscription, now, resolverContext);
   if (String(subscription.provider || "").toLowerCase() === "internal") {
-    const needsPersist =
-      !subscription.current_period_start ||
-      !subscription.current_period_end ||
-      !subscription.next_due_date ||
-      String(subscription.current_period_start) !== cycle.current_period_start ||
-      String(subscription.current_period_end) !== cycle.current_period_end ||
-      String(subscription.next_due_date) !== cycle.next_billing_at.slice(0, 10);
-    if (needsPersist) {
+    if (cicloInternoPrecisaPersistir(subscription, cycle)) {
       try {
         await persistComputedBillingCycle(supabase, String(subscription.id), cycle);
       } catch {

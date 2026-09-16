@@ -15,7 +15,11 @@ import { assertCreditCardCheckoutOnly } from "../utils/billingCheckoutGuards.js"
 import { checkoutPlan, normalizeCheckoutPaymentMethod } from "../services/billingSubscriptionService.js";
 import { startBillingCheckout } from "../services/billingCheckoutStartService.js";
 import { listActivePlans, resolvePlanDisplayFields } from "../services/billingPlanRepository.js";
+import { normalizarPlanoParaCatalogo, projetarCamposPublicosDoPlano } from "../domain/catalogoPlanos.js";
 import { resolveBillingAccess } from "../services/resolveBillingAccess.js";
+import { persistirIntencaoComercialPlano } from "../services/billingCommercialIntentService.js";
+import { resolverRecomendacaoPlanoTrial } from "../services/billingTrialPlanRecommendationService.js";
+import { BILLING_COMMERCIAL_INTENT_SOURCE } from "../billingConstants.js";
 import {
   enrichSubscriptionWithBillingCycle,
   resolveSubscriptionBillingCycle,
@@ -383,17 +387,46 @@ export async function handleBillingRoutes(req, res, path) {
     if (method !== "GET") {
       return fail(res, { code: "METHOD_NOT_ALLOWED", message: "Use GET" }, 405, traceId);
     }
+    if (!config.supabaseUrl?.trim() || !config.supabaseServiceRoleKey?.trim()) {
+      return fail(res, { code: "CONFIG_ERROR", message: "Configuração do banco indisponível." }, 503, traceId);
+    }
+    const { createClient } = await import("@supabase/supabase-js");
+    const supabase = createClient(config.supabaseUrl, config.supabaseServiceRoleKey, {
+      auth: { autoRefreshToken: false, persistSession: false },
+    });
+    const plans = await listActivePlans(supabase);
+    const normalizedPlans = plans.map((plan) =>
+      projetarCamposPublicosDoPlano({
+        ...normalizarPlanoParaCatalogo(plan),
+        ...resolvePlanDisplayFields(plan),
+      })
+    );
+    return ok(res, { ok: true, plans: normalizedPlans, public: true, traceId });
+  }
+
+  if (pathNorm === "/api/billing/commercial-intent") {
+    if (method !== "POST") {
+      return fail(res, { code: "METHOD_NOT_ALLOWED", message: "Use POST" }, 405, traceId);
+    }
     const auth = await requireAuthUser(req);
     if (auth.error) {
       return fail(res, { code: "UNAUTHORIZED", message: auth.error.message }, auth.error.status, traceId);
     }
-    const { supabase } = auth;
-    const plans = await listActivePlans(supabase);
-    const normalizedPlans = plans.map((plan) => ({
-      ...plan,
-      ...resolvePlanDisplayFields(plan),
-    }));
-    return ok(res, { ok: true, plans: normalizedPlans, traceId });
+    const body = await readRequestJson(req);
+    const resultado = await persistirIntencaoComercialPlano(
+      auth.supabase,
+      auth.user.id,
+      body?.plan_key ?? body?.plan_slug ?? body?.intended_plan_key ?? null,
+      { source: BILLING_COMMERCIAL_INTENT_SOURCE.FIRST_ACCESS }
+    );
+    return ok(res, {
+      ok: true,
+      plan_key: resultado.plan_key,
+      persisted: Boolean(resultado.persisted),
+      reason: resultado.reason ?? null,
+      charged: false,
+      traceId,
+    });
   }
 
   if (pathNorm === "/api/billing/checkout/card") {
@@ -1492,6 +1525,15 @@ export async function handleBillingRoutes(req, res, path) {
       });
     }
 
+    let trialPlanRecommendation = null;
+    try {
+      trialPlanRecommendation = await resolverRecomendacaoPlanoTrial(supabase, user.id);
+    } catch (recommendationError) {
+      logBillingError("billing", "trial_plan_recommendation_failed", recommendationError, {
+        user_id: user.id,
+      });
+    }
+
       statusLog("response_sent", {
         has_subscription: true,
         active: Boolean(activeSubscription),
@@ -1554,6 +1596,7 @@ export async function handleBillingRoutes(req, res, path) {
       },
       grace_period_until: primarySubscription?.grace_period_ends_at ?? billing.access?.grace_period_ends_at ?? null,
       revenue_health: revenueHealth,
+      trial_plan_recommendation: trialPlanRecommendation,
       traceId,
       });
     } catch (unexpected) {
