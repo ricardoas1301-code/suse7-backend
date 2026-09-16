@@ -13,6 +13,7 @@ import {
   evaluateDevGlobalMaintenanceWebhookEvent,
   isDevGlobalMaintenanceModeActive,
   resolveDevGlobalMaintenanceState,
+  resolveMaintenanceBlockedSyncJobAction,
 } from "../src/domain/dev/devGlobalMaintenanceMode.js";
 import { classifyMlWebhookApplyResult } from "../src/handlers/ml/_helpers/mlWebhookOrderProcessorOutcome.js";
 import { S7_SUPABASE_PROJECT_REF } from "../src/billing/services/billingRuntimeEnvironmentService.js";
@@ -138,6 +139,20 @@ function testHealthWhenOff() {
   assert.equal(evaluateDevGlobalMaintenanceGate({ env: DEV_ENV_OFF }).blocked, false);
 }
 
+function testSyncJobDeferNotStub() {
+  const blocked = resolveMaintenanceBlockedSyncJobAction(
+    evaluateDevGlobalMaintenanceGate({ env: DEV_V2_ON }),
+  );
+  assert.equal(blocked.action, "defer_leave_pending");
+  assert.equal(blocked.complete_as_stub, false);
+  assert.equal(blocked.enqueue_historical, false);
+  const open = resolveMaintenanceBlockedSyncJobAction(
+    evaluateDevGlobalMaintenanceGate({ env: DEV_ENV_OFF }),
+  );
+  assert.equal(open.action, "process");
+  assert.equal(open.complete_as_stub, false);
+}
+
 const tests = [
   ["prod maintenance inactive / config error", testProdInactive],
   ["V2 expected+actual maintenance active", testV2Active],
@@ -153,6 +168,7 @@ const tests = [
   ["reconciliation/billing job blocked", testReconciliationBlocked],
   ["competition/listing job blocked", testListingSyncBlockedViaJob],
   ["inactive when flag off", testHealthWhenOff],
+  ["sync jobs defer pending instead of stub", testSyncJobDeferNotStub],
 ];
 
 for (const [name, fn] of tests) {

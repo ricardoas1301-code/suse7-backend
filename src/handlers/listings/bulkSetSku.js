@@ -2,7 +2,13 @@
 // POST /api/listings/bulk-set-sku
 // Handler fino — lógica em ./bulkSetSkuService.js
 //
-// Payload:
+// Payload canônico do frontend (unitário e lote):
+// {
+//   "marketplace": "mercado_livre",
+//   "items": [{ "listing_id": "uuid-…", "sku": "0170" }]
+// }
+//
+// Payload legado ainda aceito:
 // {
 //   "marketplace": "mercado_livre",
 //   "listing_ids": ["uuid-…", "MLB123…", "660321858"],
@@ -38,6 +44,7 @@ import { requireAuthUser } from "../ml/_helpers/requireAuthUser.js";
 import { ML_MARKETPLACE_SLUG } from "../ml/_helpers/mlMarketplace.js";
 import { ATTENTION_REASON_SKU_PENDING_ML } from "../ml/_helpers/mlItemSkuExtract.js";
 import { executeBulkSetSku } from "./bulkSetSkuService.js";
+import { parseBulkSetSkuPayload } from "./parseBulkSetSkuPayload.js";
 
 const MAX_LISTING_IDS = Math.min(
   200,
@@ -86,21 +93,14 @@ export default async function handleListingsBulkSetSku(req, res) {
     });
   }
 
-  const skuRaw = body.sku != null ? String(body.sku).trim() : "";
-  if (!skuRaw) {
-    return res.status(400).json({ ok: false, error: "SKU obrigatório." });
-  }
-
-  const listingIdsIn = Array.isArray(body.listing_ids) ? body.listing_ids : [];
-  if (listingIdsIn.length === 0) {
-    return res.status(400).json({ ok: false, error: "listing_ids deve ser um array não vazio." });
-  }
-
-  /** @type {string[]} */
-  const listingTokens = [...new Set(listingIdsIn.map((x) => String(x ?? "").trim()).filter(Boolean))];
+  const parsed = parseBulkSetSkuPayload(body);
+  const listingTokens = parsed.allListingTokens;
 
   if (listingTokens.length === 0) {
-    return res.status(400).json({ ok: false, error: "Informe ao menos um listing_id válido." });
+    return res.status(400).json({
+      ok: false,
+      error: parsed.mode === "items" ? "Informe ao menos um listing_id válido." : "listing_ids deve ser um array não vazio.",
+    });
   }
 
   if (listingTokens.length > MAX_LISTING_IDS) {
@@ -111,16 +111,73 @@ export default async function handleListingsBulkSetSku(req, res) {
     });
   }
 
+  const groupsWithSku = parsed.groups.filter((g) => g.skuRaw);
+  const groupsEmptySku = parsed.groups.filter((g) => !g.skuRaw && g.listingTokens.length > 0);
+  if (groupsWithSku.length === 0 || groupsEmptySku.length > 0) {
+    return res.status(400).json({ ok: false, error: "SKU obrigatório." });
+  }
+
   const { user, supabase } = auth;
   const userId = user.id;
 
-  const result = await executeBulkSetSku({
-    supabase,
-    userId,
-    canonicalMarketplace,
-    skuRaw,
-    listingTokens,
-  });
+  /** @type {Awaited<ReturnType<typeof executeBulkSetSku>>} */
+  let result;
+  if (groupsWithSku.length === 1) {
+    result = await executeBulkSetSku({
+      supabase,
+      userId,
+      canonicalMarketplace,
+      skuRaw: groupsWithSku[0].skuRaw,
+      listingTokens: groupsWithSku[0].listingTokens,
+    });
+  } else {
+    let totalReceived = 0;
+    let totalUpdated = 0;
+    let totalSkipped = 0;
+    /** @type {unknown[]} */
+    const errors = [];
+    let anyOk = false;
+    /** @type {Awaited<ReturnType<typeof executeBulkSetSku>> | null} */
+    let lastFail = null;
+    let skuLiteral = groupsWithSku[0]?.skuRaw ?? "";
+
+    for (const group of groupsWithSku) {
+      const groupResult = await executeBulkSetSku({
+        supabase,
+        userId,
+        canonicalMarketplace,
+        skuRaw: group.skuRaw,
+        listingTokens: group.listingTokens,
+      });
+      const b = groupResult.body && typeof groupResult.body === "object" ? groupResult.body : {};
+      totalReceived += Number(b.total_received) || 0;
+      totalUpdated += Number(b.total_updated) || 0;
+      totalSkipped += Number(b.total_skipped) || 0;
+      if (Array.isArray(b.errors)) errors.push(...b.errors);
+      if (groupResult.ok && groupResult.status === 200) anyOk = true;
+      else lastFail = groupResult;
+      if (b.sku_literal != null) skuLiteral = String(b.sku_literal);
+    }
+
+    result = anyOk
+      ? {
+          ok: true,
+          status: 200,
+          body: {
+            ok: true,
+            total_received: totalReceived,
+            total_updated: totalUpdated,
+            total_skipped: totalSkipped,
+            errors,
+            sku_literal: skuLiteral,
+          },
+        }
+      : lastFail ?? {
+          ok: false,
+          status: 500,
+          body: { ok: false, error: "Falha ao aplicar vínculo em lote.", errors },
+        };
+  }
 
   if (result.ok && result.status === 200 && result.body?.ok) {
     const b = result.body;

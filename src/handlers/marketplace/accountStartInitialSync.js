@@ -261,7 +261,7 @@ export default async function handleMarketplaceAccountStartInitialSync(req, res,
     const protoHeader = req.headers?.["x-forwarded-proto"] != null ? String(req.headers["x-forwarded-proto"]) : "";
     const proto = protoHeader.includes("https") ? "https" : "http";
     const baseUrl = host ? `${proto}://${host}` : null;
-    const dispatchUrl = baseUrl ? `${baseUrl}/api/jobs/marketplace-account-sync?limit=1` : null;
+    const dispatchUrl = baseUrl ? `${baseUrl}/api/jobs/marketplace-account-sync` : null;
 
     // Fire-and-forget: inicia uma passada do worker sem bloquear a resposta da UI.
     if (dispatchUrl) {
@@ -281,7 +281,7 @@ export default async function handleMarketplaceAccountStartInitialSync(req, res,
               status: r.status,
               ok: r.ok,
               elapsed_ms: Date.now() - startedAt,
-              url: "/api/jobs/marketplace-account-sync?limit=1",
+              url: "/api/jobs/marketplace-account-sync",
             });
           } catch (dispatchErr) {
             console.error("[ML_ONBOARDING_SYNC_JOB_DISPATCHED]", {

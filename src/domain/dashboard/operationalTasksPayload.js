@@ -307,6 +307,8 @@ export function buildOperationalTasksPayload(counts = {}) {
     });
   }
 
+  // Golden: durante ciclo ativo (universo instável) a Central omite SKU/custos.
+  // Elas reaparecem quando listings+products forem sucesso efetivo — não forçar 3 tarefas no ciclo.
   if (universeStable) {
     const skuCount = Math.max(0, Number(counts.skuDependencyPendingCount) || 0);
     const costsCount = Math.max(0, Number(counts.missingProductCostsCount) || 0);

@@ -155,3 +155,20 @@ export function buildDevGlobalMaintenanceJobSkipResult(ctx = {}) {
     outcome: DEV_GLOBAL_MAINTENANCE_OUTCOME,
   };
 }
+
+/**
+ * Jobs de sync inicial em maintenance: não terminalizar como stub 1/1.
+ * Deixa pending para o worker retomar automaticamente quando o flag sair.
+ * Não enfileira histórico a partir deste caminho.
+ * @param {{ blocked?: boolean } | null | undefined} gate
+ */
+export function resolveMaintenanceBlockedSyncJobAction(gate) {
+  if (!gate?.blocked) {
+    return { action: "process", complete_as_stub: false, enqueue_historical: false };
+  }
+  return {
+    action: "defer_leave_pending",
+    complete_as_stub: false,
+    enqueue_historical: false,
+  };
+}

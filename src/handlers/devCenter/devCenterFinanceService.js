@@ -3,6 +3,7 @@
 // Central financeira SaaS — agrega billing platform-wide.
 // ======================================================
 
+import Decimal from "decimal.js";
 import {
   buildDevCenterSubscriptionDetail,
   buildDevCenterSubscriptionsList,
@@ -88,9 +89,10 @@ function paymentMethodFromRow(payment) {
 /**
  * @param {import("@supabase/supabase-js").SupabaseClient} supabase
  * @param {string} traceId
+ * @param {{ unmaskCadastral?: boolean }} [options]
  */
-export async function buildDevCenterFinanceList(supabase, traceId) {
-  const subPayload = await buildDevCenterSubscriptionsList(supabase, traceId);
+export async function buildDevCenterFinanceList(supabase, traceId, options = {}) {
+  const subPayload = await buildDevCenterSubscriptionsList(supabase, traceId, options);
   const payments = await loadAllPayments(supabase, traceId);
   const paymentBySub = latestPaymentBySubscription(payments);
 
@@ -205,11 +207,19 @@ export async function buildDevCenterFinanceList(supabase, traceId) {
     critical_sellers: criticalSellers,
     top_plan_by_mrr: topPlan,
     sellers_inadimplentes: summary.inadimplencia,
-    payment_approval_rate_30d:
-      payments.filter((p) => new Date(String(p.created_at)).getTime() >= days30).length > 0
-        ? `${Math.max(0, 100 - Math.round((failed30d / Math.max(1, payments.length)) * 100))}%`
-        : "—",
-    mrr_trend_label: "Estável",
+    payment_approval_rate_30d: (() => {
+      const recent = payments.filter((p) => new Date(String(p.created_at)).getTime() >= days30);
+      const settled = recent.filter((p) => {
+        const st = normalizePaymentStatus(p.status);
+        return st === "paid" || st === "failed" || st === "overdue";
+      });
+      if (settled.length === 0) return null;
+      const paid = settled.filter((p) => normalizePaymentStatus(p.status) === "paid").length;
+      const rate = new Decimal(paid).div(settled.length).mul(100).toDecimalPlaces(2, Decimal.ROUND_HALF_UP).toNumber();
+      return `${rate}%`;
+    })(),
+    mrr_trend_label: "Não informado",
+    mrr_trend_status: "unavailable",
   };
 
   return { summary, observability, rows };
@@ -219,9 +229,10 @@ export async function buildDevCenterFinanceList(supabase, traceId) {
  * @param {import("@supabase/supabase-js").SupabaseClient} supabase
  * @param {string} subscriptionId
  * @param {string} traceId
+ * @param {{ unmaskCadastral?: boolean }} [options]
  */
-export async function buildDevCenterFinanceDetail(supabase, subscriptionId, traceId) {
-  const base = await buildDevCenterSubscriptionDetail(supabase, subscriptionId, traceId);
+export async function buildDevCenterFinanceDetail(supabase, subscriptionId, traceId, options = {}) {
+  const base = await buildDevCenterSubscriptionDetail(supabase, subscriptionId, traceId, options);
   if (!base) return null;
 
   const userId = String(base.subscription?.seller_id ?? "");
@@ -250,7 +261,7 @@ export async function buildDevCenterFinanceDetail(supabase, subscriptionId, trac
       receita_acumulada_brl: formatBrlFromCents(receivedCents),
       receita_pendente_brl: formatBrlFromCents(pendingCents),
       failed_payments_count: failedCount,
-      financial_health: base.subscription?.financial_health ?? "saudavel",
+      financial_health: base.subscription?.financial_health ?? null,
       renewal_date: base.billing_summary?.renewal_date ?? null,
     },
     observability: {

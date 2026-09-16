@@ -57,8 +57,8 @@ const nowFn = () => nowMs;
     shutdownMarginMs: 18_000,
     nowFn,
   });
-  nowMs = 38_000; // remaining soft 4s (< min external 8s default)
-  assert("TIME-04 block external near end", deadline.shouldStopBeforeNextExternalWork(resolveMinExternalWorkMs()));
+  nowMs = 38_000; // remaining soft 4s — Hosted ainda bloqueia com estimativa 8s
+  assert("TIME-04 block external near end", deadline.shouldStopBeforeNextExternalWork(8000));
 }
 
 // TIME-05 — backoff maior que remaining → não dormir
@@ -112,11 +112,33 @@ const nowFn = () => nowMs;
   assert("TIME-08 stable effective budget", a === b && a === 42_000);
 }
 
-// TIME-09 — defaults sane
+// TIME-09 — defaults sane (Local vs Hosted)
 {
-  assert("TIME-09 min external default sane", resolveMinExternalWorkMs() >= 1000);
-  assert("TIME-09 platform max default 60s", resolvePlatformMaxDurationMs() === 60_000);
-  assert("TIME-09 shutdown margin default 18s", resolveShutdownMarginMs() === 18_000);
+  const prevVercel = process.env.VERCEL;
+  const prevPlatform = process.env.MARKETPLACE_SYNC_PLATFORM_MAX_DURATION_MS;
+  const prevMinExt = process.env.MARKETPLACE_SYNC_MIN_EXTERNAL_WORK_MS;
+  const prevMargin = process.env.MARKETPLACE_SYNC_SHUTDOWN_MARGIN_MS;
+  try {
+    delete process.env.VERCEL;
+    delete process.env.MARKETPLACE_SYNC_PLATFORM_MAX_DURATION_MS;
+    delete process.env.MARKETPLACE_SYNC_MIN_EXTERNAL_WORK_MS;
+    delete process.env.MARKETPLACE_SYNC_SHUTDOWN_MARGIN_MS;
+    assert("TIME-09 min external default sane", resolveMinExternalWorkMs() >= 1000);
+    assert("TIME-09 platform max default local 180s", resolvePlatformMaxDurationMs() === 180_000);
+    assert("TIME-09 shutdown margin default 18s", resolveShutdownMarginMs() === 18_000);
+    process.env.VERCEL = "1";
+    assert("TIME-09 platform max hosted 60s", resolvePlatformMaxDurationMs() === 60_000);
+    assert("TIME-09 min external hosted 8s", resolveMinExternalWorkMs() === 8_000);
+  } finally {
+    if (prevVercel != null) process.env.VERCEL = prevVercel;
+    else delete process.env.VERCEL;
+    if (prevPlatform != null) process.env.MARKETPLACE_SYNC_PLATFORM_MAX_DURATION_MS = prevPlatform;
+    else delete process.env.MARKETPLACE_SYNC_PLATFORM_MAX_DURATION_MS;
+    if (prevMinExt != null) process.env.MARKETPLACE_SYNC_MIN_EXTERNAL_WORK_MS = prevMinExt;
+    else delete process.env.MARKETPLACE_SYNC_MIN_EXTERNAL_WORK_MS;
+    if (prevMargin != null) process.env.MARKETPLACE_SYNC_SHUTDOWN_MARGIN_MS = prevMargin;
+    else delete process.env.MARKETPLACE_SYNC_SHUTDOWN_MARGIN_MS;
+  }
 }
 
 // TIME-10 — soft yield antes do hard deadline

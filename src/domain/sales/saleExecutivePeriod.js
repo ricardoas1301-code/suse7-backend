@@ -47,6 +47,52 @@ function periodSpanDaysInclusive(start, end) {
 /**
  * @param {Record<string, unknown> | null | undefined} query
  */
+export function queryHasExplicitExecutivePeriod(query) {
+  const q = query ?? {};
+  if (q.period_preset != null && String(q.period_preset).trim() !== "") return true;
+  if (q.start_date != null && String(q.start_date).trim() !== "") return true;
+  if (q.end_date != null && String(q.end_date).trim() !== "") return true;
+  if (q.period_start != null && String(q.period_start).trim() !== "") return true;
+  if (q.period_end != null && String(q.period_end).trim() !== "") return true;
+  if (q.start_datetime != null && String(q.start_datetime).trim() !== "") return true;
+  if (q.end_datetime != null && String(q.end_datetime).trim() !== "") return true;
+  if (q.period_start_datetime != null && String(q.period_start_datetime).trim() !== "") return true;
+  if (q.period_end_datetime != null && String(q.period_end_datetime).trim() !== "") return true;
+  return false;
+}
+
+const LIFETIME_PERIOD = {
+  start_date: null,
+  end_date: null,
+  start_datetime: null,
+  end_datetime: null,
+  preset: "lifetime",
+  start_ms: null,
+  end_ms_exclusive: null,
+};
+
+/**
+ * Período da listagem /api/sales.
+ * Sem período explícito o resumo executivo cai em 60d — isso NÃO pode
+ * recortar o Histórico do Raio-X do produto (já consolidado em lifetime).
+ *
+ * @param {Record<string, unknown> | null | undefined} query
+ * @param {{ productId?: string | null }} [options]
+ */
+export function resolveSalesListPeriod(query, options = {}) {
+  const productId =
+    options.productId != null && String(options.productId).trim() !== ""
+      ? String(options.productId).trim()
+      : null;
+  if (productId && !queryHasExplicitExecutivePeriod(query)) {
+    return { ok: true, period: { ...LIFETIME_PERIOD }, warnings: [] };
+  }
+  return resolveExecutiveSummaryPeriod(query);
+}
+
+/**
+ * @param {Record<string, unknown> | null | undefined} query
+ */
 export function resolveExecutiveSummaryPeriod(query) {
   const q = query ?? {};
   const startDatetimeAlias =
@@ -122,6 +168,11 @@ export function resolveExecutiveSummaryPeriod(query) {
     end = endDatetimeIn;
     startMs = startDatetimeIn.getTime();
     endMsExclusive = endDatetimeIn.getTime() + 1;
+  } else if (preset === "operational_cycle") {
+    return {
+      ok: false,
+      error: "Ciclo operacional requer start_datetime e end_datetime; não há fallback para o dia civil.",
+    };
   }
 
   if (!hasDatetimeRange && preset === "custom") {

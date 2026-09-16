@@ -1,6 +1,7 @@
 import { resolveSellerBillingCycle } from "../../billing/services/billingCycleService.js";
 import { resolveMonthlySalesUsage } from "../../billing/services/billingUsageService.js";
 import { DEV_CENTER_TOOLBOX_METADATA_KEYS } from "./devCenterToolboxOperationalConstants.js";
+import { computeUsagePercentDecimal } from "./devCenterUsagePresentation.js";
 
 /**
  * @param {Record<string, unknown> | null | undefined} sub
@@ -16,10 +17,7 @@ function readSubscriptionMeta(sub) {
  * @param {number | null | undefined} limit
  */
 function computeUsagePercent(current, limit) {
-  const used = Number(current);
-  const cap = Number(limit);
-  if (!Number.isFinite(used) || !Number.isFinite(cap) || cap <= 0) return null;
-  return Math.round((used / cap) * 1000) / 10;
+  return computeUsagePercentDecimal(current, limit);
 }
 
 /**

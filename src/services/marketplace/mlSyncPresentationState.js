@@ -16,6 +16,29 @@ export function resolveMlSyncStepBucket(status) {
 }
 
 /**
+ * Progresso persistido incompleto (ex.: Anúncios 20/27 após soft-yield).
+ * Stub de maintenance 1/1 não conta.
+ * @param {Record<string, unknown> | null | undefined} step
+ */
+export function isMlSyncStepIncompletePersistedProgress(step) {
+  const metadata =
+    step?.metadata && typeof step.metadata === "object" && !Array.isArray(step.metadata)
+      ? /** @type {Record<string, unknown>} */ (step.metadata)
+      : {};
+  if (metadata.skipped === true) {
+    const reason = String(metadata.reason ?? "").trim();
+    const metaStep = String(metadata.step ?? "").trim();
+    if (reason === "DEV_GLOBAL_MAINTENANCE" || metaStep === "dev_global_maintenance_mode") {
+      return false;
+    }
+  }
+  const current = Number(step?.progress_current);
+  const total = Number(step?.progress_total);
+  if (!Number.isFinite(current) || !Number.isFinite(total)) return false;
+  return total > 1 && current > 0 && current < total;
+}
+
+/**
  * Contagem canônica para UI (exclui etapas ocultas ao seller).
  * @param {Array<{ key?: string; status?: string }>} checklist
  * @param {ReadonlySet<string>} [hiddenKeys]
@@ -27,7 +50,10 @@ export function countMlSyncStepBuckets(checklist, hiddenKeys = new Set(["custome
   for (const step of checklist || []) {
     const key = String(step?.key || "");
     if (hiddenKeys.has(key)) continue;
-    const bucket = resolveMlSyncStepBucket(step?.status);
+    let bucket = resolveMlSyncStepBucket(step?.status);
+    if (bucket === "pending" && isMlSyncStepIncompletePersistedProgress(step)) {
+      bucket = "running";
+    }
     counts[bucket] += 1;
     if (bucket === "running" && !counts.runningStepLabel) {
       counts.runningStepLabel = String(step?.label || "").trim();

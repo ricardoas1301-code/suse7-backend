@@ -20,7 +20,20 @@ import {
   pickLatestSubscription,
 } from "../../billing/services/billingSubscriptionQueryService.js";
 import { resolveMonthlySalesUsage } from "../../billing/services/billingUsageService.js";
+import { selectAllPaged, selectAllPagedWithFallback } from "./devCenterAdminReadQuery.js";
+import { presentCadastralText } from "./devCenterCadastralPresentation.js";
+import {
+  agruparEmpresasPorSeller,
+  resolverUrlAvatarSellerAdmin,
+  SELLER_COMPANY_AVATAR_SELECTS,
+} from "./devCenterSellerAvatarPresentation.js";
 import { formatPlanLabel, maskEmailForApi } from "./devCenterSellersService.js";
+import {
+  computeUsagePercentDecimal,
+  countSalesInCycleWindows,
+  readExtraSalesBonus,
+  resolveEffectiveSalesLimit,
+} from "./devCenterUsagePresentation.js";
 
 const SUBSCRIPTION_SELECT =
   "id, user_id, plan_id, plan_key, provider, status, amount, currency, current_period_start, current_period_end, next_due_date, canceled_at, metadata, created_at, updated_at, provider_subscription_id";
@@ -67,7 +80,8 @@ export function mapFinancialHealth(healthLevel, sub) {
   if (level === REVENUE_HEALTH_LEVEL.CRITICAL) return "inadimplente";
   if (level === REVENUE_HEALTH_LEVEL.RISK) return "risco_churn";
   if (level === REVENUE_HEALTH_LEVEL.WARNING) return "atencao";
-  return "saudavel";
+  if (level === REVENUE_HEALTH_LEVEL.HEALTHY) return "saudavel";
+  return simplifiedFinancialHealth(sub);
 }
 
 /**
@@ -151,32 +165,11 @@ function latestPaymentBySubscription(payments) {
 }
 
 /**
- * @param {Record<string, unknown>[]} salesRows
- */
-function countSalesCurrentMonthByUser(salesRows) {
-  const now = new Date();
-  const monthStart = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1);
-  /** @type {Map<string, number>} */
-  const map = new Map();
-  for (const row of salesRows) {
-    const uid = row.user_id != null ? String(row.user_id) : "";
-    if (!uid) continue;
-    const when = row.order_date ?? row.date_created_marketplace ?? row.created_at;
-    if (!when) continue;
-    if (new Date(String(when)).getTime() < monthStart) continue;
-    map.set(uid, (map.get(uid) ?? 0) + 1);
-  }
-  return map;
-}
-
-/**
  * @param {number | null | undefined} used
  * @param {number | null | undefined} limit
  */
 function computeUsagePercent(used, limit) {
-  if (limit == null || !Number.isFinite(limit) || limit <= 0) return null;
-  const u = Number.isFinite(used) ? Number(used) : 0;
-  return Math.min(999, Math.round((u / limit) * 100));
+  return computeUsagePercentDecimal(used, limit);
 }
 
 /**
@@ -195,26 +188,29 @@ function simplifiedFinancialHealth(sub, planByKey) {
 /**
  * @param {import("@supabase/supabase-js").SupabaseClient} supabase
  * @param {string} traceId
+ * @param {{ unmaskCadastral?: boolean }} [options]
  */
-export async function buildDevCenterSubscriptionsList(supabase, traceId) {
+export async function buildDevCenterSubscriptionsList(supabase, traceId, options = {}) {
+  const unmaskCadastral = options.unmaskCadastral === true;
   const subscriptions = await safeSelectAll(supabase, "billing_subscriptions", SUBSCRIPTION_SELECT, traceId);
   const primarySubs = groupPrimarySubscriptions(subscriptions);
   const userIds = [...new Set(primarySubs.map((s) => String(s.user_id)))];
 
   const profileSelectVariants = [
     "id, email, nome_loja, nome, photo_url",
+    "id, email, nome_loja, photo_url",
     "id, email, nome_loja",
   ];
-  let profiles = [];
-  if (userIds.length) {
-    for (const sel of profileSelectVariants) {
-      const { data, error } = await supabase.from("profiles").select(sel).in("id", userIds.slice(0, 400));
-      if (!error) {
-        profiles = Array.isArray(data) ? data : [];
-        break;
-      }
-    }
-  }
+  const [profilesResult, companiesResult] = await Promise.all([
+    selectAllPagedWithFallback(supabase, "profiles", profileSelectVariants, traceId, {
+      inFilter: { column: "id", values: userIds },
+    }),
+    selectAllPagedWithFallback(supabase, "seller_companies", SELLER_COMPANY_AVATAR_SELECTS, traceId, {
+      inFilter: { column: "user_id", values: userIds },
+    }),
+  ]);
+  const profiles = profilesResult.rows;
+  const companiesByUser = agruparEmpresasPorSeller(companiesResult.rows);
 
   /** @type {Map<string, Record<string, unknown>>} */
   const profileById = new Map(profiles.map((p) => [String(p.id), p]));
@@ -239,13 +235,28 @@ export async function buildDevCenterSubscriptionsList(supabase, traceId) {
     [...payments].sort((a, b) => new Date(String(b.created_at)).getTime() - new Date(String(a.created_at)).getTime()),
   );
 
-  const salesRows = await safeSelectAll(
+  /** @type {Map<string, { period_start?: string | null; period_end?: string | null }>} */
+  const cycleByUser = new Map();
+  for (const sub of primarySubs) {
+    const uid = String(sub.user_id);
+    const cycle = resolveSubscriptionBillingCycle(sub);
+    cycleByUser.set(uid, {
+      period_start: cycle.period_start ?? null,
+      period_end: cycle.period_end ?? null,
+    });
+  }
+
+  const salesRows = await selectAllPaged(
     supabase,
     "sales_orders",
-    "user_id, order_date, date_created_marketplace, created_at",
+    "user_id, date_created_marketplace",
     traceId,
+    {
+      inFilter: { column: "user_id", values: userIds },
+      notNull: "date_created_marketplace",
+    },
   );
-  const salesMonthByUser = countSalesCurrentMonthByUser(salesRows);
+  const salesCycleByUser = countSalesInCycleWindows(salesRows, cycleByUser);
 
   /** @type {Record<string, unknown>[]} */
   const rows = primarySubs.map((sub) => {
@@ -258,8 +269,10 @@ export async function buildDevCenterSubscriptionsList(supabase, traceId) {
     const cycle = resolveSubscriptionBillingCycle(sub);
     const billingStatus = resolveBillingStatusLabel(sub);
     const financialHealth = simplifiedFinancialHealth(sub, planByKey);
-    const salesUsed = salesMonthByUser.get(uid) ?? 0;
-    const usagePercent = computeUsagePercent(salesUsed, plan?.sales_limit_monthly ?? null);
+    const salesUsed = salesCycleByUser.get(uid) ?? 0;
+    const extraBonus = readExtraSalesBonus(sub);
+    const usageLimit = resolveEffectiveSalesLimit(plan?.sales_limit_monthly ?? null, extraBonus);
+    const usagePercent = computeUsagePercent(salesUsed, usageLimit);
     const payment = paymentBySub.get(String(sub.id));
     const paymentPayload =
       payment?.raw_payload && typeof payment.raw_payload === "object" ? payment.raw_payload : {};
@@ -269,8 +282,8 @@ export async function buildDevCenterSubscriptionsList(supabase, traceId) {
       id: String(sub.id),
       seller_id: uid,
       seller_name: profile?.nome_loja ?? profile?.nome ?? profile?.email ?? "—",
-      seller_email: maskEmailForApi(profile?.email) ?? "—",
-      seller_photo_url: profile?.photo_url ?? null,
+      seller_email: presentCadastralText(profile?.email, maskEmailForApi, unmaskCadastral) ?? "—",
+      seller_photo_url: resolverUrlAvatarSellerAdmin(profile?.photo_url, companiesByUser.get(uid)),
       plan: formatPlanLabel(sub.plan_key ?? sub.plan_id),
       plan_key: sub.plan_key ?? null,
       billing_status: billingStatus,
@@ -285,7 +298,9 @@ export async function buildDevCenterSubscriptionsList(supabase, traceId) {
       payment_method: formatPaymentMethod(paymentMethod),
       usage_percent: usagePercent,
       usage_current: salesUsed,
-      usage_limit: plan?.sales_limit_monthly ?? null,
+      usage_limit: usageLimit,
+      usage_base_limit: plan?.sales_limit_monthly ?? null,
+      extra_sales_bonus: extraBonus,
       provider: sub.provider ?? null,
       subscription_status: sub.status ?? null,
       updated_at: sub.updated_at ?? null,
@@ -340,8 +355,10 @@ export async function buildDevCenterSubscriptionsList(supabase, traceId) {
  * @param {import("@supabase/supabase-js").SupabaseClient} supabase
  * @param {string} subscriptionId
  * @param {string} traceId
+ * @param {{ unmaskCadastral?: boolean }} [options]
  */
-export async function buildDevCenterSubscriptionDetail(supabase, subscriptionId, traceId) {
+export async function buildDevCenterSubscriptionDetail(supabase, subscriptionId, traceId, options = {}) {
+  const unmaskCadastral = options.unmaskCadastral === true;
   const { data: sub, error } = await supabase
     .from("billing_subscriptions")
     .select(SUBSCRIPTION_SELECT)
@@ -352,6 +369,7 @@ export async function buildDevCenterSubscriptionDetail(supabase, subscriptionId,
   const userId = String(sub.user_id);
   const profileSelectVariants = [
     "id, email, nome_loja, nome, photo_url, telefone, whatsapp",
+    "id, email, nome_loja, photo_url",
     "id, email, nome_loja, nome",
   ];
   let profile = null;
@@ -362,6 +380,14 @@ export async function buildDevCenterSubscriptionDetail(supabase, subscriptionId,
       break;
     }
   }
+
+  const companiesResult = await selectAllPagedWithFallback(
+    supabase,
+    "seller_companies",
+    SELLER_COMPANY_AVATAR_SELECTS,
+    traceId,
+    { eq: { user_id: userId } },
+  );
 
   const plan =
     (sub.plan_key ? await getActivePlanByKey(supabase, String(sub.plan_key)).catch(() => null) : null) ??
@@ -392,7 +418,7 @@ export async function buildDevCenterSubscriptionDetail(supabase, subscriptionId,
     console.warn("[dev-center-subscriptions] usage_failed", { userId, message: e?.message, traceId });
   }
 
-  const financialHealth = mapFinancialHealth(revenueHealth?.health_level, sub);
+  const financialHealth = mapFinancialHealth(revenueHealth?.health_level ?? null, sub);
   const subPayments = payments.filter((p) => p.subscription_id === subscriptionId);
   const lastPayment = subPayments[0] ?? payments[0] ?? null;
   const failedRecent = payments.filter((p) => ["failed", "overdue"].includes(String(p.status))).slice(0, 5);
@@ -439,8 +465,8 @@ export async function buildDevCenterSubscriptionDetail(supabase, subscriptionId,
       id: subscriptionId,
       seller_id: userId,
       seller_name: profile?.nome_loja ?? profile?.nome ?? profile?.email ?? "—",
-      seller_email: maskEmailForApi(profile?.email) ?? "—",
-      seller_photo_url: profile?.photo_url ?? null,
+      seller_email: presentCadastralText(profile?.email, maskEmailForApi, unmaskCadastral) ?? "—",
+      seller_photo_url: resolverUrlAvatarSellerAdmin(profile?.photo_url, companiesResult.rows),
       plan_key: sub.plan_key ?? null,
       plan_label: formatPlanLabel(sub.plan_key ?? planFields.plan_name),
       plan_display: planFields.display_name ?? planFields.plan_name,
@@ -468,25 +494,39 @@ export async function buildDevCenterSubscriptionDetail(supabase, subscriptionId,
       renewal_subscription_status: meta.renewal_subscription_status ?? null,
       grace_period_ends_at: meta.grace_period_ends_at ?? null,
     },
-    usage: usage
-      ? {
-          current: usage.current_month_sales ?? 0,
-          limit: usage.monthly_sales_limit ?? plan?.sales_limit_monthly ?? null,
-          percent: usage.usage_percent ?? computeUsagePercent(usage.current_month_sales, usage.monthly_sales_limit),
-          near_limit: Boolean(usage.near_limit),
-          exceeded: Boolean(usage.exceeded),
-          period_start: usage.period_start ?? cycle.period_start ?? null,
-          period_end: usage.period_end ?? cycle.period_end ?? null,
-        }
-      : {
-          current: null,
-          limit: plan?.sales_limit_monthly ?? null,
-          percent: null,
-          near_limit: false,
-          exceeded: false,
-          period_start: cycle.period_start ?? null,
-          period_end: cycle.period_end ?? null,
-        },
+    usage: (() => {
+      const extraBonus = readExtraSalesBonus(sub);
+      const baseLimit = usage?.monthly_sales_limit ?? plan?.sales_limit_monthly ?? null;
+      const effectiveLimit = resolveEffectiveSalesLimit(baseLimit, extraBonus);
+      const current = usage ? usage.current_month_sales ?? 0 : null;
+      return usage
+        ? {
+            current,
+            limit: effectiveLimit,
+            base_limit: baseLimit,
+            extra_sales_bonus: extraBonus,
+            percent: computeUsagePercent(current, effectiveLimit),
+            near_limit: Boolean(usage.near_limit),
+            exceeded: Boolean(usage.exceeded),
+            period_start: usage.period_start ?? cycle.period_start ?? null,
+            period_end: usage.period_end ?? cycle.period_end ?? null,
+            window_kind: usage.window_kind ?? cycle.window_kind ?? "subscription_cycle",
+            usage_unit: usage.usage?.usage_unit ?? "sale_order",
+          }
+        : {
+            current: null,
+            limit: effectiveLimit,
+            base_limit: baseLimit,
+            extra_sales_bonus: extraBonus,
+            percent: null,
+            near_limit: false,
+            exceeded: false,
+            period_start: cycle.period_start ?? null,
+            period_end: cycle.period_end ?? null,
+            window_kind: cycle.window_kind ?? "subscription_cycle",
+            usage_unit: "sale_order",
+          };
+    })(),
     revenue_health: revenueHealth,
     payments: subPayments.slice(0, 12),
     failed_payments_recent: failedRecent,

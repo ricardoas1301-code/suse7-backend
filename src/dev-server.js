@@ -218,4 +218,51 @@ server.listen(PORT, () => {
   console.log(`[BOOT] listening http://localhost:${PORT}`);
   console.log(`[BOOT] teste rápido: GET http://localhost:${PORT}/api/health`);
   console.log(`[BOOT] OAuth diag:  GET http://localhost:${PORT}/api/ml/oauth-config`);
+  startDevLocalMarketplaceSyncWake(PORT);
 });
+
+/**
+ * Local não tem GitHub Actions / Vercel Cron. Este wake só drena jobs já
+ * enfileirados — não cria ciclo novo nem chama start-initial-sync.
+ * @param {number} port
+ */
+function startDevLocalMarketplaceSyncWake(port) {
+  if (process.env.NODE_ENV === "production") return;
+  const disabled = String(process.env.DEV_LOCAL_MARKETPLACE_SYNC_WAKE || "1").trim();
+  if (disabled === "0" || disabled === "false" || disabled === "off") {
+    console.log("[BOOT] local marketplace-sync wake desligado (DEV_LOCAL_MARKETPLACE_SYNC_WAKE)");
+    return;
+  }
+  const intervalMs = Math.min(
+    60000,
+    Math.max(5000, parseInt(String(process.env.DEV_LOCAL_MARKETPLACE_SYNC_WAKE_MS || "8000"), 10) || 8000),
+  );
+  let wakeInFlight = false;
+  const wake = async () => {
+    if (wakeInFlight) return;
+    wakeInFlight = true;
+    try {
+      const { config } = await import("./infra/config.js");
+      /** @type {Record<string, string>} */
+      const headers = { "Content-Type": "application/json" };
+      if (config.jobSecret) headers["x-job-secret"] = String(config.jobSecret);
+      const r = await fetch(`http://127.0.0.1:${port}/api/jobs/marketplace-account-sync`, {
+        method: "POST",
+        headers,
+        body: "{}",
+      });
+      console.info("[BOOT] local marketplace-sync wake", { status: r.status, ok: r.ok });
+    } catch (err) {
+      console.error("[BOOT] local marketplace-sync wake failed", err?.message || err);
+    } finally {
+      wakeInFlight = false;
+    }
+  };
+  setTimeout(() => {
+    void wake();
+  }, 1500);
+  setInterval(() => {
+    void wake();
+  }, intervalMs);
+  console.log(`[BOOT] local marketplace-sync wake a cada ${intervalMs}ms (não inicia sync nova)`);
+}

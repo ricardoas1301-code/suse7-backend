@@ -160,6 +160,13 @@ function resolveIntegrationStage(ctx) {
       if (st === "done") continue;
       const human = INITIAL_PIPELINE_STAGE_LABELS[jt] || jt;
       if (st === "pending") {
+        const current = Number(row.progress_current);
+        const total = Number(row.progress_total);
+        const incomplete =
+          Number.isFinite(current) && Number.isFinite(total) && total > 1 && current > 0 && current < total;
+        if (incomplete) {
+          return { code: "running_step", label: human, detail: null };
+        }
         return { code: "queued", label: "Na fila", detail: human };
       }
       if (st === "running") {
@@ -545,7 +552,7 @@ export default async function handleMarketplaceAccountSyncStatus(req, res, path)
 
     const description =
       overall === "running"
-        ? "Importação em fila no servidor. Você pode fechar esta janela; o status continua nesta página em Integrações."
+        ? "Sincronização em andamento."
         : overall === "done"
           ? historicalBackfillActive
             ? "Dados recentes prontos. A importação histórica continua em segundo plano."

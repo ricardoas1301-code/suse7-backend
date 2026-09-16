@@ -193,6 +193,7 @@ export async function handleDevCenter(req, res, path) {
     const adminHandled = await handleDevCenterAdminRoutes(req, res, path, method, supabase, traceId, {
       user,
       body,
+      access,
     });
     if (adminHandled) {
       return;

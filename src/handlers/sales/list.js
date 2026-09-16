@@ -4,7 +4,16 @@ import { normalizeSkuForDbLookup } from "../../domain/productCatalogCompleteness
 import { resolveExecutiveProductScope } from "../../domain/sales/saleExecutiveProductScope.js";
 import { resolveExecutiveRankingImageUrl } from "../../domain/sales/executiveRankingImageUrl.js";
 import { isExecutiveSummaryEligibleOrderRow } from "../../domain/sales/saleExecutiveOrderValidity.js";
-import { resolveExecutiveSummaryPeriod } from "../../domain/sales/saleExecutivePeriod.js";
+import { resolveSalesListPeriod } from "../../domain/sales/saleExecutivePeriod.js";
+import {
+  mergeListingScopeIds,
+  parseExactExternalListingIdQuery,
+} from "../../domain/sales/resolverFiltroExatoListingIdLista.js";
+import {
+  collectOrdersByIdFromEmbeddedItems,
+  paginateVendasItemsCanonical,
+  sortSalesOrderItemsForVendasList,
+} from "../../domain/sales/vendasListCanonicalOrder.js";
 import { buildVendasListRow, buildVendasSalesItemQOrFilter, chunkIds, enrichVendasListRowsOperationalStatus, fetchVendasSearchOrderIds, normalizeSearchQuery, splitSearchTokens, thumbFromListingRecord, toNum } from "./_vendasSalesRows.js";
 
 function toPositiveInt(value, fallback) {
@@ -56,55 +65,6 @@ function isShapeError(error) {
     String(error?.message ?? "").toLowerCase().includes("column") ||
     String(error?.message ?? "").toLowerCase().includes("schema cache")
   );
-}
-
-/** @param {unknown} v */
-function parseMillis(v) {
-  if (v == null || String(v).trim() === "") return null;
-  const t = Date.parse(String(v));
-  return Number.isFinite(t) ? t : null;
-}
-
-/**
- * Ordenação canônica da listagem /vendas (linhas = sales_order_items).
- * 1) date_created_marketplace DESC (null por último)
- * 2) sales_orders.created_at DESC
- * 3) sales_order_items.created_at DESC
- * 4) id da linha (estabilidade)
- * @param {Record<string, unknown>[]} items
- * @param {Map<string, Record<string, unknown>>} ordersById
- */
-function sortSalesOrderItemsForVendasList(items, ordersById) {
-  if (!Array.isArray(items) || items.length <= 1) return;
-
-  items.sort((a, b) => {
-    const oa = ordersById.get(String(a?.sales_order_id ?? ""));
-    const ob = ordersById.get(String(b?.sales_order_id ?? ""));
-    const ma = parseMillis(oa?.date_created_marketplace);
-    const mb = parseMillis(ob?.date_created_marketplace);
-    if (ma !== mb) {
-      if (ma == null) return 1;
-      if (mb == null) return -1;
-      if (mb !== ma) return mb - ma;
-    }
-    const oca = parseMillis(oa?.created_at);
-    const ocb = parseMillis(ob?.created_at);
-    if (oca !== ocb) {
-      if (oca == null) return 1;
-      if (ocb == null) return -1;
-      if (ocb !== oca) return ocb - oca;
-    }
-    const ia = parseMillis(a?.created_at);
-    const ib = parseMillis(b?.created_at);
-    if (ia !== ib) {
-      if (ia == null) return 1;
-      if (ib == null) return -1;
-      return ib - ia;
-    }
-    const ida = String(a?.id ?? "");
-    const idb = String(b?.id ?? "");
-    return idb.localeCompare(ida);
-  });
 }
 
 /**
@@ -804,7 +764,12 @@ export default async function handleSalesList(req, res) {
     req.query?.product_id != null && String(req.query.product_id).trim() !== ""
       ? String(req.query.product_id).trim()
       : null;
-  const periodResult = resolveExecutiveSummaryPeriod(req.query ?? {});
+  const exactListingParse = parseExactExternalListingIdQuery(req.query?.external_listing_id);
+  if (!exactListingParse.ok) {
+    return res.status(400).json({ ok: false, error: exactListingParse.error });
+  }
+  const exactListingIds = exactListingParse.ids;
+  const periodResult = resolveSalesListPeriod(req.query ?? {}, { productId });
   if (!periodResult.ok) {
     return res.status(400).json({ ok: false, error: periodResult.error });
   }
@@ -832,6 +797,14 @@ export default async function handleSalesList(req, res) {
     }
   }
 
+  const listingScopeIds = mergeListingScopeIds({
+    exactListingIds,
+    productListingIds: productScope?.external_listing_ids ?? null,
+  });
+  if (Array.isArray(listingScopeIds) && listingScopeIds.length === 0) {
+    return res.status(200).json(emptySalesPayload(page, pageSize));
+  }
+
   const from = (page - 1) * pageSize;
   const to = from + pageSize - 1;
 
@@ -853,7 +826,7 @@ export default async function handleSalesList(req, res) {
      *   marketplaceAccountId: string | null;
      *   qNormalized: string | null;
      *   orderIdsForSearch: string[];
-     *   productListingIds: string[] | null;
+     *   listingScopeIds: string[] | null;
      *   executivePeriod: { start_ms: number | null; end_ms_exclusive: number | null } | null;
      * }} f
      */
@@ -861,8 +834,8 @@ export default async function handleSalesList(req, res) {
       let q = qb.eq("user_id", f.userId);
       if (f.marketplace) q = q.eq("marketplace", f.marketplace);
       if (f.marketplaceAccountId) q = q.eq("marketplace_account_id", f.marketplaceAccountId);
-      if (Array.isArray(f.productListingIds) && f.productListingIds.length > 0) {
-        q = q.in("external_listing_id", f.productListingIds);
+      if (Array.isArray(f.listingScopeIds) && f.listingScopeIds.length > 0) {
+        q = q.in("external_listing_id", f.listingScopeIds);
       }
       if (f.qNormalized) {
         const tokens = splitSearchTokens(f.qNormalized);
@@ -900,7 +873,7 @@ export default async function handleSalesList(req, res) {
      *   marketplaceAccountId: string | null;
      *   qNormalized: string | null;
      *   orderIdsForSearch: string[];
-     *   productListingIds: string[] | null;
+     *   listingScopeIds: string[] | null;
      *   executivePeriod: { start_ms: number | null; end_ms_exclusive: number | null } | null;
      * }} f
      */
@@ -957,14 +930,14 @@ export default async function handleSalesList(req, res) {
       marketplaceAccountId,
       qNormalized,
       orderIdsForSearch,
-      productListingIds: productScope?.external_listing_ids ?? null,
+      listingScopeIds,
       executivePeriod: hasExplicitPeriodFilter ? executivePeriod : null,
     };
 
     /** @type {Record<string, unknown>[]} */
     let itemRows = [];
     let total = 0;
-    /** @type {'rpc_v1' | 'postgrest_embed' | 'postgrest_plain'} */
+    /** @type {'rpc_v1' | 'postgrest_embed' | 'postgrest_plain' | 'postgrest_embed_canonical' | 'postgrest_plain_canonical'} */
     let listSource = "rpc_v1";
     let fallbackUsed = false;
     /** @type {string | null} */
@@ -981,6 +954,7 @@ export default async function handleSalesList(req, res) {
       (marketplaceAccountId != null && String(marketplaceAccountId).trim() !== "") ||
       (qNormalized != null && qNormalized !== "") ||
       (productId != null && String(productId).trim() !== "") ||
+      exactListingIds.length > 0 ||
       hasExplicitPeriodFilter;
     const rpcRes = skipRpcForListFilters
       ? { data: null, error: { message: "skip_rpc_marketplace_or_account_filter" } }
@@ -1048,22 +1022,34 @@ export default async function handleSalesList(req, res) {
     if (usePostgrestInstead) {
       fallbackUsed = true;
       listSource = "postgrest_embed";
-      let itemsQuery = applySalesItemListFilters(
-        supabase.from("sales_order_items").select(ITEM_ORDER_EMBED, { count: "exact" }),
-        filterCtx,
-      );
-
-      let r1 = await itemsQuery
-        .order("date_created_marketplace", { ascending: false, nullsFirst: false, foreignTable: "sales_orders" })
-        .order("created_at", { ascending: false, nullsFirst: false, foreignTable: "sales_orders" })
-        .order("created_at", { ascending: false, nullsFirst: false })
-        .order("id", { ascending: false })
-        .range(from, to);
-
+      const SCAN = 1000;
+      const SCAN_MAX = 40;
+      /** @type {Record<string, unknown>[]} */
+      let scanned = [];
       /** @type {unknown} */
-      let items = r1.data;
-      let itemErr = r1.error;
-      let count = r1.count;
+      let itemErr = null;
+
+      for (let i = 0; i < SCAN_MAX; i += 1) {
+        const r = await applySalesItemListFilters(
+          supabase.from("sales_order_items").select(ITEM_ORDER_EMBED),
+          filterCtx,
+        )
+          .order("id", { ascending: true })
+          .range(i * SCAN, i * SCAN + SCAN - 1);
+        if (r.error) {
+          itemErr = r.error;
+          break;
+        }
+        const batch = Array.isArray(r.data) ? r.data : [];
+        scanned.push(...batch);
+        if (batch.length < SCAN) break;
+        if (i === SCAN_MAX - 1) {
+          console.warn("[S7][sales-list] canonical_scan_truncated", {
+            user_id: user.id,
+            scanned: scanned.length,
+          });
+        }
+      }
 
       const msg1 = String(itemErr?.message ?? "").toLowerCase();
       const missingRelation =
@@ -1074,16 +1060,22 @@ export default async function handleSalesList(req, res) {
 
       if (itemErr && !missingRelation && !hasExplicitPeriodFilter) {
         listSource = "postgrest_plain";
-        const r2 = await applySalesItemListFilters(
-          supabase.from("sales_order_items").select("*", { count: "exact" }),
-          filterCtx,
-        )
-          .order("created_at", { ascending: false })
-          .range(from, to);
-        if (!r2.error) {
-          items = r2.data;
-          itemErr = r2.error;
-          count = r2.count;
+        scanned = [];
+        itemErr = null;
+        for (let i = 0; i < SCAN_MAX; i += 1) {
+          const r2 = await applySalesItemListFilters(
+            supabase.from("sales_order_items").select("*"),
+            filterCtx,
+          )
+            .order("id", { ascending: true })
+            .range(i * SCAN, i * SCAN + SCAN - 1);
+          if (r2.error) {
+            itemErr = r2.error;
+            break;
+          }
+          const batch = Array.isArray(r2.data) ? r2.data : [];
+          scanned.push(...batch);
+          if (batch.length < SCAN) break;
         }
       }
 
@@ -1125,14 +1117,22 @@ export default async function handleSalesList(req, res) {
         return res.status(200).json(emptySalesPayload(page, pageSize));
       }
 
-      itemRows = Array.isArray(items)
-        ? items.map((row) => {
-            if (!row || typeof row !== "object") return /** @type {Record<string, unknown>} */ (row);
-            const { sales_orders: _nested, ...rest } = /** @type {Record<string, unknown>} */ (row);
-            return rest;
-          })
-        : [];
-      total = Number.isFinite(count) ? Number(count) : itemRows.length;
+      const embeddedOrders = collectOrdersByIdFromEmbeddedItems(scanned);
+      const stripped = scanned.map((row) => {
+        if (!row || typeof row !== "object") return /** @type {Record<string, unknown>} */ (row);
+        const { sales_orders: _nested, ...rest } = /** @type {Record<string, unknown>} */ (row);
+        return rest;
+      });
+      const scannedOrderIds = [...new Set(stripped.map((r) => r?.sales_order_id).filter(Boolean).map(String))];
+      const missingOrderIds = scannedOrderIds.filter((id) => !embeddedOrders.has(id));
+      if (missingOrderIds.length > 0) {
+        const fetched = await fetchOrdersById(supabase, user.id, missingOrderIds);
+        for (const [k, v] of fetched) embeddedOrders.set(k, v);
+      }
+      const paged = paginateVendasItemsCanonical(stripped, embeddedOrders, from, pageSize);
+      itemRows = paged.pageItems;
+      total = paged.total;
+      listSource = listSource === "postgrest_plain" ? "postgrest_plain_canonical" : "postgrest_embed_canonical";
     }
 
     const orderIds = [...new Set(itemRows.map((r) => r?.sales_order_id).filter(Boolean).map(String))];
@@ -1153,6 +1153,7 @@ export default async function handleSalesList(req, res) {
         marketplace,
         marketplace_account_id: marketplaceAccountId,
         product_id: productId,
+        external_listing_id: exactListingIds[0] ?? null,
         period_start: executivePeriod?.start_date ?? null,
         period_end: executivePeriod?.end_date ?? null,
       },
@@ -1170,7 +1171,7 @@ export default async function handleSalesList(req, res) {
         page,
         limit: pageSize,
         offset: from,
-        filters: { marketplace, marketplace_account_id: marketplaceAccountId, q: qRaw, product_id: productId },
+        filters: { marketplace, marketplace_account_id: marketplaceAccountId, q: qRaw, product_id: productId, external_listing_id: exactListingIds[0] ?? null },
         period: {
           preset: executivePeriod?.preset ?? null,
           start_date: executivePeriod?.start_date ?? null,

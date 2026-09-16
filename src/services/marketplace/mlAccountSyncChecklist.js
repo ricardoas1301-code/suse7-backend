@@ -122,8 +122,10 @@ export function aggregateHistoricalSalesJobs(rows) {
   const contaminatedWindows = hs.filter((r) => isContaminatedHistoricalDoneJob(r)).length;
   return {
     status,
+    // progress_* = vendas (pode ser 0). Nunca usar hs.length como total de vendas.
     progress_current: pc,
-    progress_total: pt > 0 ? pt : hs.length,
+    progress_total: pt,
+    sales_found: pc,
     windows_total: hs.length,
     windows_done: doneWindows,
     windows_contaminated_done: contaminatedWindows,
@@ -185,6 +187,8 @@ export function buildMlAccountSyncChecklist(account, rows) {
     if (def.aggregateHistorical) {
       const agg = historicalSalesAgg;
       const st = agg?.status != null ? String(agg.status) : "pending";
+      const windowsTotal = Number(agg?.windows_total) || 0;
+      const windowsDone = Number(agg?.windows_done) || 0;
       checklist.push({
         key: def.key,
         label: def.label,
@@ -192,8 +196,8 @@ export function buildMlAccountSyncChecklist(account, rows) {
         job_types: def.job_types,
         job_type: def.job_types[0],
         status: st,
-        progress_current: agg?.progress_current ?? null,
-        progress_total: agg?.progress_total ?? null,
+        progress_current: windowsTotal > 0 ? windowsDone : null,
+        progress_total: windowsTotal > 0 ? windowsTotal : null,
         error_message: null,
         metadata: {},
         historical_aggregate: agg ?? undefined,

@@ -17,6 +17,7 @@ import {
   pickHydratedRowImageUrl,
 } from "./executiveRankingImageUrl.js";
 import { resolveExecutiveRankingListingId } from "./saleExecutiveListingKey.js";
+import { resolveExecutiveProductRankingKey } from "./resolveExecutiveProductRankingKey.js";
 import { computeExecutiveLineRealProfit } from "./saleExecutiveLineRealResult.js";
 import {
   buildExecutiveMinimalUiRowsFromItems,
@@ -645,11 +646,14 @@ export async function buildSaleExecutiveSummary(supabase, userId, filters, optio
       attributionProductId = productId || null;
     }
 
-    const productKey = attributionProductId
-      ? `pid::${attributionProductId}`
-      : !listingProductMap && skuNorm
-        ? `sku::${sellerCo}::${skuNorm}`
-        : null;
+    const productKey = resolveExecutiveProductRankingKey({
+      attributionProductId,
+      skuNorm,
+      sellerCo,
+      listingId,
+      marketplace,
+      accountId,
+    });
 
     if (productKey) {
       const prev = productAgg.get(productKey) ?? {
@@ -663,6 +667,8 @@ export async function buildSaleExecutiveSummary(supabase, userId, filters, optio
         net_received_brl: new Decimal(0),
         contribution_profit_brl: new Decimal(0),
         linked_listing_ids: new Set(),
+        marketplace_account_id: accountId || null,
+        accountQtyById: new Map(),
       };
       prev.quantity_sold += qty;
       prev.gross_sales_brl = prev.gross_sales_brl.plus(grossLine);
@@ -670,6 +676,13 @@ export async function buildSaleExecutiveSummary(supabase, userId, filters, optio
       if (profitDec != null) prev.contribution_profit_brl = prev.contribution_profit_brl.plus(profitDec);
       if (lineImageUrl && !prev.image_url) prev.image_url = lineImageUrl;
       if (listingId) prev.linked_listing_ids.add(listingId);
+      if (accountId) {
+        const nextQty = (prev.accountQtyById.get(accountId) ?? 0) + qty;
+        prev.accountQtyById.set(accountId, nextQty);
+        const currentBest = prev.marketplace_account_id != null ? String(prev.marketplace_account_id) : "";
+        const bestQty = currentBest ? (prev.accountQtyById.get(currentBest) ?? 0) : -1;
+        if (nextQty > bestQty) prev.marketplace_account_id = accountId;
+      }
       productAgg.set(productKey, prev);
     }
     } catch (lineErr) {
@@ -944,9 +957,10 @@ export async function buildSaleExecutiveSummary(supabase, userId, filters, optio
       const finalized = finalizeRankingEntry(entry);
       const linkedListingIds = serializeLinkedListingIds(entry.linked_listing_ids);
       // Remove Set interno do spread — só a coleção serializada segue no contrato.
-      const { linked_listing_ids: _linkedSet, ...rest } = finalized;
+      const { linked_listing_ids: _linkedSet, accountQtyById: _accountQty, ...rest } = finalized;
       return {
         ...rest,
+        marketplace_account_id: entry.marketplace_account_id ?? rest.marketplace_account_id ?? null,
         linked_listings_count: linkedListingIds.length,
         linked_listing_ids: linkedListingIds,
       };
@@ -977,6 +991,7 @@ export async function buildSaleExecutiveSummary(supabase, userId, filters, optio
       return {
       rank: i + 1,
       product_id: row.product_id,
+      marketplace_account_id: row.marketplace_account_id ?? null,
       sku: row.sku,
       normalized_sku: row.normalized_sku,
       title: row.title,

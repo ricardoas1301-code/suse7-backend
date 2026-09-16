@@ -4,11 +4,58 @@
 
 import { ML_MARKETPLACE_SLUG } from "../../handlers/ml/_helpers/mlMarketplace.js";
 import { ML_LISTINGS_TYPES } from "../../services/marketplace/createMlInitialSyncJobs.js";
-import { isEffectiveSyncSuccess } from "../marketplace/isEffectiveSyncSuccess.js";
+import {
+  hasEngagedRealOrActiveSync,
+  isEffectiveSyncSuccess,
+} from "../marketplace/isEffectiveSyncSuccess.js";
 import { resolveInitialSyncUniverseStable } from "./initialSyncUniverseStable.js";
 
 const PRODUCTS_JOB_TYPE = "ml_initial_products";
 const ACTIVE_JOB_STATUSES = new Set(["pending", "queued", "running", "processing"]);
+
+/**
+ * Fase por conta a partir dos jobs já carregados (testável / SSOT).
+ * Stubs de maintenance (done+skipped) não são ciclo real → awaiting_start.
+ * @param {{
+ *   accountStatus?: string | null;
+ *   accountJobs?: unknown[];
+ *   universeStable?: boolean;
+ * }} input
+ * @returns {MlInitialSyncPhase}
+ */
+export function resolveAccountMlInitialSyncPhase(input = {}) {
+  const status = String(input.accountStatus ?? "").trim().toLowerCase() || "unknown";
+  const accountJobs = Array.isArray(input.accountJobs) ? input.accountJobs : [];
+
+  if (status === "invalid" || status === "expired" || status === "error") {
+    return "awaiting_start";
+  }
+  if (!accountJobs.length) return "awaiting_start";
+
+  const hasActiveJob = accountJobs.some((j) =>
+    ACTIVE_JOB_STATUSES.has(String(/** @type {Record<string, unknown>} */ (j)?.status ?? "").trim().toLowerCase()),
+  );
+  if (hasActiveJob) return "in_progress";
+
+  const listingsDone = accountJobs.some(
+    (j) =>
+      ML_LISTINGS_TYPES.includes(String(/** @type {Record<string, unknown>} */ (j)?.job_type ?? "")) &&
+      isEffectiveSyncSuccess(j),
+  );
+  const productsDone = accountJobs.some(
+    (j) =>
+      String(/** @type {Record<string, unknown>} */ (j)?.job_type ?? "") === PRODUCTS_JOB_TYPE &&
+      isEffectiveSyncSuccess(j),
+  );
+
+  // Só stubs / nenhum sucesso efetivo: seller precisa iniciar sync real.
+  if (!hasEngagedRealOrActiveSync(accountJobs)) return "awaiting_start";
+
+  if (input.universeStable !== true && (!listingsDone || !productsDone)) {
+    return "in_progress";
+  }
+  return !listingsDone || !productsDone ? "awaiting_start" : "none";
+}
 
 /**
  * @typedef {"none" | "awaiting_start" | "in_progress"} MlInitialSyncPhase
@@ -131,42 +178,11 @@ export async function resolveMlInitialSyncOperationalPhase(supabase, userId) {
 
     const accountJobs = jobRows.filter((j) => String(j?.marketplace_account_id ?? "") === accountId);
 
-    /** @type {MlInitialSyncPhase} */
-    let phase = "none";
-
-    // Conta sem token saudável / reconexão: ainda é pendência operacional se não removed.
-    if (status === "invalid" || status === "expired" || status === "error") {
-      phase = "awaiting_start";
-    } else if (!accountJobs.length) {
-      phase = "awaiting_start";
-    } else {
-      const hasActiveJob = accountJobs.some((j) =>
-        ACTIVE_JOB_STATUSES.has(String(j?.status ?? "").trim().toLowerCase()),
-      );
-      if (hasActiveJob) {
-        phase = "in_progress";
-      } else if (!universe.stable) {
-        // Universo ainda instável, mas jobs desta conta já pararam → tratar como in_progress leve
-        // apenas se ainda faltam etapas canônicas desta conta.
-        // Maintenance stub (done+skipped) NÃO conta como sucesso real.
-        const listingsDone = accountJobs.some(
-          (j) => ML_LISTINGS_TYPES.includes(String(j.job_type)) && isEffectiveSyncSuccess(j),
-        );
-        const productsDone = accountJobs.some(
-          (j) => String(j.job_type) === PRODUCTS_JOB_TYPE && isEffectiveSyncSuccess(j),
-        );
-        phase = !listingsDone || !productsDone ? "in_progress" : "none";
-      } else {
-        const listingsDone = accountJobs.some(
-          (j) => ML_LISTINGS_TYPES.includes(String(j.job_type)) && isEffectiveSyncSuccess(j),
-        );
-        const productsDone = accountJobs.some(
-          (j) => String(j.job_type) === PRODUCTS_JOB_TYPE && isEffectiveSyncSuccess(j),
-        );
-        // Só stubs de maintenance → awaiting_start (seller precisa rodar sync real).
-        phase = !listingsDone || !productsDone ? "awaiting_start" : "none";
-      }
-    }
+    const phase = resolveAccountMlInitialSyncPhase({
+      accountStatus: status,
+      accountJobs,
+      universeStable: universe.stable === true,
+    });
 
     perAccount.push({
       marketplace_account_id: accountId,

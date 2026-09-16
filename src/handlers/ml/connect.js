@@ -6,7 +6,6 @@
 import { createClient } from "@supabase/supabase-js";
 import {
   validateEnv,
-  generateSecureState,
   buildMlAuthUrl,
   persistOAuthState,
   validateMlConnectOAuthEnv,
@@ -19,6 +18,10 @@ import {
   evaluateMlOAuthBackendEnvCoherence,
   assertSellerCompanyOwnedForMlConnect,
 } from "./_helpers/oauthConnect.js";
+import {
+  buildSignedMlOAuthState,
+  resolveTrustedMlOAuthFrontendOrigin,
+} from "./_helpers/mlOAuthReturnContext.js";
 import { ML_MARKETPLACE_SLUG } from "./_helpers/mlMarketplace.js";
 import { requireAuthUser } from "./_helpers/requireAuthUser.js";
 import { resolverContextoFluxoMlOAuth } from "./_helpers/resolverContextoFluxoMlOAuth.js";
@@ -232,6 +235,32 @@ export async function handleMlConnect(req, res) {
       }
     }
 
+    const frontendOriginResolution = resolveTrustedMlOAuthFrontendOrigin({
+      queryOrigin:
+        req.query?.frontend_origin != null && typeof req.query.frontend_origin === "string"
+          ? req.query.frontend_origin
+          : null,
+      headerOrigin:
+        req.headers?.origin != null && typeof req.headers.origin === "string" ? req.headers.origin : null,
+      headerReferer:
+        req.headers?.referer != null && typeof req.headers.referer === "string" ? req.headers.referer : null,
+      fallbackFrontendUrl: process.env.FRONTEND_URL,
+    });
+    if (!frontendOriginResolution.ok) {
+      console.warn("[ml/connect] oauth_origin_not_allowlisted", {
+        errorId,
+        user_id: trimmedUserId,
+        reason: frontendOriginResolution.reason,
+      });
+      return res.status(400).json({
+        ok: false,
+        error:
+          "Origem do frontend não permitida para iniciar OAuth Mercado Livre. Use o ambiente oficial (Local, DEV Hosted ou PROD).",
+        errorId,
+        code: "ml_oauth_origin_not_allowlisted",
+      });
+    }
+
     const cid = process.env.ML_CLIENT_ID?.trim() || "";
     const ru = process.env.ML_REDIRECT_URI?.trim() || "";
     const { oauthMode } = classifyMlOAuthRedirect(ru);
@@ -243,6 +272,7 @@ export async function handleMlConnect(req, res) {
       host: req.headers?.host ?? null,
       oauthMode,
       supabase_project_ref: supabaseProjectRef,
+      frontend_origin: frontendOriginResolution.origin,
     });
 
     const hostProxy = resolveMlOAuthConnectHostProxy(req, ru);
@@ -257,7 +287,20 @@ export async function handleMlConnect(req, res) {
       return;
     }
 
-    const state = generateSecureState();
+    const signedState = buildSignedMlOAuthState({
+      frontendOrigin: frontendOriginResolution.origin,
+      returnPath: frontendOriginResolution.returnPath,
+    });
+    if (!signedState.ok || !signedState.state) {
+      return res.status(500).json({
+        ok: false,
+        error: "Não foi possível preparar o contexto seguro de retorno OAuth.",
+        errorId,
+        code: "ml_oauth_state_build_failed",
+        reason: signedState.reason ?? "unknown",
+      });
+    }
+    const state = signedState.state;
 
     console.info("[ml/oauth/start] state_created", {
       errorId,
@@ -265,6 +308,9 @@ export async function handleMlConnect(req, res) {
       state_len: state.length,
       flow_type: flowTypePersist,
       seller_company_id: oauthSellerCompanyId,
+      frontend_origin: frontendOriginResolution.origin,
+      frontend_origin_source: frontendOriginResolution.source,
+      return_path: frontendOriginResolution.returnPath,
     });
 
     const persistResult = await persistOAuthState(

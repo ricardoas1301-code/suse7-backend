@@ -21,6 +21,10 @@ import {
   normalizeBillingSnapshotOrigin,
 } from "../../../../billing/services/billingQuotaEligibilityService.js";
 import { buildDevGlobalMaintenanceBlockedApplyResult } from "../../../../domain/dev/devGlobalMaintenanceMode.js";
+import {
+  shouldTouchSalesInboundWatermark,
+  touchSalesInboundWatermark,
+} from "../../../../services/marketplace/mlSalesAccountWatermark.js";
 
 /**
  * Origem canônica única (S1.HF.6.9A.10). Ausência → unknown (nunca post_suse7_sale).
@@ -386,7 +390,8 @@ export async function applyMlOrderDetailToMarketplaceSales(
         : new Date().toISOString()
       : null;
 
-  void nowIso;
+  const inboundNowIso =
+    nowIso != null && String(nowIso).trim() !== "" ? String(nowIso).trim() : new Date().toISOString();
 
   const extOrderId = orderDetail?.id != null ? String(orderDetail.id) : null;
   const logStep = (step, extra = {}) => {
@@ -606,5 +611,18 @@ export async function applyMlOrderDetailToMarketplaceSales(
     }
   }
 
-  return { ok: true, salesOrderId: out?.salesOrderId ?? existing?.id ?? null };
+  const persistOk = { ok: true, salesOrderId: out?.salesOrderId ?? existing?.id ?? null };
+  if (shouldTouchSalesInboundWatermark(persistOk)) {
+    try {
+      await touchSalesInboundWatermark(supabase, marketplaceAccountId, inboundNowIso);
+    } catch (wmErr) {
+      console.warn("[Suse7][API][ml-sales-apply] inbound_watermark_touch_failed", {
+        message: wmErr instanceof Error ? wmErr.message : String(wmErr),
+        marketplace_account_id: marketplaceAccountId,
+        external_order_id: extOrderId,
+      });
+    }
+  }
+
+  return persistOk;
 }

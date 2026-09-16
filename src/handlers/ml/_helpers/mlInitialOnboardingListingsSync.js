@@ -36,6 +36,24 @@ const MAX_ITEMS_CAP = Math.min(
   Math.max(100, parseInt(process.env.ML_INITIAL_LISTINGS_MAX_ITEMS || "15000", 10) || 15000)
 );
 
+/**
+ * Rebuild de métricas não pode bloquear o drain — senão Produtos/Vendas
+ * ficam pendentes enquanto o job de Anúncios já está done.
+ * @param {import("@supabase/supabase-js").SupabaseClient} supabase
+ * @param {string} userId
+ */
+function enqueueListingsMetricsRebuild(supabase, userId) {
+  if (process.env.ML_INITIAL_LISTINGS_SKIP_METRICS_REBUILD === "1") return;
+  void rebuildListingSalesMetricsForUser(supabase, userId, ML_MARKETPLACE_SLUG, (m, x) =>
+    console.log("[ml/initial-listings]", m, x)
+  ).catch((me) => {
+    console.warn("[ML_INITIAL_LISTINGS_SYNC_BATCH] metrics_rebuild_warn", {
+      message: me?.message,
+      userId,
+    });
+  });
+}
+
 /** @param {string | null | undefined} raw */
 function parseListingsCursor(raw) {
   try {
@@ -238,16 +256,7 @@ export async function runMlInitialListingsSyncJobTurn(supabase, job, runtime) {
         processedTotal > 0 &&
         process.env.ML_INITIAL_LISTINGS_SKIP_METRICS_REBUILD !== "1"
       ) {
-        try {
-          await rebuildListingSalesMetricsForUser(supabase, userId, ML_MARKETPLACE_SLUG, (m, x) =>
-            console.log("[ml/initial-listings]", m, x)
-          );
-        } catch (me) {
-          console.warn("[ML_INITIAL_LISTINGS_SYNC_BATCH] metrics_rebuild_warn", {
-            message: me?.message,
-            userId,
-          });
-        }
+        enqueueListingsMetricsRebuild(supabase, userId);
       }
 
       return { stopped: true, done: true, listingsProcessedInRun };
@@ -280,16 +289,7 @@ export async function runMlInitialListingsSyncJobTurn(supabase, job, runtime) {
           processedTotal > 0 &&
           process.env.ML_INITIAL_LISTINGS_SKIP_METRICS_REBUILD !== "1"
         ) {
-          try {
-            await rebuildListingSalesMetricsForUser(supabase, userId, ML_MARKETPLACE_SLUG, (m, x) =>
-              console.log("[ml/initial-listings]", m, x)
-            );
-          } catch (me) {
-            console.warn("[ML_INITIAL_LISTINGS_SYNC_BATCH] metrics_rebuild_warn", {
-              message: me?.message,
-              userId,
-            });
-          }
+          enqueueListingsMetricsRebuild(supabase, userId);
         }
 
         return { stopped: true, done: true, listingsProcessedInRun };
@@ -351,16 +351,7 @@ export async function runMlInitialListingsSyncJobTurn(supabase, job, runtime) {
           processedTotal > 0 &&
           process.env.ML_INITIAL_LISTINGS_SKIP_METRICS_REBUILD !== "1"
         ) {
-          try {
-            await rebuildListingSalesMetricsForUser(supabase, userId, ML_MARKETPLACE_SLUG, (m, x) =>
-              console.log("[ml/initial-listings]", m, x)
-            );
-          } catch (me) {
-            console.warn("[ML_INITIAL_LISTINGS_SYNC_BATCH] metrics_rebuild_warn", {
-              message: me?.message,
-              userId,
-            });
-          }
+          enqueueListingsMetricsRebuild(supabase, userId);
         }
 
         return { stopped: true, done: true, listingsProcessedInRun };

@@ -1,6 +1,6 @@
 // ======================================================
 // Dev Center — rotas admin (dashboard, sellers, finance, clientes global)
-// Service role: payloads minimizados (LGPD) — e-mail/telefone mascarados em listas.
+// Service role: payloads minimizados (LGPD). E-mail da coluna Seller completo só com profiles.is_admin.
 // ======================================================
 
 import { ok, fail } from "../../infra/http.js";
@@ -17,6 +17,7 @@ import {
   buildDevCenterSubscriptionsList,
 } from "./devCenterSubscriptionsService.js";
 import { buildDevCenterFinanceDetail, buildDevCenterFinanceList } from "./devCenterFinanceService.js";
+import { isConnectedMarketplaceAccountStatus } from "./devCenterUsagePresentation.js";
 import { getCentralNotificationEngineSummary } from "../../domain/notifications/central/index.js";
 import { buildDevCenterCustomersGlobalSummary } from "./devCenterCustomersGlobalOpsSummaryService.js";
 import { buildDevCenterCustomersGlobalDetail } from "./devCenterCustomersGlobalDetailService.js";
@@ -114,7 +115,7 @@ async function safeCount(supabase, table, traceId) {
   const { count, error } = await supabase.from(table).select("id", { count: "exact", head: true });
   if (error) {
     console.warn("[dev-center-admin] count_failed", { table, message: error.message, traceId });
-    return 0;
+    return null;
   }
   return typeof count === "number" && Number.isFinite(count) ? count : 0;
 }
@@ -126,7 +127,7 @@ async function safeCount(supabase, table, traceId) {
  * @param {string} method
  * @param {import("@supabase/supabase-js").SupabaseClient} supabase
  * @param {string} traceId
- * @param {{ user?: { id: string; email?: string | null }; body?: Record<string, unknown> }} [context]
+ * @param {{ user?: { id: string; email?: string | null }; body?: Record<string, unknown>; access?: { is_admin?: boolean } }} [context]
  * @returns {Promise<boolean>} true se respondeu
  */
 export async function handleDevCenterAdminRoutes(req, res, path, method, supabase, traceId, context = {}) {
@@ -228,25 +229,36 @@ export async function handleDevCenterAdminRoutes(req, res, path, method, supabas
     if (path === "/api/dev-center/dashboard") {
       const totalSellers = await safeCount(supabase, "profiles", traceId);
       let integracoesMlAtivas = 0;
-      let distinctSellerUsers = 0;
+      /** @type {Set<string>} */
+      const connectedSellerUsers = new Set();
       const { data: accRows, error: accErr } = await supabase.from("marketplace_accounts").select("user_id, status");
       if (!accErr && Array.isArray(accRows)) {
-        const u = new Set();
         for (const r of accRows) {
-          const st = String(r.status ?? "").toLowerCase();
-          if (st === "active" || st === "connected" || st === "ok" || st === "") {
-            integracoesMlAtivas += 1;
-          }
-          if (r.user_id) u.add(String(r.user_id));
+          if (!isConnectedMarketplaceAccountStatus(r.status)) continue;
+          integracoesMlAtivas += 1;
+          if (r.user_id) connectedSellerUsers.add(String(r.user_id));
         }
-        distinctSellerUsers = u.size;
       }
 
       const totalClientesGlobal = await safeCount(supabase, "s7_global_customers", traceId);
       const totalPedidosProcessados = await safeCount(supabase, "sales_orders", traceId);
 
-      const sellersInativos = Math.max(0, totalSellers - distinctSellerUsers);
-      const sellersAtivos = distinctSellerUsers;
+      const sellersAtivos = accErr ? null : connectedSellerUsers.size;
+      const sellersInativos =
+        totalSellers != null && sellersAtivos != null ? Math.max(0, totalSellers - sellersAtivos) : null;
+
+      let mrr = null;
+      let receitaTotal = null;
+      try {
+        const finance = await buildDevCenterFinanceList(supabase, traceId);
+        mrr = finance?.summary?.mrr_brl ?? null;
+        receitaTotal = finance?.summary?.receita_recebida_brl ?? null;
+      } catch (e) {
+        console.warn("[dev-center-admin] dashboard_finance_unavailable", {
+          message: e instanceof Error ? e.message : String(e),
+          traceId,
+        });
+      }
 
       ok(res, {
         ok: true,
@@ -254,11 +266,11 @@ export async function handleDevCenterAdminRoutes(req, res, path, method, supabas
           totalSellers,
           sellersAtivos,
           sellersInativos,
-          mrr: "—",
-          receitaTotal: "—",
+          mrr,
+          receitaTotal,
           totalClientesGlobal,
           totalPedidosProcessados,
-          integracoesMlAtivas,
+          integracoesMlAtivas: accErr ? null : integracoesMlAtivas,
         },
       });
       return true;
@@ -266,7 +278,9 @@ export async function handleDevCenterAdminRoutes(req, res, path, method, supabas
 
     const sellerDetail = path.match(/^\/api\/dev-center\/sellers\/([^/]+)$/);
     if (sellerDetail && UUID_RE.test(sellerDetail[1])) {
-      const detail = await buildDevCenterSellerDetail(supabase, sellerDetail[1], traceId);
+      const detail = await buildDevCenterSellerDetail(supabase, sellerDetail[1], traceId, {
+        unmaskCadastral: context.access?.is_admin === true,
+      });
       if (!detail) {
         fail(res, { code: "NOT_FOUND", message: "Seller não encontrado" }, 404, traceId);
         return true;
@@ -277,7 +291,9 @@ export async function handleDevCenterAdminRoutes(req, res, path, method, supabas
 
     if (path === "/api/dev-center/sellers") {
       try {
-        const sellers = await buildDevCenterSellersList(supabase, traceId);
+        const sellers = await buildDevCenterSellersList(supabase, traceId, {
+          unmaskCadastral: context.access?.is_admin === true,
+        });
         ok(res, { ok: true, sellers });
       } catch (e) {
         console.error("[dev-center-admin] sellers", { message: e?.message, traceId });
@@ -288,7 +304,9 @@ export async function handleDevCenterAdminRoutes(req, res, path, method, supabas
 
     const subscriptionDetail = path.match(/^\/api\/dev-center\/subscriptions\/([^/]+)$/);
     if (subscriptionDetail && UUID_RE.test(subscriptionDetail[1])) {
-      const detail = await buildDevCenterSubscriptionDetail(supabase, subscriptionDetail[1], traceId);
+      const detail = await buildDevCenterSubscriptionDetail(supabase, subscriptionDetail[1], traceId, {
+        unmaskCadastral: context.access?.is_admin === true,
+      });
       if (!detail) {
         fail(res, { code: "NOT_FOUND", message: "Assinatura não encontrada" }, 404, traceId);
         return true;
@@ -299,7 +317,9 @@ export async function handleDevCenterAdminRoutes(req, res, path, method, supabas
 
     if (path === "/api/dev-center/subscriptions") {
       try {
-        const payload = await buildDevCenterSubscriptionsList(supabase, traceId);
+        const payload = await buildDevCenterSubscriptionsList(supabase, traceId, {
+          unmaskCadastral: context.access?.is_admin === true,
+        });
         ok(res, { ok: true, ...payload });
       } catch (e) {
         console.error("[dev-center-admin] subscriptions", { message: e?.message, traceId });
@@ -323,7 +343,9 @@ export async function handleDevCenterAdminRoutes(req, res, path, method, supabas
 
     const financeDetail = path.match(/^\/api\/dev-center\/finance\/([^/]+)$/);
     if (financeDetail && UUID_RE.test(financeDetail[1])) {
-      const detail = await buildDevCenterFinanceDetail(supabase, financeDetail[1], traceId);
+      const detail = await buildDevCenterFinanceDetail(supabase, financeDetail[1], traceId, {
+        unmaskCadastral: context.access?.is_admin === true,
+      });
       if (!detail) {
         fail(res, { code: "NOT_FOUND", message: "Registro financeiro não encontrado" }, 404, traceId);
         return true;
@@ -334,7 +356,9 @@ export async function handleDevCenterAdminRoutes(req, res, path, method, supabas
 
     if (path === "/api/dev-center/finance") {
       try {
-        const payload = await buildDevCenterFinanceList(supabase, traceId);
+        const payload = await buildDevCenterFinanceList(supabase, traceId, {
+          unmaskCadastral: context.access?.is_admin === true,
+        });
         ok(res, { ok: true, ...payload });
       } catch (e) {
         console.error("[dev-center-admin] finance", { message: e?.message, traceId });

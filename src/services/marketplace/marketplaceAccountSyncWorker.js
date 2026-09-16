@@ -52,6 +52,7 @@ import {
 } from "./mlHistoricalEmptyBackfillFinalize.js";
 import {
   evaluateDevGlobalMaintenanceGate,
+  resolveMaintenanceBlockedSyncJobAction,
   DEV_GLOBAL_MAINTENANCE_REASON,
 } from "../../domain/dev/devGlobalMaintenanceMode.js";
 import {
@@ -69,7 +70,16 @@ import {
 import {
   createInvocationDeadline,
   resolveMinExternalWorkMs,
+  resolveOrderPersistWorkEstimateMs,
+  resolvePersistSafetyMarginMs,
 } from "./marketplaceSyncInvocationDeadline.js";
+import {
+  advanceSalesCursorAfterConfirmedOrder,
+  holdSalesCursorOnPersistFailure,
+  parseSalesCursor,
+  resolveSalesCursorDecision,
+  serializeSalesCursor,
+} from "./salesSyncCursorSafety.js";
 import {
   filterActivePoolRowsAfterRecoveryProjection,
   projectPoolAfterStaleRecovery,
@@ -340,28 +350,6 @@ async function mapLimit(items, concurrency, fn) {
 
   await Promise.all(Array.from({ length: workers }, () => worker()));
   return results;
-}
-
-/** @param {string | null | undefined} raw */
-function parseSalesCursor(raw) {
-  try {
-    const o = raw ? JSON.parse(raw) : {};
-    const search_offset = Number.isFinite(Number(o.search_offset)) ? Number(o.search_offset) : 0;
-    const idx_in_page = Number.isFinite(Number(o.idx_in_page)) ? Number(o.idx_in_page) : 0;
-    const seller_id = o.seller_id != null ? String(o.seller_id).trim() : null;
-    return { search_offset, idx_in_page, seller_id };
-  } catch {
-    return { search_offset: 0, idx_in_page: 0, seller_id: null };
-  }
-}
-
-/** @param {{ search_offset: number; idx_in_page: number; seller_id: string | null }} c */
-function serializeSalesCursor(c) {
-  return JSON.stringify({
-    search_offset: c.search_offset,
-    idx_in_page: c.idx_in_page,
-    seller_id: c.seller_id,
-  });
 }
 
 /**
@@ -1496,11 +1484,7 @@ async function processMlSalesBatchJobInner(supabase, ctx) {
         });
         summaryStub.errors.push(`${oid}: ${msg}`);
         partialErrors += 1;
-        cursor.idx_in_page += 1;
-        processedTotal += 1;
-        processedInThisRun += 1;
-        if (progressTotal != null && processedTotal > progressTotal) processedTotal = progressTotal;
-        ordersSinceHeartbeat += 1;
+        cursor = holdSalesCursorOnPersistFailure(cursor, String(oid));
         const metaBaseErr =
           typeof jRow.metadata === "object" && jRow.metadata && !Array.isArray(jRow.metadata)
             ? /** @type {Record<string, unknown>} */ (jRow.metadata)
@@ -1517,11 +1501,12 @@ async function processMlSalesBatchJobInner(supabase, ctx) {
             errors_count: partialErrors,
             last_error_order_id: String(oid),
             last_error_message: msg.slice(0, 220),
+            cursor_hold_reason: "fetch_failed",
             errors_sample: summaryStub.errors.slice(-20),
           },
-        }, "after_fetch_error");
-        ordersSinceHeartbeat = 0;
-        continue;
+        }, "fetch_failed_hold_cursor");
+        await flushCoverage("running", null);
+        return await finalizeSalesSoftYield("fetch_failed_hold_cursor");
       }
 
       const detail = pair.detail;
@@ -1529,11 +1514,7 @@ async function processMlSalesBatchJobInner(supabase, ctx) {
         const msg = "detail_null";
         summaryStub.errors.push(`${oid}: ${msg}`);
         partialErrors += 1;
-        cursor.idx_in_page += 1;
-        processedTotal += 1;
-        processedInThisRun += 1;
-        if (progressTotal != null && processedTotal > progressTotal) processedTotal = progressTotal;
-        ordersSinceHeartbeat += 1;
+        cursor = holdSalesCursorOnPersistFailure(cursor, String(oid));
         await safePatchProgress(
           {
             progress_total: progressTotal,
@@ -1547,19 +1528,20 @@ async function processMlSalesBatchJobInner(supabase, ctx) {
               errors_count: partialErrors,
               last_error_order_id: String(oid),
               last_error_message: msg,
+              cursor_hold_reason: "detail_null",
               errors_sample: summaryStub.errors.slice(-20),
             },
           },
-          "after_detail_null"
+          "detail_null_hold_cursor"
         );
-        ordersSinceHeartbeat = 0;
-        continue;
+        await flushCoverage("running", null);
+        return await finalizeSalesSoftYield("detail_null_hold_cursor");
       }
 
       const orderStatusRaw = detail.status != null ? String(detail.status).toLowerCase() : "";
       if (orderStatusRaw === "cancelled") {
         summaryStub.skipped_cancelled_or_unavailable_count += 1;
-        cursor.idx_in_page += 1;
+        cursor = advanceSalesCursorAfterConfirmedOrder(cursor);
         processedTotal += 1;
         processedInThisRun += 1;
         if (progressTotal != null && processedTotal > progressTotal) processedTotal = progressTotal;
@@ -1600,7 +1582,12 @@ async function processMlSalesBatchJobInner(supabase, ctx) {
         batchMaxCreated = created;
       }
 
-      if (invocationDeadline.shouldStopBeforeNextExternalWork(resolveOrderWorkEstimateMs())) {
+      if (
+        invocationDeadline.shouldStopBeforePersist(
+          resolveOrderPersistWorkEstimateMs(),
+          resolvePersistSafetyMarginMs()
+        )
+      ) {
         await safePatchProgress(
           {
             progress_total: progressTotal,
@@ -1620,6 +1607,11 @@ async function processMlSalesBatchJobInner(supabase, ctx) {
         return await finalizeSalesSoftYield("soft_deadline_before_order_persist");
       }
 
+      /** @type {{ ok?: boolean; reason?: string } | null} */
+      let persistResult = null;
+      /** @type {unknown} */
+      let persistError = null;
+      let timedOut = false;
       try {
         console.info("[S7][ml-sales-sync-order-step]", {
           syncRunId: jRow.id,
@@ -1634,7 +1626,7 @@ async function processMlSalesBatchJobInner(supabase, ctx) {
           ORDER_PROCESS_TIMEOUT_MS,
           Math.max(1000, invocationDeadline.getRemainingSoftMs() - 500)
         );
-        await withTimeout(
+        persistResult = await withTimeout(
           applyMlOrderDetailToMarketplaceSales(
             supabase,
             userId,
@@ -1657,17 +1649,10 @@ async function processMlSalesBatchJobInner(supabase, ctx) {
           orderTimeoutMs,
           "process_order"
         );
-        console.info("[sales-sync] persist_order_ok", {
-          marketplace: ML_MARKETPLACE_SLUG,
-          marketplace_account_id: accountId,
-          seller_company_id: sellerCompanyFromAcc,
-          user_id: userId,
-          external_seller_id: sellerId,
-          external_order_id: String(oid),
-          job_id: jRow.id,
-        });
       } catch (e) {
+        persistError = e;
         const msg = e?.message ? String(e.message) : String(e);
+        timedOut = /timeout/i.test(msg);
         console.error("[ML_INITIAL_SALES_SYNC_ERROR]", { job_id: jRow.id, order_id: oid, msg });
         console.error("[ML_SALES_SYNC_FAILED]", {
           job_id: jRow.id,
@@ -1679,7 +1664,50 @@ async function processMlSalesBatchJobInner(supabase, ctx) {
         partialErrors += 1;
       }
 
-      cursor.idx_in_page += 1;
+      const cursorDecision = resolveSalesCursorDecision({
+        persistResult,
+        persistError,
+        timedOut,
+        detail,
+      });
+
+      if (cursorDecision.action === "hold_yield") {
+        cursor = holdSalesCursorOnPersistFailure(cursor, String(oid));
+        await safePatchProgress(
+          {
+            progress_total: progressTotal,
+            progress_current: processedTotal,
+            last_cursor: serializeSalesCursor(cursor),
+            last_synced_at: new Date().toISOString(),
+            metadata: {
+              ...metaRowBase(),
+              phase: slicePhase,
+              sync_job_kind: salesJobType,
+              errors_count: partialErrors,
+              last_error_order_id: String(oid),
+              cursor_hold_reason: cursorDecision.reason,
+              persist_fail_count: cursor.persist_fail_count,
+              errors_sample: summaryStub.errors.slice(-20),
+            },
+          },
+          "persist_failed_hold_cursor"
+        );
+        await flushCoverage("running", null);
+        return await finalizeSalesSoftYield("persist_failed_hold_cursor");
+      }
+
+      console.info("[sales-sync] persist_order_ok", {
+        marketplace: ML_MARKETPLACE_SLUG,
+        marketplace_account_id: accountId,
+        seller_company_id: sellerCompanyFromAcc,
+        user_id: userId,
+        external_seller_id: sellerId,
+        external_order_id: String(oid),
+        job_id: jRow.id,
+        cursor_reason: cursorDecision.reason,
+      });
+
+      cursor = advanceSalesCursorAfterConfirmedOrder(cursor);
       processedTotal += 1;
       processedInThisRun += 1;
       if (progressTotal != null && processedTotal > progressTotal) processedTotal = progressTotal;
@@ -1977,19 +2005,20 @@ async function dispatchJobChunk(supabase, job, runtime) {
   const externalSellerId =
     job.external_seller_id != null ? String(job.external_seller_id).trim() : null;
   const maintenanceGate = evaluateDevGlobalMaintenanceGate({ scope: `sync_job:${t}` });
-  if (maintenanceGate.blocked) {
-    console.info("[sales-sync] sync_job_skipped_maintenance", {
+  const maintenanceAction = resolveMaintenanceBlockedSyncJobAction(maintenanceGate);
+  if (maintenanceAction.action === "defer_leave_pending") {
+    console.info("[sales-sync] sync_job_deferred_maintenance", {
       job_id: job.id ?? null,
       marketplace_account_id: accountId || null,
       job_type: t,
       reason: maintenanceGate.reason,
+      complete_as_stub: false,
     });
-    await completeStubJob(supabase, job, {
-      skipped: true,
-      step: "dev_global_maintenance_mode",
-      reason: DEV_GLOBAL_MAINTENANCE_REASON,
+    await releaseMarketplaceSyncJobForContinuation(supabase, String(job.id), {
+      existingJob: job,
+      soft_yield_reason: "dev_global_maintenance_mode",
     });
-    return { stopped: true, done: true, processedInThisRun: 0, maintenance_skipped: true };
+    return { stopped: true, processedInThisRun: 0, maintenance_deferred: true };
   }
 
   console.info("[ML_ONBOARDING_SYNC_STEP_START]", {
@@ -2204,6 +2233,29 @@ export async function runMarketplaceAccountSyncWorker(supabase, opts = {}) {
     batchDetails,
     salesPageLimit,
   };
+
+  const workerMaintenance = evaluateDevGlobalMaintenanceGate({ scope: "marketplace_sync_worker" });
+  if (resolveMaintenanceBlockedSyncJobAction(workerMaintenance).action === "defer_leave_pending") {
+    console.info("[sales-sync] worker_deferred_maintenance", {
+      reason: workerMaintenance.reason,
+      complete_as_stub: false,
+    });
+    return {
+      ok: true,
+      deferred_maintenance: true,
+      chunks_processed: 0,
+      chunks: [],
+      incremental_sales_poll: {
+        attempted: false,
+        skipped: true,
+        skip_reason: DEV_GLOBAL_MAINTENANCE_REASON,
+        accounts_attempted: 0,
+        orders_fetched: 0,
+        orders_persisted: 0,
+        errors: [],
+      },
+    };
+  }
 
   /** @type {Record<string, unknown>[] } */
   const chunks = [];
@@ -2423,7 +2475,6 @@ export async function runMarketplaceAccountSyncWorker(supabase, opts = {}) {
 
     jobsDispatchedTotal += picks.length;
 
-    let waveHungry = false;
     let waveHungryCount = 0;
     for (let i = 0; i < picks.length; i++) {
       const job = picks[i];
@@ -2469,9 +2520,16 @@ export async function runMarketplaceAccountSyncWorker(supabase, opts = {}) {
       }
 
       if (out?.done === true) jobsCompleted += 1;
-      if (MULTI_TURN_RESUMABLE_JOB_TYPES.has(jt) && out?.stopped === false) {
+      const continuationOpen =
+        MULTI_TURN_RESUMABLE_JOB_TYPES.has(jt) &&
+        out?.done !== true &&
+        out?.claim_skipped !== true &&
+        (out?.stopped === false || out?.continuation_released === true || out?.yielded === true);
+      if (continuationOpen) {
         waveHungryCount += 1;
-        waveHungry = true;
+        // Soft-yield não consome a cota do drain: o mesmo job precisa ser
+        // reescolhido nesta invocação (Local não tem cron remoto).
+        jobsDispatchedTotal = Math.max(0, jobsDispatchedTotal - 1);
       }
 
       chunks.push({
@@ -2498,8 +2556,6 @@ export async function runMarketplaceAccountSyncWorker(supabase, opts = {}) {
 
     jobsStillRunning = waveHungryCount;
     waveIndex += 1;
-
-    if (waveHungry) break;
 
     if (Date.now() >= absoluteDeadlineMs) break;
   }

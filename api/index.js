@@ -565,6 +565,10 @@ export default async function handler(req, res) {
       const mod = await import("../src/handlers/ml/listingSkuLookup.js");
       return await mod.default(req, res);
     }
+    if (path === "/api/ml/listings/sku-pending") {
+      const mod = await import("../src/handlers/ml/listingSkuPending.js");
+      return await mod.default(req, res);
+    }
     if (path === "/api/ml/listings/pricing-scenarios") {
       const mod = await import("../src/handlers/ml/listingPricingScenarios.js");
       return await mod.default(req, res);
@@ -604,6 +608,10 @@ export default async function handler(req, res) {
     if (path === "/api/ml/sales-summary") {
       const mod = await import("../src/handlers/ml/salesSummary.js");
       return await mod.default(req, res);
+    }
+    if (path === "/api/sales/inbound-watermark" && req.method === "GET") {
+      const mod = await import("../src/handlers/sales/inboundWatermark.js");
+      return mod.default(req, res);
     }
     if (path === "/api/sales/detail" && req.method === "GET") {
       const mod = await import("../src/handlers/sales/detail.js");

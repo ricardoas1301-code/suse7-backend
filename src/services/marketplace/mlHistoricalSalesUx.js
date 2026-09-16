@@ -236,6 +236,8 @@ export function buildMlHistoricalSalesUxState(jobRows, coverageRollup) {
     }
     if (savedHint > 0) {
       checklistDetailLines.push(`Vendas salvas no Suse7: ${Math.round(savedHint)}`);
+    } else {
+      checklistDetailLines.push("Vendas encontradas: 0");
     }
     checklistDetailLines.push("Cobertura disponível importada.");
   } else if (status === "error") {

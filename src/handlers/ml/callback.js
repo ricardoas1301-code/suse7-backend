@@ -40,6 +40,7 @@ import { logMlOAuthBuildFingerprint } from "./_helpers/mlOAuthBuildFingerprint.j
 import { revokeMercadoLibreAccessToken } from "./_helpers/mlOAuthRevoke.js";
 import { config } from "../../infra/config.js";
 import { sendRedirect } from "../../infra/httpRedirect.js";
+import { resolveMlOAuthCallbackFrontendBase } from "./_helpers/mlOAuthReturnContext.js";
 
 const ML_CALLBACK_ENV_KEYS = [
   "SUPABASE_URL",
@@ -386,26 +387,25 @@ async function handleMLCallback(req, res) {
       });
     }
 
-    const frontendResolution = resolveValidatedFrontendBaseUrl(process.env.FRONTEND_URL);
-    if (!frontendResolution.ok) {
+    const frontendEnvResolution = resolveValidatedFrontendBaseUrl(process.env.FRONTEND_URL);
+    if (!frontendEnvResolution.ok) {
       logMlCallbackFailed({
         errorId,
         etapa: "frontend_url",
         error_code: "invalid_frontend_url",
-        error_message: frontendResolution.reason,
+        error_message: frontendEnvResolution.reason,
       });
       console.error("[ml/callback] FRONTEND_URL inválida — não redirecionando", {
         errorId,
-        reason: frontendResolution.reason,
+        reason: frontendEnvResolution.reason,
       });
       return res.status(500).json({
         ok: false,
         error: "FRONTEND_URL inválida no ambiente atual",
-        detail: frontendResolution.reason,
+        detail: frontendEnvResolution.reason,
         errorId,
       });
     }
-    const frontendBase = frontendResolution.base;
 
     const oauthCtx = await resolveAndConsumeOAuthState(
       config.supabaseUrl,
@@ -413,6 +413,38 @@ async function handleMLCallback(req, res) {
       state,
       "ml"
     );
+
+    const frontendReturnResolution = resolveMlOAuthCallbackFrontendBase({
+      stateParam: typeof state === "string" ? state : String(state ?? ""),
+      envFrontendUrl: frontendEnvResolution.base,
+    });
+    if (!frontendReturnResolution.ok || !frontendReturnResolution.base) {
+      logMlCallbackFailed({
+        errorId,
+        etapa: "oauth_return_origin",
+        error_code: "ml_oauth_return_origin_fail_closed",
+        error_message: frontendReturnResolution.reason ?? "frontend_origin_unresolved",
+      });
+      console.error("[ml/callback] oauth_return_origin_fail_closed", {
+        errorId,
+        reason: frontendReturnResolution.reason,
+        source: frontendReturnResolution.source,
+      });
+      return res.status(400).json({
+        ok: false,
+        error: "Contexto de retorno OAuth inválido ou expirado.",
+        errorId,
+        code: "ml_oauth_return_origin_fail_closed",
+      });
+    }
+    const frontendBase = frontendReturnResolution.base;
+    console.info("[ml/callback] oauth_return_origin_resolved", {
+      errorId,
+      frontend_origin: frontendBase,
+      return_path: frontendReturnResolution.returnPath ?? "/perfil/integracoes/mercado-livre",
+      source: frontendReturnResolution.source,
+      state_warning: frontendReturnResolution.stateWarning ?? null,
+    });
 
     const supabaseProjectRef = maskSupabaseProjectRef(config.supabaseUrl);
     console.info("[ml/callback] state_received", {

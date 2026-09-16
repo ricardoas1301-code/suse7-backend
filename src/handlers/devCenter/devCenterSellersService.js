@@ -1,7 +1,7 @@
 // ======================================================
 // Dev Center — Sellers operacional (Fase 1)
 // Agrega profiles, empresas, marketplaces, billing e métricas.
-// Listas: dados mascarados (LGPD). Detalhe: mesma política.
+// Listas: telefone/documento mascarados. E-mail da coluna Seller completo só com profiles.is_admin.
 // ======================================================
 
 import {
@@ -9,9 +9,24 @@ import {
   fetchMlTokenProbeForMlSeller,
   fetchMlTokenProbeForUser,
 } from "../../services/marketplace/marketplaceAccountConnectionHealth.js";
+import { exactCountByUser, selectAllPaged, selectAllPagedResult, selectAllPagedWithFallback } from "./devCenterAdminReadQuery.js";
+import { presentCadastralDocument, presentCadastralText } from "./devCenterCadastralPresentation.js";
+import {
+  agruparEmpresasPorSeller,
+  resolverUrlAvatarSellerAdmin,
+  SELLER_COMPANY_AVATAR_SELECTS,
+} from "./devCenterSellerAvatarPresentation.js";
+import {
+  carregarUltimoLoginAuthDoUsuario,
+  carregarUltimoLoginAuthPorUsuario,
+} from "./devCenterSellerAccessPresentation.js";
 import { buildDevCenterSellerSubscriptionUsageBlock } from "./devCenterSellerSubscriptionUsageHelper.js";
 import { DEV_CENTER_TOOLBOX_METADATA_KEYS } from "./devCenterToolboxOperationalConstants.js";
 import { listarFeatureFlagsSellerDevCenter } from "./devCenterSellerFeatureFlagOpsService.js";
+import {
+  isConnectedMarketplaceAccountStatus,
+  isTimestampWithinLastDays,
+} from "./devCenterUsagePresentation.js";
 
 /** @param {string | null | undefined} email */
 export function maskEmailForApi(email) {
@@ -173,44 +188,52 @@ function subscriptionFlags(sub) {
 /**
  * @param {import("@supabase/supabase-js").SupabaseClient} supabase
  * @param {string} traceId
+ * @param {{ unmaskCadastral?: boolean }} [options]
  */
-export async function buildDevCenterSellersList(supabase, traceId) {
+export async function buildDevCenterSellersList(supabase, traceId, options = {}) {
+  const unmaskCadastral = options.unmaskCadastral === true;
   const profileSelectVariants = [
     "id, email, nome_loja, nome, cpf_cnpj, telefone, whatsapp, photo_url, created_at, last_login",
+    "id, email, nome_loja, photo_url, cpf_cnpj, created_at, last_login",
     "id, email, nome_loja, cpf_cnpj, created_at, last_login",
   ];
 
   let profiles = [];
   for (const sel of profileSelectVariants) {
-    const { data, error } = await supabase
-      .from("profiles")
-      .select(sel)
-      .order("created_at", { ascending: false })
-      .limit(400);
-    if (!error) {
-      profiles = Array.isArray(data) ? data : [];
-      break;
+    const paged = await selectAllPaged(supabase, "profiles", sel, traceId);
+    if (paged.length > 0 || sel === profileSelectVariants[profileSelectVariants.length - 1]) {
+      profiles = paged;
+      if (paged.length > 0) break;
     }
   }
 
+  const userIds = profiles.map((p) => String(p.id)).filter(Boolean);
 
-  const [accounts, companies, subscriptions, listingRows, salesRows] = await Promise.all([
-    safeSelectAll(
+  const [accounts, companiesResult, subscriptions, listingRows, salesResult, accessLookup] = await Promise.all([
+    selectAllPaged(
       supabase,
       "marketplace_accounts",
       "user_id, status, marketplace, token_expires_at, ml_sales_last_sync_at",
       traceId,
     ),
-    safeSelectAll(supabase, "seller_companies", "user_id, id, company_name, trade_name, document_cnpj", traceId),
-    safeSelectAll(
+    selectAllPagedWithFallback(supabase, "seller_companies", SELLER_COMPANY_AVATAR_SELECTS, traceId),
+    selectAllPaged(
       supabase,
       "billing_subscriptions",
       "user_id, status, plan_key, plan_id, metadata, updated_at, created_at",
       traceId,
     ),
-    safeSelectAll(supabase, "marketplace_listings", "user_id", traceId),
-    safeSelectAll(supabase, "sales_orders", "user_id, order_date, created_at", traceId),
+    selectAllPaged(supabase, "marketplace_listings", "user_id", traceId, {
+      inFilter: { column: "user_id", values: userIds },
+    }),
+    selectAllPagedResult(supabase, "sales_orders", "user_id, date_created_marketplace", traceId, {
+      inFilter: { column: "user_id", values: userIds },
+    }),
+    carregarUltimoLoginAuthPorUsuario(supabase, userIds, traceId),
   ]);
+  const companies = companiesResult.rows;
+  const salesRows = salesResult.rows;
+  const salesAvailable = salesResult.failed !== true;
 
   const accountsByUser = new Map();
   for (const a of accounts) {
@@ -221,19 +244,20 @@ export async function buildDevCenterSellersList(supabase, traceId) {
   }
 
   const companiesByUser = countByKey(companies, "user_id");
+  const companiesRowsByUser = agruparEmpresasPorSeller(companies);
   const listingsByUser = countByKey(listingRows, "user_id");
 
   /** @type {Map<string, { total: number; recent30: number }>} */
   const salesByUser = new Map();
-  const cutoff30 = Date.now() - 30 * 86400000;
-  for (const s of salesRows) {
-    const uid = s.user_id != null ? String(s.user_id) : "";
-    if (!uid) continue;
-    const cur = salesByUser.get(uid) ?? { total: 0, recent30: 0 };
-    cur.total += 1;
-    const when = s.order_date ?? s.created_at;
-    if (when && new Date(String(when)).getTime() >= cutoff30) cur.recent30 += 1;
-    salesByUser.set(uid, cur);
+  if (salesAvailable) {
+    for (const s of salesRows) {
+      const uid = s.user_id != null ? String(s.user_id) : "";
+      if (!uid) continue;
+      const cur = salesByUser.get(uid) ?? { total: 0, recent30: 0 };
+      cur.total += 1;
+      if (isTimestampWithinLastDays(s.date_created_marketplace, 30)) cur.recent30 += 1;
+      salesByUser.set(uid, cur);
+    }
   }
 
   /** @type {Map<string, Record<string, unknown>[]>} */
@@ -248,14 +272,14 @@ export async function buildDevCenterSellersList(supabase, traceId) {
   return profiles.map((p) => {
     const uid = String(p.id);
     const userAccounts = accountsByUser.get(uid) ?? [];
-    const connectedCount = userAccounts.filter((a) => {
-      const st = String(a.status ?? "").toLowerCase();
-      return st === "active" || st === "connected" || st === "ok" || st === "";
-    }).length;
+    const connectedCount = userAccounts.filter((a) =>
+      isConnectedMarketplaceAccountStatus(a.status),
+    ).length;
 
     const primarySub = resolvePrimarySubscriptionForUser(subsByUser.get(uid) ?? []);
     const flags = subscriptionFlags(primarySub);
     const sales = salesByUser.get(uid) ?? { total: 0, recent30: 0 };
+    const lastAccessAt = accessLookup.failed ? null : (accessLookup.byUserId.get(uid) ?? null);
 
     const integrationActive = connectedCount > 0;
     let integrationStatus = "sem_integracao";
@@ -269,7 +293,7 @@ export async function buildDevCenterSellersList(supabase, traceId) {
     const health = computeOperationalHealth({
       subscription: primarySub,
       accounts: userAccounts,
-      lastLogin: p.last_login ?? null,
+      lastLogin: lastAccessAt,
       connectedCount,
     });
 
@@ -278,9 +302,9 @@ export async function buildDevCenterSellersList(supabase, traceId) {
     return {
       id: uid,
       nome: p.nome_loja ?? p.nome ?? p.email ?? "—",
-      email: maskEmailForApi(p.email) ?? "—",
+      email: presentCadastralText(p.email, maskEmailForApi, unmaskCadastral) ?? "—",
       telefone: maskPhoneForApi(p.telefone ?? p.whatsapp) ?? null,
-      photo_url: p.photo_url ?? null,
+      photo_url: resolverUrlAvatarSellerAdmin(p.photo_url, companiesRowsByUser.get(uid)),
       cnpj: p.cpf_cnpj != null ? maskDocumentForApi(String(p.cpf_cnpj).replace(/\D/g, "")) : null,
       plano: formatPlanLabel(primarySub?.plan_key ?? primarySub?.plan_id),
       plan_key: primarySub?.plan_key ?? null,
@@ -292,13 +316,13 @@ export async function buildDevCenterSellersList(supabase, traceId) {
       integration_status: integrationStatus,
       operational_health: health,
       created_at: p.created_at ?? null,
-      last_access_at: p.last_login ?? null,
+      last_access_at: lastAccessAt,
       connected_accounts: connectedCount,
       companies_count: companiesByUser.get(uid) ?? 0,
       marketplaces,
       listings_count: listingsByUser.get(uid) ?? 0,
-      sales_count: sales.total,
-      sales_recent_30d: sales.recent30,
+      sales_count: salesAvailable ? sales.total : null,
+      sales_recent_30d: salesAvailable ? sales.recent30 : null,
     };
   });
 }
@@ -307,10 +331,13 @@ export async function buildDevCenterSellersList(supabase, traceId) {
  * @param {import("@supabase/supabase-js").SupabaseClient} supabase
  * @param {string} sellerId
  * @param {string} traceId
+ * @param {{ unmaskCadastral?: boolean }} [options]
  */
-export async function buildDevCenterSellerDetail(supabase, sellerId, traceId) {
+export async function buildDevCenterSellerDetail(supabase, sellerId, traceId, options = {}) {
+  const unmaskCadastral = options.unmaskCadastral === true;
   const profileSelectVariants = [
     "id, email, nome_loja, nome, cpf_cnpj, telefone, whatsapp, photo_url, created_at, last_login",
+    "id, email, nome_loja, photo_url, cpf_cnpj, created_at, last_login",
     "id, email, nome_loja, cpf_cnpj, created_at, last_login",
   ];
 
@@ -324,12 +351,10 @@ export async function buildDevCenterSellerDetail(supabase, sellerId, traceId) {
   }
   if (!profile) return null;
 
-  const [{ data: companies }, { data: accountsRaw }, { data: subs }] = await Promise.all([
-    supabase
-      .from("seller_companies")
-      .select("id, company_name, trade_name, document_cnpj, created_at")
-      .eq("user_id", sellerId)
-      .order("created_at", { ascending: true }),
+  const [companiesResult, { data: accountsRaw }, { data: subs }, accessLookup] = await Promise.all([
+    selectAllPagedWithFallback(supabase, "seller_companies", SELLER_COMPANY_AVATAR_SELECTS, traceId, {
+      eq: { user_id: sellerId },
+    }),
     supabase
       .from("marketplace_accounts")
       .select(
@@ -343,25 +368,30 @@ export async function buildDevCenterSellerDetail(supabase, sellerId, traceId) {
       .eq("user_id", sellerId)
       .order("created_at", { ascending: false })
       .limit(10),
+    carregarUltimoLoginAuthDoUsuario(supabase, sellerId, traceId),
   ]);
+  const companies = companiesResult.rows;
+  const lastAccessAt = accessLookup.failed ? null : accessLookup.at;
 
-  const [{ count: listingsCount }, { count: salesCount }, { data: recentSales }] = await Promise.all([
-    supabase.from("marketplace_listings").select("id", { count: "exact", head: true }).eq("user_id", sellerId),
-    supabase.from("sales_orders").select("id", { count: "exact", head: true }).eq("user_id", sellerId),
+  const [listingsCount, salesCount, productsCount, salesRecent30, recentSalesResult] = await Promise.all([
+    exactCountByUser(supabase, "marketplace_listings", sellerId),
+    exactCountByUser(supabase, "sales_orders", sellerId),
+    exactCountByUser(supabase, "products", sellerId),
     supabase
       .from("sales_orders")
-      .select("id, order_date, created_at, total_amount, status")
+      .select("id", { count: "exact", head: true })
       .eq("user_id", sellerId)
-      .order("order_date", { ascending: false, nullsFirst: false })
-      .limit(5),
+      .gte("date_created_marketplace", new Date(Date.now() - 30 * 86400000).toISOString())
+      .then(({ count, error }) => (error ? null : typeof count === "number" ? count : 0)),
+    supabase
+      .from("sales_orders")
+      .select("id, date_created_marketplace, order_date, created_at, total_amount, status")
+      .eq("user_id", sellerId)
+      .order("date_created_marketplace", { ascending: false, nullsFirst: false })
+      .limit(5)
+      .then((r) => r),
   ]);
-
-  const cutoff30 = Date.now() - 30 * 86400000;
-  const { count: salesRecent30 } = await supabase
-    .from("sales_orders")
-    .select("id", { count: "exact", head: true })
-    .eq("user_id", sellerId)
-    .gte("order_date", new Date(cutoff30).toISOString());
+  const recentSales = recentSalesResult?.data ?? null;
 
   const primarySub = resolvePrimarySubscriptionForUser(subs ?? []);
   const flags = subscriptionFlags(primarySub);
@@ -402,18 +432,18 @@ export async function buildDevCenterSellerDetail(supabase, sellerId, traceId) {
   const health = computeOperationalHealth({
     subscription: primarySub,
     accounts,
-    lastLogin: profile.last_login ?? null,
+    lastLogin: lastAccessAt,
     connectedCount,
   });
 
   /** @type {{ id: string; kind: string; label: string; at: string }[]} */
   const recent_events = [];
-  if (profile.last_login) {
+  if (lastAccessAt) {
     recent_events.push({
       id: "evt-login",
       kind: "access",
       label: "Último acesso à plataforma",
-      at: String(profile.last_login),
+      at: String(lastAccessAt),
     });
   }
   if (primarySub?.updated_at) {
@@ -438,27 +468,39 @@ export async function buildDevCenterSellerDetail(supabase, sellerId, traceId) {
 
   const featureFlags = await listarFeatureFlagsSellerDevCenter(supabase, sellerId);
 
+  const emailPresented = presentCadastralText(profile.email, maskEmailForApi, unmaskCadastral);
+  const telefonePresented = presentCadastralText(
+    profile.telefone ?? profile.whatsapp,
+    maskPhoneForApi,
+    unmaskCadastral,
+  );
+  const documentPresented = presentCadastralDocument(profile.cpf_cnpj, maskDocumentForApi, unmaskCadastral);
+
   return {
     seller: {
       id: sellerId,
       nome: profile.nome_loja ?? profile.nome ?? profile.email ?? "—",
-      email: maskEmailForApi(profile.email) ?? "—",
-      telefone: maskPhoneForApi(profile.telefone ?? profile.whatsapp) ?? null,
-      photo_url: profile.photo_url ?? null,
+      email: emailPresented ?? "—",
+      telefone: telefonePresented,
+      photo_url: resolverUrlAvatarSellerAdmin(profile.photo_url, companies),
       created_at: profile.created_at ?? null,
-      last_access_at: profile.last_login ?? null,
+      last_access_at: lastAccessAt,
       operational_health: health,
       status: connectedCount > 0 ? "ativo" : "sem integração",
+      cadastral_unmasked: unmaskCadastral,
     },
     identity: {
-      document_masked: profile.cpf_cnpj != null ? maskDocumentForApi(String(profile.cpf_cnpj).replace(/\D/g, "")) : null,
+      document: documentPresented,
+      document_masked: presentCadastralDocument(profile.cpf_cnpj, maskDocumentForApi, false),
       companies_count: (companies ?? []).length,
+      cadastral_unmasked: unmaskCadastral,
     },
     companies: (companies ?? []).map((c) => ({
       id: String(c.id),
       company_name: c.company_name ?? null,
       trade_name: c.trade_name ?? null,
-      document_masked: c.document_cnpj != null ? maskDocumentForApi(String(c.document_cnpj).replace(/\D/g, "")) : null,
+      document: presentCadastralDocument(c.document_cnpj, maskDocumentForApi, unmaskCadastral),
+      document_masked: presentCadastralDocument(c.document_cnpj, maskDocumentForApi, false),
       created_at: c.created_at ?? null,
     })),
     marketplaces: accounts,
@@ -480,14 +522,15 @@ export async function buildDevCenterSellerDetail(supabase, sellerId, traceId) {
         }
       : null,
     metrics: {
-      listings_count: typeof listingsCount === "number" ? listingsCount : 0,
-      sales_count: typeof salesCount === "number" ? salesCount : 0,
-      sales_recent_30d: typeof salesRecent30 === "number" ? salesRecent30 : 0,
+      listings_count: listingsCount,
+      products_count: productsCount,
+      sales_count: salesCount,
+      sales_recent_30d: salesRecent30,
       connected_accounts: connectedCount,
     },
     recent_sales: (recentSales ?? []).map((s) => ({
       id: String(s.id),
-      order_date: s.order_date ?? s.created_at ?? null,
+      order_date: s.date_created_marketplace ?? s.order_date ?? s.created_at ?? null,
       total_amount: s.total_amount ?? null,
       status: s.status ?? null,
     })),
